@@ -47,17 +47,21 @@ class PullRequest:
 class Fetcher:
     def __init__(self, token: str, cache: Cache, settings: FetchSettings) -> None: ...
 
-    def repos(self, subject: Subject) -> list[Repo]:
+    async def __aenter__(self) -> Fetcher: ...
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Closes the aiohttp session."""
+
+    async def repos(self, subject: Subject) -> list[Repo]:
         """Repositories owned by a user or org (forks and archived per settings); a repo subject yields itself."""
 
-    def commits(self, repo: Repo, since: datetime.datetime | None, until: datetime.datetime | None) -> typing.Iterator[Commit]:
+    async def commits(self, repo: Repo, since: datetime.datetime | None, until: datetime.datetime | None) -> typing.AsyncIterator[Commit]:
         """Default-branch commits, paginated 100 at a time, with per-commit additions and deletions."""
 
-    def pull_requests(self, repo: Repo, since: datetime.datetime | None) -> typing.Iterator[PullRequest]: ...
-    def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.Iterator[Issue]: ...
-    def releases(self, repo: Repo) -> typing.Iterator[Release]: ...
-    def workflow_runs(self, repo: Repo, since: datetime.datetime | None) -> typing.Iterator[WorkflowRun]: ...
-    def star_events(self, repo: Repo) -> typing.Iterator[StarEvent]: ...
+    async def pull_requests(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[PullRequest]: ...
+    async def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[Issue]: ...
+    async def releases(self, repo: Repo) -> typing.AsyncIterator[Release]: ...
+    async def workflow_runs(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[WorkflowRun]: ...
+    async def star_events(self, repo: Repo) -> typing.AsyncIterator[StarEvent]: ...
 
 def resolve_token() -> str:
     """GITHUB_TOKEN from the environment, else `gh auth token`; raises AuthError if neither."""
@@ -75,7 +79,7 @@ def resolve_token() -> str:
 
 ## Implementation
 
-**Transport.** Synchronous `httpx.Client` with HTTP/2, one POST endpoint for GraphQL and conditional GETs for REST. Concurrency is a bounded thread pool across repositories (`fetch.workers`), because GitHub asks clients to avoid concurrent request bursts ([best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)).
+**Transport.** One `aiohttp.ClientSession` per `Fetcher`, as the shared Python rules specify: a POST endpoint for GraphQL and conditional GETs for REST. Concurrency is bounded across repositories by an `asyncio.Semaphore` of `fetch.workers`, because GitHub asks clients to avoid concurrent request bursts ([best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)). SQLite calls run through `asyncio.to_thread` so the loop is never blocked. The CLI enters the loop once with `asyncio.run`.
 
 **GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection; the REST `stats/code_frequency` and `stats/contributors` endpoints are used only as a cheap cross-check on repos under 10,000 commits.
 
@@ -101,5 +105,5 @@ def resolve_token() -> str:
 ## External dependencies
 
 - GitHub GraphQL and REST APIs; a token with `public_repo` (or `repo` for private repos, `read:org` for private org membership).
-- `httpx` ([docs](https://www.python-httpx.org/)), `loguru`, stdlib `sqlite3`.
+- `aiohttp` ([docs](https://docs.aiohttp.org/en/stable/)), `loguru`, stdlib `sqlite3`.
 - Each library is to be checked for maintenance status before it is added with `uv add`, per the shared tools-and-libraries rule.

@@ -25,7 +25,7 @@ The public surface other code and the three front ends may rely on, re-exported 
 - `Fetcher`: GitHub access plus cache
 - `StatsRequest`: granularity, groups, range, timezone
 - `StatsResult`: series, tables, provenance
-- `compute`: `(Subject, Fetcher, StatsRequest) -> StatsResult`
+- `compute`: `async (Subject, Fetcher, StatsRequest) -> StatsResult`
 - `Settings`: layered configuration
 
 ```python
@@ -48,7 +48,7 @@ Three layers with one-way dependencies: `reports` imports `stats`, `stats` impor
 
 ```text
 GitHub GraphQL / REST
-        |  httpx
+        |  aiohttp
    [ fetch ]  -- reads/writes -->  SQLite cache (local file)
         |  typed records (Commit, PullRequest, Issue, Release, WorkflowRun, StarEvent)
    [ stats ]  -- pure computation, no I/O
@@ -59,7 +59,7 @@ GitHub GraphQL / REST
 Rules that hold across the system:
 
 - **One result, many views.** All renderers take a `StatsResult`; no metric logic lives in a renderer.
-- **Pure core.** `stats` performs no I/O, so every metric is testable from fixture records.
+- **Pure core.** The aggregation functions in `stats` perform no I/O, so every metric is testable from fixture records; only `compute` awaits the fetcher, then hands the records to them.
 - **Cache is the only state.** Everything else is derived and reproducible from the cache plus the request.
 - **Provenance travels with the data.** Every `StatsResult` carries gitstat version, cache schema version, query hashes and fetch times. The cache refuses a mismatch rather than mixing versions, per the shared versions rule.
 - **Secrets stay in the environment.** The token is read from `GITHUB_TOKEN` (or `gh auth token`) and never reaches the cache, logs, reports or the browser.
@@ -83,7 +83,7 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 ## Implementation
 
-**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests. Runtime libraries are proposals pending a maintenance check before each `uv add`: [httpx](https://www.python-httpx.org/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `tomllib`.
+**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `tomllib`.
 
 **Build order.** Each milestone ends with working, tested behaviour:
 
