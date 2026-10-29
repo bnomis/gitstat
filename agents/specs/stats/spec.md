@@ -148,7 +148,7 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 
 **flow** (pull requests and issues; total series only, built in step 6)
 
-- Counts (unit `count`), each bucketed by the local date of its event: `prs_opened` (`created_at`), `prs_merged` (`merged_at`), `issues_opened` (`created_at`), `issues_closed` (`closed_at`, issues closed now; a reopened issue is open). A pull request closed without merging is in none of them.
+- Counts (unit `count`), each bucketed by the local date of its event: `prs_opened` (`created_at`), `prs_merged` (`merged_at`), `issues_opened` (`created_at`), `issues_closed` (`closed_at`, issues closed now; a reopened issue is open). A pull request closed without merging counts in `prs_opened` only.
 - Durations (unit `hours`), each bucketed by the local date of its end event, as `<name>_p50` (`statistics.median`) and `<name>_p90` (`statistics.quantiles(values, n=10, method='inclusive')[8]`, which stays inside the values, unlike the default `exclusive` method, and accepts one value on Python 3.13 and later): `time_to_first_review` (pull request `created_at` to `first_review_at`), `time_to_merge` (`created_at` to `merged_at`) and `time_to_close` (issue `created_at` to `closed_at`; pull requests have `time_to_merge`). Hours are `(end - start).total_seconds() / 3600`.
 - `pr_size_p50` (unit `lines`): `statistics.median_low` of `additions + deletions` over the pull requests merged in the bucket, so the value is one pull request's real size and an integer, as the JSON output requires of `lines`.
 - Bots are counted: `stats.bot_logins` affects contributor counts only, as in `activity`. Who reviewed is settled by the fetch layer (`first_review_at` leaves out the author and bots).
