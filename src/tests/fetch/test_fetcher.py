@@ -92,23 +92,6 @@ def settings_with(
     return dataclasses.replace(base, **changes)  # type: ignore[arg-type]
 
 
-def state_for(
-    repo: gitstat.fetch.base.Repo, head: str | None, **changes: object
-) -> gitstat.fetch.base.SyncState:
-    fields: dict[str, object] = {
-        'repo': repo.name_with_owner,
-        'resource': 'commits',
-        'watermark': None,
-        'head_oid': head,
-        'pushed_at': repo.pushed_at,
-        'updated_at': repo.updated_at,
-        'synced_at': at(0),
-        'full_synced_at': at(0),
-    }
-    fields.update(changes)
-    return gitstat.fetch.base.SyncState(**fields)  # type: ignore[arg-type]
-
-
 def listed(upstream: Upstream, name: str = HELLO) -> gitstat.fetch.base.Repo:
     return gitstat.fetch.base.parse_repo(upstream.repos[name].node())
 
@@ -747,22 +730,6 @@ def test_a_commit_with_no_line_counts_stores_nothing_and_names_its_oid(
 
 
 # Rewritten history and full refresh
-
-
-def count_update_commits(
-    fetcher: gitstat.fetch.base.Fetcher, monkeypatch: pytest.MonkeyPatch
-) -> list[str]:
-    calls: list[str] = []
-    update = fetcher.update_commits
-
-    async def counting(
-        repo: gitstat.fetch.base.Repo, state: gitstat.fetch.base.SyncState
-    ) -> int | None:
-        calls.append(repo.name_with_owner)
-        return await update(repo, state)
-
-    monkeypatch.setattr(fetcher, 'update_commits', counting)
-    return calls
 
 
 @pytest.mark.parametrize('unknown_base', ['diverged', 'not found'])
