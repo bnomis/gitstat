@@ -1,10 +1,10 @@
 # Fetch and cache
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** proposed
 **Date:** 2026-10-29
 
-Fetches raw data about a GitHub user, repository or organisation and stores it in a local SQLite cache so that repeated and incremental runs stay inside the API rate limits. It uses the [GraphQL API](https://docs.github.com/en/graphql) for almost everything and the [REST API](https://docs.github.com/en/rest) only where GraphQL has no equivalent (workflow runs, the `stats/*` endpoints). It knows nothing about metrics; [Stats](../stats/spec.md) consumes its output.
+Fetches raw data about a GitHub user, repository or organisation and stores it in a local SQLite cache so that repeated and incremental runs stay inside the API rate limits. It uses the [GraphQL API](https://docs.github.com/en/graphql) for almost everything and the [REST API](https://docs.github.com/en/rest) only where GraphQL has no equivalent (workflow runs, the `stats/*` endpoints, and comparing two commits). It knows nothing about metrics; [Stats](../stats/spec.md) consumes its output.
 
 ## Module location
 
@@ -17,10 +17,12 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 | `ratelimit.py` | `RateLimitState`, `backoff_delay` | 2 |
 | `client.py` | `GitHubClient`, `RestResponse`: the aiohttp transport | 2 |
 | `queries.py` | GraphQL query texts | 2 (first query), 3 onwards |
-| `cache.py` | `Cache`: SQLite schema, identity, watermarks | 3 |
-| `base.py` | `Subject`, the record dataclasses, `Fetcher` | 3 |
+| `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags | 3 |
+| `base.py` | `Subject`, `RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, the rest with their resources), `SyncReport`, `Fetcher` | 3 |
 
 `Fetcher` owns one `GitHubClient` and one `Cache`; its `__aenter__` enters the client and its `__aexit__` exits it. `Fetcher` is therefore built in step 3, when `Cache` exists; step 2 builds the client it wraps.
+
+`Fetcher.sync` is the only method that reaches the network. `repos`, `commits` and the other record methods read the cache alone, so a caller syncs first and then reads, and a report from a warm cache makes no requests (system spec, Data flow step 3).
 
 ## API
 
@@ -35,6 +37,19 @@ class Subject:
     login: str                 # user or org login, or repo owner
     name: str | None = None    # repo name when kind == 'repo'
 
+RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'})
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Repo:
+    name_with_owner: str             # 'owner/name'
+    default_branch: str | None       # None for an empty repository
+    head_oid: str | None             # default-branch head at listing time; None when empty
+    is_archived: bool
+    is_fork: bool
+    pushed_at: datetime.datetime | None   # UTC, as GitHub reports it
+    updated_at: datetime.datetime         # UTC, as GitHub reports it
+    missing: bool = False            # gone from the owner's listing; rows kept
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Commit:
     repo: str                  # 'owner/name'
@@ -43,6 +58,14 @@ class Commit:
     author_login: str | None         # None when the email maps to no account
     additions: int
     deletions: int
+    is_merge: bool                   # more than one parent; Stats excludes these by default
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SyncReport:
+    repos_listed: int                # repos in the subject's listing after the fork and archived filters
+    repos_skipped: int               # unchanged since the last sync, so no per-repo requests
+    rows_written: dict[str, int]     # resource -> rows inserted or replaced
+    full_refetches: tuple[str, ...]  # 'owner/name' whose commits were re-read from scratch
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class PullRequest:
@@ -57,20 +80,25 @@ class PullRequest:
     deletions: int
 
 class Fetcher:
-    def __init__(self, token: str, cache: Cache, settings: FetchSettings) -> None: ...
+    def __init__(self, token: str, cache: Cache, settings: FetchSettings, *, client: GitHubClient | None = None) -> None:
+        """`client` defaults to `GitHubClient(token, settings)`; tests pass one pointed at a replay server."""
 
     async def __aenter__(self) -> Fetcher: ...
     async def __aexit__(self, *exc_info: object) -> None:
         """Closes the aiohttp session."""
 
     async def sync(self, subject: Subject, resources: frozenset[str], full_refresh: bool = False) -> SyncReport:
-        """Bring the cache up to date for the subject: backfill on first use, otherwise only the delta since each watermark."""
+        """Bring the cache up to date for the subject: backfill on first use, otherwise only the delta.
+
+        `resources` is a subset of RESOURCES; a name outside it raises ValueError, and a resource
+        whose implementation step has not been built yet raises NotImplementedError."""
 
     async def repos(self, subject: Subject) -> list[Repo]:
-        """Repositories owned by a user or org (forks and archived per settings); a repo subject yields itself."""
+        """From the cache: repositories owned by a user or org, excluding missing ones and
+        applying the current fork and archived settings; a repo subject yields itself."""
 
     async def commits(self, repo: Repo, since: datetime.datetime | None, until: datetime.datetime | None) -> typing.AsyncIterator[Commit]:
-        """Default-branch commits, paginated 100 at a time, with per-commit additions and deletions."""
+        """From the cache: default-branch commits with `since <= authored_at < until`, oldest first."""
 
     async def pull_requests(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[PullRequest]: ...
     async def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[Issue]: ...
@@ -83,6 +111,48 @@ def resolve_token() -> str:
 
 def redact(text: str, token: str) -> str:
     """`text` with every occurrence of `token` replaced by `***`."""
+```
+
+The cache, used only inside `gitstat.fetch` and by the CLI's `cache` command. Its methods are synchronous; `Fetcher` calls them through `asyncio.to_thread`, and one `threading.Lock` serialises them on the cache's single connection (opened with `check_same_thread=False`):
+
+```python
+import pathlib
+
+SCHEMA_VERSION: int = 1
+
+# in base.py with the other records, so cache.py imports base.py and base.py needs cache.py
+# only for annotations (under typing.TYPE_CHECKING): no import cycle
+@dataclasses.dataclass(frozen=True, slots=True)
+class SyncState:
+    repo: str
+    resource: str
+    watermark: datetime.datetime | None   # unused for commits (see Incremental sync)
+    head_oid: str | None                  # commits only
+    pushed_at: datetime.datetime | None   # the repo's listed pushedAt this sync was made against
+    updated_at: datetime.datetime         # the repo's listed updatedAt this sync was made against
+    synced_at: datetime.datetime
+    full_synced_at: datetime.datetime
+
+class Cache:
+    @classmethod
+    def open(cls, path: pathlib.Path, *, ignore_version: bool = False) -> Cache:
+        """Create the parent directory and file if absent, set WAL mode, create the schema,
+        then check or write the identity; raises CacheVersionError on a mismatch unless
+        `ignore_version`, which is recorded in `meta` as `version_override_at`."""
+    def close(self) -> None: ...
+
+    def identity(self) -> dict[str, str]: ...
+    def upsert_repos(self, owner: str, repos: list[Repo], *, complete: bool) -> None:
+        """Insert or replace each repo; with `complete`, mark the owner's other repos missing."""
+    def read_repos(self, subject: Subject) -> list[Repo]: ...
+    def sync_state(self, repo: str, resource: str) -> SyncState | None: ...
+    def write_commits(self, repo: str, commits: list[Commit], state: SyncState, *, replace: bool) -> int:
+        """In one transaction: with `replace`, delete the repo's commits first; upsert by oid;
+        write `state`. Returns the number of rows written."""
+    def read_commits(self, repo: str, since: datetime.datetime | None, until: datetime.datetime | None) -> list[Commit]: ...
+    def etag(self, url: str) -> tuple[str, object] | None:
+        """The stored ETag and parsed body for a REST URL."""
+    def store_etag(self, url: str, etag: str, body: object) -> None: ...
 ```
 
 The transport, used only inside `gitstat.fetch`:
@@ -178,28 +248,28 @@ Backoff for transient failures and repeated secondary limits is full jitter ([AW
 
 Every query text in `queries.py` selects `rateLimit { cost remaining resetAt }`; a response with `data` and no `errors` that lacks it raises `GraphQLError`, so a query that forgot it fails its first test.
 
-**GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection; the REST `stats/code_frequency` and `stats/contributors` endpoints are used only as a cheap cross-check on repos under 10,000 commits.
+**GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection, or from `nodes(ids:)` for commits found by a compare; the REST `stats/code_frequency` endpoint is used only by the opt-in live test, as a cross-check of the summed line totals on a repo under 10,000 commits, and never at run time.
 
-**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/gitstat/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, and `sync_state(repo, resource, watermark, head_oid, synced_at, full_synced_at)`. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304.
+**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/gitstat/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `etags(url, etag, body)`, and `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at)`. Each step creates only the tables its resources use; step 3 creates `meta`, `repos`, `commits`, `etags` and `sync_state`, and a later table is a `SCHEMA_VERSION` increase. Timestamps are stored as ISO 8601 UTC text. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304; a 304 returns the stored body.
 
 **Incremental sync.** The first query of a subject backfills everything; later queries fetch only what changed since the last successful sync. State is per repo and per resource, so asking for a new metric group later backfills only that resource.
 
-1. *Subject level.* The repo list is always re-read (one cheap query per 100 repos, ordered by `pushedAt`). A repo whose `pushedAt` and `updatedAt` are not newer than its stored `synced_at` is skipped entirely, with no per-repo requests. A repo not yet in the cache is backfilled; a repo gone from the list is marked `missing`, its rows kept.
+1. *Subject level.* The repo list is always re-read (one cheap query per 100 repos, ordered by `PUSHED_AT` descending, selecting each repo's default branch and its head oid). A repo whose listed `pushedAt` and `updatedAt` equal the values recorded in its `sync_state` row for every requested resource is skipped entirely, with no per-repo requests. Comparing GitHub's values with GitHub's values avoids clock skew, and because those values are written in the same transaction as the rows (step 4 below), a repo whose sync was interrupted is never skipped. A repo not yet in the cache is backfilled; a repo gone from the list is marked `missing`, its rows kept. Forks and archived repos excluded by the current settings are neither listed nor synced. A repo subject reads its one repository with the same fields.
 2. *Per resource.* Each resource has an incremental strategy that pages newest-first and stops at the watermark:
-   - `commits`: immutable, so never refetched. History is read with `since = watermark - fetch.overlap` and rows are de-duplicated by `oid`. `head_oid` is stored; if the stored head is not an ancestor of the new head (force-push or rewritten history), that repo's commits are fully refetched.
+   - `commits`: immutable, so never refetched, and tracked by `head_oid` rather than a time watermark, because a time window misses commits that reach the default branch after their dates (a merge commit brings in branch commits with older committer dates, and `history(since:)` filters on those dates). The first sync, and any full refetch, pages the default branch's `history(first: 100)` from the head, selecting `oid`, `authoredDate`, `author { user { login } }`, `additions`, `deletions` and `parents { totalCount }`. When the listed head differs from the stored `head_oid`, REST `GET /repos/{owner}/{name}/compare/{stored}...{listed}` (paged with `per_page=100`) answers both questions at once: its `status` says whether the stored head is an ancestor (`ahead`), and its `commits` are exactly the commits reachable from the new head and not the old one, like `git log stored..listed`. Their `additions` and `deletions`, which the compare response does not carry per commit, come from one GraphQL `nodes(ids:)` query per 100 commits using each commit's `node_id`. A `status` of `diverged` or `behind`, or a 404 because the stored head no longer exists (force-push or rewritten history), fully refetches that repo's commits, replacing its rows. Rows are de-duplicated by `oid`. An empty repository (no default branch) is recorded with no commits and no `head_oid`.
    - `pull_requests` and `issues`: mutable. Paged ordered by `UPDATED_AT` descending, stopping at the first item older than `watermark - fetch.overlap`; changed items are upserted by number. Still-open items are therefore refreshed whenever they change.
    - `releases` and `star_events`: paged newest-first (`CREATED_AT`, `STARRED_AT`), stopping at the first known id.
    - `workflow_runs`: REST with `created=>watermark - fetch.overlap`, plus a refetch of any cached run whose status is not `completed`.
-3. *The watermark is a server-side timestamp* taken at the start of the sync, not the newest item seen, and the overlap (default one hour) absorbs clock skew and in-flight updates.
+3. *The watermark is a server-side timestamp* (for the time-windowed resources, from step 6) taken at the start of the sync, not the newest item seen, and the overlap (default one hour) absorbs clock skew and in-flight updates.
 4. *Atomic advance.* Rows and the new watermark are written in one SQLite transaction per repo and resource, only after the last page succeeds. An interrupted or rate-limited run leaves the old watermark, so the next run resumes from it and re-fetching is harmless because writes are upserts.
-5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh`.
+5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh` (`sync(..., full_refresh=True)`). Commits are the exception to the interval: the compare above sees every rewrite, so they are fully re-read only on a rewrite or `--full-refresh`.
 6. *Offline and bounded.* `--no-fetch` renders from the cache alone; `--max-age` skips the network for a subject synced more recently than that.
 
-**Cache identity.** `meta` records `schema_version`, the hash of each query text, and the gitstat version. Opening a cache whose recorded identity differs from the running code raises `CacheVersionError`.
+**Cache identity.** `meta` records `schema_version` (`SCHEMA_VERSION` in `cache.py`), the gitstat version (`gitstat.version.VERSION`), and `query:<NAME>` = the SHA-256 hex digest of each query text constant in `queries.py`. A new file has its identity written; opening a file whose recorded identity differs in any key from the running code raises `CacheVersionError` naming each differing key with both values, unless `ignore_version` is passed. Provenance reads the same values from `Cache.identity()`.
 
 **Secrets.** The token is read from the environment only, never written to the cache, logs or reports ([security rules](../../../.agents/claude/rules/security.md)). Requests are logged at `debug` as method, URL and status only, never headers. The client logs through `loguru.logger.patch(...)` with a patcher that applies `redact` to each record's message, so a token that reaches a message by any path is replaced by `***`.
 
-**Testing.** Unit tests replay fixture responses from an `aiohttp.web.Application` served by `aiohttp.test_utils.TestServer`, which ships with aiohttp, and point `GitHubClient` at it with `api_url`; async tests run their body with `asyncio.run`, so no pytest async plugin is added. Fixture responses live in `src/tests/fixtures/fetch/` as Python modules. Successful responses are recorded once from the live API (date of recording in a comment, trimmed to the fields used, no token or personal data beyond public logins); error responses (401, 403, 404, 429, 202, `RATE_LIMITED`) are written from the shapes in GitHub's documentation, each with the page it came from. The opt-in live test, skipped when `GITHUB_TOKEN` is unset and marked `live`, runs one small query against the public `octocat` account.
+**Testing.** Unit tests replay fixture responses from an `aiohttp.web.Application` served by `aiohttp.test_utils.TestServer`, which ships with aiohttp, and point `GitHubClient` at it with `api_url`; async tests run their body with `asyncio.run`, so no pytest async plugin is added. Fixture responses live in `src/tests/fixtures/fetch/` as Python modules. Successful responses are recorded once from the live API (date of recording in a comment, trimmed to the fields used, no token or personal data beyond public logins); error responses (401, 403, 404, 429, 202, `RATE_LIMITED`) are written from the shapes in GitHub's documentation, each with the page it came from. The opt-in live tests, skipped when `GITHUB_TOKEN` is unset and marked `live`, run one small query against the public `octocat` account, and sync `octocat/Hello-World` into a temporary cache and check that its summed non-merge additions and deletions equal the sums of REST `stats/code_frequency`. Sync tests drive `Fetcher` with a `GitHubClient` pointed at the replay server and a `Cache` in a temporary directory.
 
 ## Settings
 
