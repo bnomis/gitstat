@@ -2,8 +2,9 @@
 
 | Spec | Path | Description |
 |------|------|-------------|
+| [System](system/spec.md) | `src/gitstat/` | Architecture, data flow, stack, build order and settings across components |
 | [Fetch and cache](fetch-and-cache/spec.md) | `src/gitstat/fetch/` | GitHub GraphQL/REST clients, auth, rate limits, SQLite cache |
 | [Stats](stats/spec.md) | `src/gitstat/stats/` | Metric computation, time bucketing, subjects (user, repo, org) |
 | [Reports](reports/spec.md) | `src/gitstat/reports/`, `src/gitstat/cli.py` | Terminal, static HTML and local web app front ends |
 
-Build order: fetch-and-cache, stats, reports. Each spec lists its prerequisites.
+Read the system spec first. The build order is in it; each component spec lists its prerequisites.
