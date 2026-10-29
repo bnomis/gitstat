@@ -8,8 +8,8 @@ import hypothesis.strategies as st
 import pytest
 
 import gitstat.fetch.base
+import gitstat.stats
 import gitstat.stats.base
-import gitstat.stats.compute
 import gitstat.stats.errors
 import tests.fixtures.stats as fixture
 
@@ -42,9 +42,7 @@ def compute(
     subject: gitstat.fetch.base.Subject = fixture.ORG,
     **changes: object,
 ) -> gitstat.stats.base.StatsResult:
-    return asyncio.run(
-        gitstat.stats.compute.compute(subject, fetcher, request(**changes), clock=clock)
-    )
+    return asyncio.run(gitstat.stats.compute(subject, fetcher, request(**changes), clock=clock))
 
 
 def pick(
@@ -66,14 +64,14 @@ class Untouchable:
 
 def untouched(subject: gitstat.fetch.base.Subject = fixture.ORG, **changes: object) -> None:
     fetcher = typing.cast(gitstat.fetch.base.Fetcher, Untouchable())
-    asyncio.run(gitstat.stats.compute.compute(subject, fetcher, request(**changes), clock=clock))
+    asyncio.run(gitstat.stats.compute(subject, fetcher, request(**changes), clock=clock))
 
 
 # resources_for
 
 
 def test_resources_for_maps_each_group() -> None:
-    resources_for = gitstat.stats.compute.resources_for
+    resources_for = gitstat.stats.resources_for
     assert resources_for(frozenset({'activity'})) == {'commits'}
     assert resources_for(frozenset({'flow'})) == {'issues', 'pull_requests'}
     assert resources_for(frozenset({'delivery'})) == {'releases', 'star_events', 'workflow_runs'}
@@ -87,7 +85,7 @@ def test_resources_for_maps_each_group() -> None:
 
 def test_resources_for_names_each_unknown_group_sorted() -> None:
     with pytest.raises(gitstat.stats.errors.UnknownGroupError, match='alpha, zeta') as raised:
-        gitstat.stats.compute.resources_for(frozenset({'zeta', 'activity', 'alpha'}))
+        gitstat.stats.resources_for(frozenset({'zeta', 'activity', 'alpha'}))
     assert 'activity' not in str(raised.value)
 
 
@@ -205,7 +203,7 @@ def test_a_commit_after_today_is_left_out_when_the_end_is_open(
 ) -> None:
     early_clock = datetime.datetime(2027, 1, 10, 12, 0, tzinfo=UTC)
     result = asyncio.run(
-        gitstat.stats.compute.compute(
+        gitstat.stats.compute(
             fixture.ORG, stats_fetcher, request(until=None), clock=lambda: early_clock
         )
     )
@@ -216,9 +214,7 @@ def test_a_commit_after_today_is_left_out_when_the_end_is_open(
 def test_the_default_request_lists_flow_as_unavailable_and_still_returns_activity(
     stats_fetcher: gitstat.fetch.base.Fetcher,
 ) -> None:
-    result = asyncio.run(
-        gitstat.stats.compute.compute(fixture.ORG, stats_fetcher, Request(), clock=clock)
-    )
+    result = asyncio.run(gitstat.stats.compute(fixture.ORG, stats_fetcher, Request(), clock=clock))
     assert pick(result, 'commits')
     rows = {row['metric']: row['reason'] for row in result.tables['unavailable']}
     assert 'step 6' in rows['flow']
@@ -291,7 +287,7 @@ def test_an_open_start_after_an_open_end_is_an_invalid_range(
     long_ago = datetime.datetime(2026, 9, 1, tzinfo=UTC)
     with pytest.raises(gitstat.stats.errors.InvalidRangeError):
         asyncio.run(
-            gitstat.stats.compute.compute(
+            gitstat.stats.compute(
                 fixture.ORG, stats_fetcher, request(since=None, until=None), clock=lambda: long_ago
             )
         )

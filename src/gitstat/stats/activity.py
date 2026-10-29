@@ -9,9 +9,6 @@ import gitstat.settings
 import gitstat.stats.base
 import gitstat.stats.buckets
 
-Bucket = gitstat.stats.base.Bucket
-Series = gitstat.stats.base.Series
-
 UNATTRIBUTED = 'unattributed'
 TOTAL_METRICS = (
     ('commits', 'count'),
@@ -68,24 +65,24 @@ def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date |
 def series_of(
     metric: str,
     unit: str,
-    buckets: list[Bucket],
+    buckets: list[gitstat.stats.base.Bucket],
     tallies: collections.abc.Sequence[Tally],
     by: str | None = None,
     by_kind: typing.Literal['author', 'repo'] | None = None,
-) -> Series:
+) -> gitstat.stats.base.Series:
     points = {bucket: tally.value(metric) for bucket, tally in zip(buckets, tallies, strict=True)}
-    return Series(metric, unit, points, by, by_kind)
+    return gitstat.stats.base.Series(metric, unit, points, by, by_kind)
 
 
 def aggregate(
     commits: collections.abc.Iterable[gitstat.fetch.base.Commit],
-    buckets: list[Bucket],
+    buckets: list[gitstat.stats.base.Bucket],
     tz: datetime.tzinfo,
     settings: gitstat.settings.StatsSettings,
     *,
     by_author: bool,
     by_repo: bool,
-) -> tuple[list[Series], Tables]:
+) -> tuple[list[gitstat.stats.base.Series], Tables]:
     """The activity series and tables for `commits`, which the caller has already restricted to
     the range `buckets` covers; a commit outside it raises ValueError."""
     bots = {login.casefold() for login in settings.bot_logins}
