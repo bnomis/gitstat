@@ -1134,3 +1134,58 @@ def test_the_gitstat_console_script_exits_0_and_lists_both_commands() -> None:
 def test_the_console_script_is_declared_in_pyproject() -> None:
     pyproject = tomllib.loads((SRC.parent / 'pyproject.toml').read_text())
     assert pyproject['project']['scripts'] == {'gitstat': 'gitstat.cli:run'}
+
+
+def test_a_closed_pipe_ends_the_terminal_report_quietly(
+    tmp_path: pathlib.Path, stats_cache_path: pathlib.Path
+) -> None:
+    config = tmp_path / 'pipe-config.json'
+    config.write_text(json.dumps({'fetch': {'cache_path': str(stats_cache_path)}}))
+    environment = {**subprocess_environment(), 'GITSTAT_CONFIG': str(config)}
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            '-m',
+            'gitstat',
+            'report',
+            'org:octo-org',
+            '--no-fetch',
+            *ALPHA_FLAGS,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    assert process.stdout.readline()
+    process.stdout.close()
+    assert process.wait(timeout=30) == 1
+    assert process.stderr.read() == ''
+    process.stderr.close()
+
+
+class PipeStdout:
+    """A stand-in for sys.stdout that has a file descriptor."""
+
+    def fileno(self) -> int:
+        return 1
+
+    def write(self, text: str) -> int:
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+def test_a_broken_pipe_while_writing_json_ends_quietly_with_status_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    redirected: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'dup2', lambda source, target: redirected.append((source, target)))
+    monkeypatch.setattr(sys, 'stdout', PipeStdout())
+    monkeypatch.setattr(gitstat.cli, 'run_report', raising(BrokenPipeError()))
+    assert gitstat.cli.main(['report', 'repo:octo-org/alpha', '--format', 'json']) == 1
+    assert capsys.readouterr().err == ''
+    assert [target for _, target in redirected] == [1]

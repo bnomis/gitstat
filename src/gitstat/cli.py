@@ -47,7 +47,8 @@ class Report:
         str, cappa.Arg(help='user:NAME, org:NAME, repo:OWNER/NAME, OWNER/NAME or a bare NAME')
     ]
     format: typing.Annotated[
-        FORMATS | None, cappa.Arg(long=True, help='Output format (default: report.format)')
+        FORMATS | None,
+        cappa.Arg(long=True, help='Output format, terminal or json (default: report.format)'),
     ] = None
     by: typing.Annotated[
         GRANULARITIES, cappa.Arg(long=True, help='Period to bucket by (default: month)')
@@ -331,7 +332,7 @@ async def run_report(
 def cache_info_table(info: gitstat.fetch.cache.CacheInfo) -> rich.table.Table:
     table = rich.table.Table(show_header=False, box=rich.box.SIMPLE, title='Cache')
     table.add_column(justify='left', no_wrap=True)
-    table.add_column(justify='left')
+    table.add_column(justify='left', overflow='fold')
     rows: list[tuple[str, str]] = [
         ('path', str(info.path)),
         ('size', f'{gitstat.reports.terminal.format_number(info.size_bytes)} bytes'),
@@ -434,6 +435,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except KeyboardInterrupt:
         return 130
+    except BrokenPipeError:
+        # The reader of stdout went away (`gitstat report ... | head`). Rich ends the same way
+        # for the terminal format; point stdout at the null device so exit does not flush again.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 1
     except Exception as e:
         redact_exception(e)
         loguru.logger.exception(f'Unexpected error: {redact_environment_token(str(e))}')
