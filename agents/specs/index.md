@@ -8,3 +8,5 @@
 | [Reports](reports/spec.md) | `src/gitstat/reports/`, `src/gitstat/cli.py` | Terminal, static HTML and local web app front ends |
 
 Read the system spec first. The build order is in it; each component spec lists its prerequisites.
+
+Sequencing of the work is in [Implementation order](implementation-order.md).
