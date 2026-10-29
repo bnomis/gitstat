@@ -42,7 +42,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 1: Add aiohttp and the fetch test layout
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** External dependencies; Module location; Implementation (Testing)
@@ -84,7 +84,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 2: Typed fetch errors
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Error handling; Module location (`errors.py`)
@@ -123,7 +123,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 3: Token resolution and redaction
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** API (`resolve_token`, `redact`); Error handling (`AuthError`); Implementation (Secrets)
@@ -162,7 +162,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 4: Rate-limit state and backoff
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** API (`RateLimitState`, `backoff_delay`); Implementation (Requests, retries and rate limits)
@@ -203,7 +203,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 5: Replay server and `GitHubClient` lifecycle
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`GitHubClient`); Implementation (Transport; Requests, retries and rate limits: headers and timeout; Secrets; Testing)
@@ -247,7 +247,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 6: Response classification and transient retries
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Error handling (`AuthError`, `NotFoundError`, transient failures, other statuses); Implementation (Requests, retries and rate limits, steps 1 and 5)
@@ -288,7 +288,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 7: GraphQL request path and the first query
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`GitHubClient.graphql`); Error handling (`NotFoundError`, `GraphQLError`); Implementation (Transport; GraphQL cost control; Requests, retries and rate limits: the `rateLimit` rule; Testing)
@@ -326,13 +326,14 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 6
 - `OWNER_REPOSITORIES` is a probe for this step's live test; the step 3 list extends or replaces it with the repo fields, forks and archived filters `repos()` needs.
+- Deviation, 2026-10-29: the build session could not reach the live GraphQL API (the sandbox proxy refuses GraphQL), so the `OWNER_REPOSITORIES_OK` fixture is hand-written from GitHub's documented shapes, not recorded. Record it from a session with network access and replace it.
 - Key files: `src/gitstat/fetch/client.py`, `src/gitstat/fetch/queries.py`, `src/tests/fetch/test_client.py`, `src/tests/fetch/test_queries.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
 ## Task 8: REST request path with ETag revalidation
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`GitHubClient.rest_get`, `RestResponse`); Implementation (Transport: conditional GETs; Cache: `If-None-Match`)
@@ -367,13 +368,14 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 6
 - Storing ETags in SQLite is the step 3 list's; this task only sends and returns them.
+- Deviation, 2026-10-29: as Task 7, the `REPO` fixture is hand-written, not recorded.
 - Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
 ## Task 9: Primary rate limit: wait or fail
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Error handling (`RateLimitError`); Implementation (Requests, retries and rate limits, steps 3 and 6); Settings (`fetch.on_rate_limit`)
@@ -414,7 +416,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 10: Secondary rate limits
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Error handling (secondary rate limits); Implementation (Requests, retries and rate limits, steps 2 and 4, backoff); Settings (`fetch.max_retries`)
@@ -453,7 +455,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 11: REST 202 and `StatsPendingError`
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Error handling (`StatsPendingError`); Implementation (Requests, retries and rate limits: REST 202); Settings (`fetch.stats_retries`)
@@ -489,7 +491,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 ## Task 12: Opt-in live test
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Implementation (Testing); implementation order step 2 ("an opt-in live test lists the repos of a small public account")
@@ -520,13 +522,14 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 7
 - CI deselects `live` (Task 1) and has no token, so it never runs there.
+- Run 2026-10-29 with `pytest -m live`: failed with `AuthError` (HTTP 401) because the sandbox's `GITHUB_TOKEN` is not accepted by `api.github.com/graphql`. The request path reached the API and was classified correctly; the pass is still to be shown from a session with a real token.
 - Key files: `src/tests/fetch/test_live.py`
 
 ---
 
 ## Task 13: Package exports and closing checks
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location; API; implementation order step 2 ("Done when")
