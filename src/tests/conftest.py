@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import pathlib
 import random
 import typing
@@ -12,6 +13,7 @@ import gitstat.settings
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 import tests.fixtures.settings
+import tests.fixtures.stats
 
 MakeClient = typing.Callable[..., gitstat.fetch.client.GitHubClient]
 MakeFetcher = typing.Callable[..., gitstat.fetch.base.Fetcher]
@@ -89,3 +91,41 @@ def make_fetcher(
     yield make
     for cache in caches:
         cache.close()
+
+
+def store_commits(
+    cache: gitstat.fetch.cache.Cache, repo: gitstat.fetch.base.Repo, synced_at: datetime.datetime
+) -> None:
+    commits = [c for c in tests.fixtures.stats.COMMITS if c.repo == repo.name_with_owner]
+    state = gitstat.fetch.base.SyncState(
+        repo=repo.name_with_owner,
+        resource='commits',
+        watermark=None,
+        head_oid=repo.head_oid,
+        pushed_at=repo.pushed_at,
+        updated_at=repo.updated_at,
+        synced_at=synced_at,
+        full_synced_at=synced_at,
+    )
+    cache.write_commits(repo.name_with_owner, commits, state, replace=True)
+
+
+@pytest.fixture
+def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[gitstat.fetch.cache.Cache]:
+    """A cache holding the stats fixture's repositories and commits."""
+    fixture = tests.fixtures.stats
+    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
+    alpha, beta, gamma = fixture.REPOS
+    cache.upsert_repos('octo-org', [alpha, beta], complete=True)
+    cache.upsert_repos('octocat', [gamma], complete=True)
+    store_commits(cache, alpha, fixture.ALPHA_SYNCED_AT)
+    store_commits(cache, beta, fixture.BETA_SYNCED_AT)
+    store_commits(cache, gamma, fixture.GAMMA_SYNCED_AT)
+    yield cache
+    cache.close()
+
+
+@pytest.fixture
+def stats_fetcher(stats_cache: gitstat.fetch.cache.Cache) -> gitstat.fetch.base.Fetcher:
+    """A fetcher over `stats_cache`, never entered, so any request fails."""
+    return gitstat.fetch.base.Fetcher('test-token', stats_cache, gitstat.settings.FetchSettings())

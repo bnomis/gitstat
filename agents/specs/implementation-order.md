@@ -21,7 +21,7 @@ The order in which gitstat is built, with what each step delivers, what it depen
 | 1 | Skeleton and settings | [system](system/spec.md) | none | done |
 | 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 | done: [tasks-1](../tasks/fetch-and-cache/tasks-1.md) |
 | 3 | Cache and incremental sync for repos and commits | [fetch-and-cache](fetch-and-cache/spec.md) | 2 | done: [tasks-2](../tasks/fetch-and-cache/tasks-2.md) |
-| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | planned: [tasks-1](../tasks/stats/tasks-1.md) |
+| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | done: [tasks-1](../tasks/stats/tasks-1.md) |
 | 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | not started |
 | 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | not started |
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | not started |
