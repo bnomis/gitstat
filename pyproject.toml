@@ -5,6 +5,7 @@ description = 'Visualisation and report of statistics from github.com for a user
 readme = 'AGENTS.md'
 requires-python = '>=3.14'
 dependencies = [
+    "aiohttp>=3.14.5",
     "loguru>=0.7.3",
 ]
 
@@ -39,7 +40,10 @@ explicit_package_bases = true
 [tool.pytest.ini_options]
 testpaths = ['src/tests']
 pythonpath = ['src']
-markers = ['slow: loads large models or processes real datasets']
+markers = [
+    'live: calls the real GitHub API; skipped without GITHUB_TOKEN',
+    'slow: loads large models or processes real datasets',
+]
 
 [dependency-groups]
 dev = [
