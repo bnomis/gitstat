@@ -102,12 +102,12 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 ## Settings
 
-Layered, later wins: built-in defaults, `~/.config/gitstat/config.toml`, command-line flags. Component settings are defined in the component specs under the `fetch.`, `stats.` and `report.` prefixes. The token is never a setting.
+Layered, later wins: built-in defaults, `~/.config/gitstat/config.toml`, command-line flags. Component settings are defined in the component specs under the `fetch.`, `stats.` and `report.` prefixes. The token is never a setting: it is read from the environment only. The two environment variables the system reads are:
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `GITHUB_TOKEN` | env var | none | API token, read from the environment only |
-| `GITSTAT_CONFIG` | env var | `~/.config/gitstat/config.toml` | Config file path |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_TOKEN` | none | API token |
+| `GITSTAT_CONFIG` | `~/.config/gitstat/config.toml` | Config file path |
 
 ## External dependencies
 

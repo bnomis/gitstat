@@ -50,7 +50,7 @@ gitstat cache   clear|info
 ## Error handling
 
 - `UsageError` (bad target, bad date, `--by-author` with a user target): exit status 2 with a one-line message.
-- `AuthError`, `NotFoundError`, `RateLimitError`, `CacheVersionError`, `EmptySubjectError`: caught at `main`, logged with `loguru.logger.error`, exit status 1. The message states the fix (set `GITHUB_TOKEN`, wait until the reset time, clear the cache).
+- `AuthError`, `CacheVersionError`, `EmptySubjectError`, `InvalidRangeError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `UnknownGroupError`: caught at `main`, logged with `loguru.logger.error`, exit status 1. The message states the fix (set `GITHUB_TOKEN`, wait until the reset time, clear the cache).
 - `OSError` writing `--out`: exit status 1, no partial file left behind (write to a temp file, then rename).
 - The web app returns HTTP 400 for invalid query parameters and 502 with the upstream message when GitHub fails; it never shows a traceback.
 - `KeyboardInterrupt` exits 130 quietly.
