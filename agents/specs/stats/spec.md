@@ -4,7 +4,7 @@
 **Status:** proposed
 **Date:** 2026-10-29
 
-Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into statistics for a user, repository or organisation, optionally bucketed by year, month, week or day. It is pure computation: no network, no rendering. [Reports](../reports/spec.md) consumes its output.
+Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into statistics for a user, repository or organisation, optionally bucketed by year, month, week or day. It does no network or rendering of its own: `compute` awaits the fetcher, and the aggregation functions it calls are pure. [Reports](../reports/spec.md) consumes its output.
 
 **Prerequisite:** the `gitstat.fetch` package exists and `Fetcher` yields `Commit`, `PullRequest`, `Issue`, `Release`, `WorkflowRun` and `StarEvent` records (check: `python -c 'import gitstat.fetch'`).
 
@@ -42,7 +42,7 @@ class Series:
 def bucket_for(when: datetime.datetime, granularity: Granularity, tz: datetime.tzinfo) -> Bucket:
     """Bucket containing `when`; weeks are ISO 8601 weeks starting Monday."""
 
-def compute(subject: Subject, fetcher: Fetcher, request: StatsRequest) -> StatsResult:
+async def compute(subject: Subject, fetcher: Fetcher, request: StatsRequest) -> StatsResult:
     """All requested metric groups for the subject, bucketed by request.granularity."""
 
 @dataclasses.dataclass(frozen=True, slots=True)
