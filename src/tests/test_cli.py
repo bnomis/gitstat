@@ -8,6 +8,8 @@ import pathlib
 import re
 import sqlite3
 import subprocess
+import sys
+import tomllib
 import typing
 import zoneinfo
 
@@ -909,3 +911,226 @@ def test_cache_clear_removes_the_files_then_reports_nothing_to_remove(
     assert not stats_cache_path.exists()
     _, again = run_cache('clear', stats_cache_path)
     assert again == [f'no cache at {stats_cache_path}']
+
+
+@pytest.fixture(autouse=True)
+def restore_logger() -> typing.Iterator[None]:
+    yield
+    loguru.logger.remove()
+
+
+def config_for(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, cache: pathlib.Path
+) -> None:
+    config = tmp_path / 'main-config.json'
+    config.write_text(json.dumps({'fetch': {'cache_path': str(cache)}}))
+    monkeypatch.setenv('GITSTAT_CONFIG', str(config))
+
+
+def raising(error: BaseException) -> typing.Callable[..., typing.Awaitable[None]]:
+    async def run(*args: object, **kwargs: object) -> None:
+        raise error
+
+    return run
+
+
+RESET = datetime.datetime(2027, 3, 1, 13, 0, tzinfo=UTC)
+ERROR_STATUSES = [
+    (gitstat.fetch.errors.AuthError('No GitHub token found: set GITHUB_TOKEN'), 1),
+    (
+        gitstat.fetch.errors.CacheVersionError({'schema_version': ('0', '1')}),
+        1,
+    ),
+    (gitstat.fetch.errors.GraphQLError([('NOT_FOUND', 'no such thing')]), 1),
+    (gitstat.fetch.errors.NotFoundError('octocat not found'), 1),
+    (gitstat.fetch.errors.RateLimitError(RESET), 1),
+    (gitstat.fetch.errors.StatsPendingError('still computing'), 1),
+    (gitstat.stats.EmptySubjectError('no commits in the cache for this range'), 1),
+    (gitstat.stats.InvalidRangeError('since is after until'), 1),
+    (gitstat.stats.InvalidRequestError('by_author is not meaningful for a user'), 1),
+    (gitstat.stats.UnknownGroupError('unknown groups: bogus'), 1),
+    (UsageError('flags clash'), 2),
+    (SettingsError('fetch.max_age is wrong'), 2),
+]
+
+
+@pytest.mark.parametrize(
+    ('error', 'status'), ERROR_STATUSES, ids=[type(error).__name__ for error, _ in ERROR_STATUSES]
+)
+def test_each_typed_error_is_one_logged_line_and_its_exit_status(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+    status: int,
+) -> None:
+    monkeypatch.setattr(gitstat.cli, 'run_report', raising(error))
+    assert gitstat.cli.main(['report', 'repo:octo-org/alpha']) == status
+    captured = capsys.readouterr()
+    errors = [line for line in captured.err.splitlines() if line.startswith('ERROR:')]
+    assert errors == [f'ERROR: {error}']
+    assert 'Traceback' not in captured.err
+    assert captured.out == ''
+
+
+def test_any_other_exception_logs_its_traceback_and_exits_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(gitstat.cli, 'run_report', raising(RuntimeError('boom')))
+    assert gitstat.cli.main(['report', 'repo:octo-org/alpha']) == 1
+    err = capsys.readouterr().err
+    assert 'Traceback' in err
+    assert 'RuntimeError: boom' in err
+
+
+def test_a_keyboard_interrupt_exits_130_with_no_message(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(gitstat.cli, 'run_report', raising(KeyboardInterrupt()))
+    assert gitstat.cli.main(['report', 'repo:octo-org/alpha']) == 130
+    assert capsys.readouterr().err == ''
+
+
+def test_help_returns_0_and_a_bad_command_line_returns_2(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert gitstat.cli.main(['--help']) == 0
+    assert 'report' in capsys.readouterr().out
+    assert gitstat.cli.main(['report', 'repo:a/b', '--by', 'fortnight']) == 2
+    assert gitstat.cli.main([]) == 2
+
+
+def test_a_missing_config_file_returns_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.setenv('GITSTAT_CONFIG', str(tmp_path / 'absent.json'))
+    assert gitstat.cli.main(['cache', 'info']) == 2
+    assert 'does not exist' in capsys.readouterr().err
+
+
+def test_verbose_and_quiet_together_return_2(capsys: pytest.CaptureFixture[str]) -> None:
+    assert gitstat.cli.main(['-v', '-q', 'cache', 'info']) == 2
+    assert 'ERROR: -v and -q cannot be used together' in capsys.readouterr().err
+
+
+def test_a_bad_flag_value_returns_2_before_any_cache_is_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+) -> None:
+    cache = tmp_path / 'never' / 'cache.sqlite3'
+    config_for(tmp_path, monkeypatch, cache)
+    assert gitstat.cli.main(['report', 'repo:a/b', '--max-age', '1x']) == 2
+    assert 'fetch.max_age' in capsys.readouterr().err
+    assert gitstat.cli.main(['report', 'a/b/c']) == 2
+    assert gitstat.cli.main(['report', 'repo:a/b', '--format', 'html']) == 2
+    assert not cache.parent.exists()
+
+
+def test_a_warm_cache_report_through_main_returns_0_and_prints_the_period_table(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    config_for(tmp_path, monkeypatch, stats_cache_path)
+    argv = ['report', 'repo:octo-org/alpha', '--no-fetch', *ALPHA_FLAGS]
+    assert gitstat.cli.main(argv) == 0
+    captured = capsys.readouterr()
+    assert 'Activity by period' in captured.out
+    assert '2026-10' in captured.out
+    assert captured.err == ''
+
+
+def test_json_through_main_is_pure_json_on_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    config_for(tmp_path, monkeypatch, stats_cache_path)
+    argv = ['report', 'org:octo-org', '--no-fetch', '--format', 'json', *ALPHA_FLAGS]
+    assert gitstat.cli.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)['subject']['login'] == 'octo-org'
+
+
+def test_a_cache_command_through_main_returns_0(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+) -> None:
+    config_for(tmp_path, monkeypatch, tmp_path / 'absent' / 'cache.sqlite3')
+    assert gitstat.cli.main(['cache', 'info']) == 0
+    assert 'no cache at' in capsys.readouterr().out
+    assert gitstat.cli.main(['-q', 'cache', 'clear']) == 0
+
+
+TOKEN = 'ghp_sentinelsentinelsentinelsentinel1234'
+
+
+def test_a_token_in_an_error_never_reaches_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', TOKEN)
+    for error in (
+        gitstat.fetch.errors.AuthError(f'bad credentials {TOKEN}'),
+        RuntimeError(f'request failed with {TOKEN}'),
+    ):
+        monkeypatch.setattr(gitstat.cli, 'run_report', raising(error))
+        assert gitstat.cli.main(['report', 'repo:octo-org/alpha']) == 1
+        err = capsys.readouterr().err
+        assert err
+        assert TOKEN not in err
+        assert '***' in err
+
+
+def test_a_token_in_the_cause_of_an_error_never_reaches_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', TOKEN)
+
+    async def run(*args: object, **kwargs: object) -> None:
+        try:
+            raise ValueError(f'inner {TOKEN}')
+        except ValueError as e:
+            raise RuntimeError('outer') from e
+
+    monkeypatch.setattr(gitstat.cli, 'run_report', run)
+    assert gitstat.cli.main(['report', 'repo:octo-org/alpha']) == 1
+    assert TOKEN not in capsys.readouterr().err
+
+
+SRC = pathlib.Path(__file__).parents[1]
+
+
+def subprocess_environment() -> dict[str, str]:
+    return {
+        **os.environ,
+        'PYTHONPATH': os.pathsep.join([str(SRC), os.environ.get('PYTHONPATH', '')]),
+    }
+
+
+def test_python_dash_m_gitstat_help_exits_0() -> None:
+    done = subprocess.run(
+        [sys.executable, '-m', 'gitstat', '--help'],
+        capture_output=True,
+        text=True,
+        env=subprocess_environment(),
+        check=False,
+    )
+    assert done.returncode == 0
+    assert 'report' in done.stdout
+    assert 'cache' in done.stdout
+
+
+def test_the_gitstat_console_script_exits_0_and_lists_both_commands() -> None:
+    script = pathlib.Path(sys.executable).parent / 'gitstat'
+    assert script.exists(), 'the console script is installed by `uv sync`'
+    done = subprocess.run([str(script), '--help'], capture_output=True, text=True, check=False)
+    assert done.returncode == 0
+    assert 'report' in done.stdout
+    assert 'cache' in done.stdout
+
+
+def test_the_console_script_is_declared_in_pyproject() -> None:
+    pyproject = tomllib.loads((SRC.parent / 'pyproject.toml').read_text())
+    assert pyproject['project']['scripts'] == {'gitstat': 'gitstat.cli:run'}

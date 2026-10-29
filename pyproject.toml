@@ -11,6 +11,9 @@ dependencies = [
     "rich>=15.0.0",
 ]
 
+[project.scripts]
+gitstat = 'gitstat.cli:run'
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.165.9",

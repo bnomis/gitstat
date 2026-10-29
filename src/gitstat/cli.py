@@ -1,8 +1,11 @@
+import asyncio
 import collections.abc
 import contextlib
 import dataclasses
 import datetime
+import os
 import re
+import sys
 import typing
 import zoneinfo
 
@@ -15,6 +18,8 @@ import rich.table
 import gitstat.fetch.auth
 import gitstat.fetch.base
 import gitstat.fetch.cache
+import gitstat.fetch.errors
+import gitstat.logs
 import gitstat.reports.base
 import gitstat.reports.errors
 import gitstat.reports.terminal
@@ -370,3 +375,72 @@ def run_cache(
         loguru.logger.info(f'Removed {deleted}')
     if not removed:
         loguru.logger.info(f'no cache at {path}')
+
+
+def log_level(root: Gitstat) -> str:
+    if root.quiet and not root.verbose:
+        return 'WARNING'
+    if root.verbose and not root.quiet:
+        return 'DEBUG'
+    return 'INFO'
+
+
+def redact_environment_token(text: str) -> str:
+    return gitstat.fetch.auth.redact(text, os.environ.get('GITHUB_TOKEN', '').strip())
+
+
+def redact_exception(error: BaseException | None) -> None:
+    """Remove the environment's token from the messages of `error` and what it was raised from,
+    so the traceback that is logged cannot carry it."""
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        error.args = tuple(
+            redact_environment_token(arg) if isinstance(arg, str) else arg for arg in error.args
+        )
+        error = error.__cause__ or error.__context__
+
+
+def execute(root: Gitstat) -> None:
+    check_verbosity(root)
+    command = root.command
+    console = rich.console.Console()
+    if isinstance(command, Report):
+        settings = gitstat.settings.load_settings(None, overrides(command))
+        asyncio.run(run_report(command, settings, console, sys.stdout))
+    else:
+        run_cache(command, gitstat.settings.load_settings(None, {}), console)
+
+
+def exit_status(code: str | int | None) -> int:
+    return code if isinstance(code, int) else 0 if code is None else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse `argv` (default `sys.argv[1:]`), run the command and return the exit status; every
+    error is turned into a logged line and a status here and nowhere else."""
+    try:
+        root = cappa.parse(Gitstat, argv=sys.argv[1:] if argv is None else argv)
+    except cappa.Exit as e:
+        return exit_status(e.code)
+    gitstat.logs.configure_logging(log_level(root))
+    try:
+        execute(root)
+    except (gitstat.reports.errors.UsageError, gitstat.settings.SettingsError) as e:
+        loguru.logger.error(redact_environment_token(str(e)))
+        return 2
+    except (gitstat.fetch.errors.FetchError, gitstat.stats.StatsError) as e:
+        loguru.logger.error(redact_environment_token(str(e)))
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:
+        redact_exception(e)
+        loguru.logger.exception(f'Unexpected error: {redact_environment_token(str(e))}')
+        return 1
+    return 0
+
+
+def run() -> None:
+    """The `gitstat` console script and `python -m gitstat`."""
+    sys.exit(main())
