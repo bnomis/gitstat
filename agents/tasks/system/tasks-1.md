@@ -30,7 +30,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 1: Project tooling and package skeleton
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Module location; Implementation (Stack, Testing); External dependencies
@@ -77,7 +77,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 2: Single source of the gitstat version
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Architecture ("Provenance travels with the data"); Settings (Version identity)
@@ -113,7 +113,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 3: Logging set-up
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Error handling ("Unexpected exceptions propagate and are logged with `loguru.logger.exception`"); Implementation (Stack)
@@ -150,7 +150,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 4: Settings dataclasses with defaults
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** API (`Settings`); Settings; fetch-and-cache, stats and reports spec Settings tables
@@ -190,7 +190,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 5: `load_settings` layering
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`load_settings`); Settings (Config file, Overrides, Values, Errors)
@@ -233,7 +233,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 6: Keep the token out of settings
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Architecture ("Secrets stay in the environment"); Settings ("The token is never a setting")
@@ -270,7 +270,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 7: Public API entry point and layering guard
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location; API; Architecture ("Three layers with one-way dependencies")
@@ -307,7 +307,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 ## Task 8: Continuous integration
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Implementation (Stack, Testing); implementation order step 1 ("CI is green on an empty-feature PR")
