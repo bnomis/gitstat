@@ -12,7 +12,7 @@ repository, a git submodule at `.agents/`:
 
 @.agents/claude/CLAUDE.md
 
-After cloning: `git submodule update --init`. To update the shared set:
+After cloning: `git submodule update --init`. Claude Code cloud sessions do this in the SessionStart hook (`.claude/hooks/session-start.sh`). To update the shared set:
 `git submodule update --remote .agents`, then commit the new pointer.
 
 Project-specific rules and skills go in this repository's own `claude/`
