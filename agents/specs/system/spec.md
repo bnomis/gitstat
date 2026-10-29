@@ -85,16 +85,7 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 **Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `tomllib`.
 
-**Build order.** Each milestone ends with working, tested behaviour:
-
-1. **Skeleton:** `pyproject.toml`, `src/gitstat/`, settings loading, loguru setup, CI running ruff and pytest.
-2. **Fetch and cache:** auth, GraphQL client with rate-limit handling, SQLite cache, repos and commits first.
-3. **Stats, activity group:** bucketing, commits, lines added, deleted and net, by author.
-4. **Terminal report and CLI:** the first end-to-end `gitstat report repo:OWNER/NAME`.
-5. **Stats, flow group** and its fetch resources.
-6. **Static HTML report.**
-7. **Stats, delivery group** (CI and DORA proxies).
-8. **Local web app.**
+**Build order.** The sequence of steps, with deliverables, dependencies and done criteria, is in [Implementation order](../implementation-order.md).
 
 **Testing.** Unit tests run on recorded fixture responses and never touch the network. One opt-in integration test, skipped without `GITHUB_TOKEN`, fetches a small public repository and checks line totals against the REST `stats/code_frequency` endpoint. Tests are scoped to changed modules, as the shared rules require.
 
