@@ -19,6 +19,7 @@ import gitstat.fetch.auth
 import gitstat.fetch.base
 import gitstat.fetch.cache
 import gitstat.fetch.errors
+import gitstat.fetch.ratelimit
 import gitstat.logs
 import gitstat.reports.base
 import gitstat.reports.errors
@@ -299,17 +300,13 @@ async def build_result(
         raise
 
 
-def utc_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.UTC)
-
-
 async def run_report(
     report: Report,
     settings: gitstat.settings.Settings,
     console: rich.console.Console,
     stdout: typing.TextIO,
     *,
-    clock: collections.abc.Callable[[], datetime.datetime] = utc_now,
+    clock: collections.abc.Callable[[], datetime.datetime] = gitstat.fetch.ratelimit.utc_now,
 ) -> None:
     """Check the flags, bring the cache up to date if needed, compute and print the report."""
     target = parse_target(report.target)

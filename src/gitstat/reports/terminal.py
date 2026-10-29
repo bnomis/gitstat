@@ -5,18 +5,12 @@ import rich.console
 import rich.table
 import rich.text
 
+import gitstat.stats.activity
 import gitstat.stats.base
 
 BLOCKS = '▁▂▃▄▅▆▇█'
-TOTAL_METRICS = (
-    'commits',
-    'contributors',
-    'active_days',
-    'lines_added',
-    'lines_deleted',
-    'lines_net',
-)
-UNATTRIBUTED = 'unattributed'
+TOTAL_METRICS = tuple(metric for metric, _ in gitstat.stats.activity.TOTAL_METRICS)
+UNATTRIBUTED = gitstat.stats.activity.UNATTRIBUTED
 PARTIAL_MARK = ' *'
 TOP_CONTRIBUTORS_SHOWN = 20
 BREAKDOWN_TITLES = (('repo', 'By repository'), ('author', 'By author'))

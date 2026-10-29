@@ -1189,3 +1189,20 @@ def test_a_broken_pipe_while_writing_json_ends_quietly_with_status_1(
     assert gitstat.cli.main(['report', 'repo:octo-org/alpha', '--format', 'json']) == 1
     assert capsys.readouterr().err == ''
     assert [target for _, target in redirected] == [1]
+
+
+def report_choices(field: str) -> set[object]:
+    """The values of every Literal in the annotation of a `Report` field."""
+    annotation = typing.get_type_hints(gitstat.cli.Report, include_extras=True)[field]
+    (bare, *_) = typing.get_args(annotation)
+    members = typing.get_args(bare) if typing.get_origin(bare) is not typing.Literal else (bare,)
+    return {value for member in members for value in typing.get_args(member)}
+
+
+def test_the_by_choices_are_the_granularities() -> None:
+    assert report_choices('by') == {g.value for g in gitstat.stats.base.Granularity}
+
+
+def test_the_format_choices_are_the_report_formats() -> None:
+    settings_hints = typing.get_type_hints(gitstat.settings.ReportSettings)
+    assert report_choices('format') == set(typing.get_args(settings_hints['format']))
