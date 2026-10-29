@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -19,7 +19,7 @@ The order in which gitstat is built, with what each step delivers, what it depen
 | # | Step | Specs | Depends on | Status |
 |---|------|-------|------------|--------|
 | 1 | Skeleton and settings | [system](system/spec.md) | none | done |
-| 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 | not started |
+| 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 | planned: [tasks-1](../tasks/fetch-and-cache/tasks-1.md) |
 | 3 | Cache and incremental sync for repos and commits | [fetch-and-cache](fetch-and-cache/spec.md) | 2 | not started |
 | 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | not started |
 | 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | not started |
@@ -39,12 +39,12 @@ Done when: `pytest` passes with settings-layering tests, CI is green on an empty
 
 ### 2. Fetch core
 
-Deliver: `resolve_token`, the aiohttp `Fetcher` shell (`__aenter__`/`__aexit__`), the GraphQL and REST request paths, `rateLimit` accounting, secondary-limit backoff, the typed error classes, and token redaction in logs.
+Deliver: `resolve_token`, the aiohttp transport `GitHubClient` (`__aenter__`/`__aexit__`) that `Fetcher` wraps in step 3, the GraphQL and REST request paths with ETag revalidation, `rateLimit` accounting, transient and secondary-limit backoff, the typed error classes except `CacheVersionError`, and token redaction in logs.
 Done when: replayed fixtures cover 401, 404, primary and secondary rate limits and REST 202; an opt-in live test lists the repos of a small public account.
 
 ### 3. Cache and incremental sync (repos and commits)
 
-Deliver: the SQLite schema, `meta` identity and `CacheVersionError`, `sync_state` watermarks, `repos()` and `commits()` with per-commit additions and deletions, overlap, de-duplication, rewritten-history detection and atomic watermark advance, and `--full-refresh`.
+Deliver: `Subject`, `Fetcher` wrapping the step 2 `GitHubClient`, the `fetch.workers` semaphore, the SQLite schema, `meta` identity and `CacheVersionError`, ETag storage, `sync_state` watermarks, `repos()` and `commits()` with per-commit additions and deletions, overlap, de-duplication, rewritten-history detection and atomic watermark advance, and `--full-refresh`.
 This is the highest-risk step; it proves the incremental design before anything depends on it.
 Done when: a second run of the same fixture fetches nothing; an interrupted run resumes; a simulated force-push triggers a full refetch of that repo; and an opt-in live test's line totals match `stats/code_frequency` for a small repo.
 
