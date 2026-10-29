@@ -1,26 +1,26 @@
-# gitstat
+# wambatic
 
 Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal or as JSON.
 
-gitstat reads the default-branch history from GitHub's GraphQL and REST APIs, keeps it in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
+wambatic reads the default-branch history from GitHub's GraphQL and REST APIs, keeps it in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
 
 ## Install
 
 You need Python 3.14 and [uv](https://docs.astral.sh/uv/).
 
 ```shell
-git clone https://github.com/bnomis/gitstat
-cd gitstat
+git clone https://github.com/bnomis/wambatic
+cd wambatic
 uv sync
 source bin/activate.sh
-gitstat --help
+wambatic --help
 ```
 
-`gitstat --help` lists the `report` and `cache` commands. `python -m gitstat` runs the same program.
+`wambatic --help` lists the `report` and `cache` commands. `python -m wambatic` runs the same program.
 
 ## The token
 
-gitstat reads a GitHub token from the `GITHUB_TOKEN` environment variable, and falls back to `gh auth token` when the [GitHub CLI](https://cli.github.com/) is signed in. A token with `public_repo` is enough for public repositories; use `repo` for private repositories and `read:org` for private organisation membership. The token is never written to the cache, the logs or a report, and a `GITHUB_TOKEN` that appears in an error message is replaced by `***`.
+wambatic reads a GitHub token from the `GITHUB_TOKEN` environment variable, and falls back to `gh auth token` when the [GitHub CLI](https://cli.github.com/) is signed in. A token with `public_repo` is enough for public repositories; use `repo` for private repositories and `read:org` for private organisation membership. The token is never written to the cache, the logs or a report, and a `GITHUB_TOKEN` that appears in an error message is replaced by `***`.
 
 A report that makes no request (see `--no-fetch` and `--max-age` below) needs no token.
 
@@ -31,7 +31,7 @@ export GITHUB_TOKEN=<token from https://github.com/settings/tokens>
 ## A first report
 
 ```shell
-gitstat report repo:octocat/Hello-World --by month
+wambatic report repo:octocat/Hello-World --by month
 ```
 
 The first run reads the whole history of the repository and may take a while for a large one; later runs fetch only what is new. The report prints, in order:
@@ -42,7 +42,7 @@ The first run reads the whole history of the repository and may take a while for
 - By repository (for a user or organisation) and By author (with `--by-author`);
 - Top contributors, with only the first rows shown (the JSON output has every row);
 - Unavailable: metrics that are not built yet, with the reason;
-- where the data came from: when it was computed, when each resource was last fetched, and the gitstat and cache schema versions.
+- where the data came from: when it was computed, when each resource was last fetched, and the wambatic and cache schema versions.
 
 Nothing in the output depends on colour: net lines carry an explicit sign, and partial periods carry a mark.
 
@@ -50,22 +50,22 @@ Nothing in the output depends on colour: net lines carry an explicit sign, and p
 
 ```shell
 # Report from the cache only: no network, no token
-gitstat report repo:octocat/Hello-World --no-fetch
+wambatic report repo:octocat/Hello-World --no-fetch
 
 # Sync only if the cache is more than a day old
-gitstat report org:github --max-age 1d
+wambatic report org:github --max-age 1d
 
 # Machine-readable output, with logs kept on stderr
-gitstat report org:github --format json | jq '.series[0].points'
+wambatic report org:github --format json | jq '.series[0].points'
 
 # Who did the work in an organisation
-gitstat report org:github --by-author --since 2026-01-01
+wambatic report org:github --by-author --since 2026-01-01
 
 # One bucket for the whole range, in another time zone
-gitstat report user:octocat --by total --tz Europe/Berlin
+wambatic report user:octocat --by total --tz Europe/Berlin
 
 # Read all the history again, for example after a force-push you suspect
-gitstat report repo:octocat/Hello-World --full-refresh
+wambatic report repo:octocat/Hello-World --full-refresh
 ```
 
 ## Targets
@@ -81,9 +81,9 @@ A `NAME` or `OWNER` is 1 to 39 letters, digits and `-`; a repository `NAME` is 1
 
 Forked and archived repositories are left out of a user or organisation unless `fetch.include_forks` or `fetch.include_archived` is set.
 
-## `gitstat report` options
+## `wambatic report` options
 
-Global options come before the command: `gitstat -v report ...`.
+Global options come before the command: `wambatic -v report ...`.
 
 | Option | Default | Meaning |
 |--------|---------|---------|
@@ -99,7 +99,7 @@ Global options come before the command: `gitstat -v report ...`.
 | `--full-refresh` | off | Read all history again and ignore `--max-age`; cannot be used with `--no-fetch` |
 | `--no-fetch` | off | Use the cache only, with no network and no token |
 | `--max-age DURATION` | `fetch.max_age` | Skip the network when every resource was synced more recently, for example `30m` or `1d` |
-| `--ignore-cache-version` | off | Read a cache written by a different gitstat or schema version, and say so in the report |
+| `--ignore-cache-version` | off | Read a cache written by a different wambatic or schema version, and say so in the report |
 
 Without `--no-fetch` and `--max-age`, every run syncs first, because `fetch.max_age` defaults to zero. A sync of a repository that has not changed costs one request.
 
@@ -107,20 +107,20 @@ Dates must be written `YYYY-MM-DD`; other ISO forms are rejected. Merge commits 
 
 ## The cache
 
-The cache is derived data kept at `fetch.cache_path`, by default `~/.cache/gitstat/cache.sqlite3`. It records the schema version, the gitstat version and a hash of each query, and gitstat refuses a cache written by a different version rather than mix results.
+The cache is derived data kept at `fetch.cache_path`, by default `~/.cache/wambatic/cache.sqlite3`. It records the schema version, the wambatic version and a hash of each query, and wambatic refuses a cache written by a different version rather than mix results.
 
 ```shell
-gitstat cache info
-gitstat cache clear
+wambatic cache info
+wambatic cache clear
 ```
 
-`cache info` prints the path, the size, the recorded identity, every key that differs from this gitstat (with both values), the number of repositories and commits and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
+`cache info` prints the path, the size, the recorded identity, every key that differs from this wambatic (with both values), the number of repositories and commits and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
 
-When `report` stops with "The cache was written by a different version", either run `gitstat cache clear` and let it fetch again, or pass `--ignore-cache-version` for one run. The override is recorded in the cache and shown as a warning in the report.
+When `report` stops with "The cache was written by a different version", either run `wambatic cache clear` and let it fetch again, or pass `--ignore-cache-version` for one run. The override is recorded in the cache and shown as a warning in the report.
 
 ## The config file
 
-Settings are layered, and a later layer wins: built-in defaults, then the JSON file `~/.config/gitstat/config.json`, then command line flags. Set `GITSTAT_CONFIG` to use another file; a missing file named that way is an error, while a missing default file is not. The token is not a setting.
+Settings are layered, and a later layer wins: built-in defaults, then the JSON file `~/.config/wambatic/config.json`, then command line flags. Set `WAMBATIC_CONFIG` to use another file; a missing file named that way is an error, while a missing default file is not. The token is not a setting.
 
 ```json
 {
@@ -134,7 +134,7 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 
 | Setting | Default | Meaning and trade-off |
 |---------|---------|-----------------------|
-| `fetch.cache_path` | `~/.cache/gitstat/cache.sqlite3` | Where the cache lives |
+| `fetch.cache_path` | `~/.cache/wambatic/cache.sqlite3` | Where the cache lives |
 | `fetch.full_refresh_after` | `30d` | Age of the last full read after which a resource is read in full again to catch deletions; shorter is more accurate and costs more requests |
 | `fetch.include_archived` | `false` | Include archived repositories of a user or organisation |
 | `fetch.include_forks` | `false` | Include forks of a user or organisation |
@@ -147,7 +147,7 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | `report.allow_remote` | `false` | For the web app, which is not built yet |
 | `report.format` | `terminal` | The default output format: `terminal` or `json` (`html` is not built yet) |
 | `report.html_theme` | `auto` | For the HTML report, which is not built yet |
-| `report.out_dir` | `./gitstat-reports` | For the HTML report, which is not built yet |
+| `report.out_dir` | `./wambatic-reports` | For the HTML report, which is not built yet |
 | `report.web_host` | `127.0.0.1` | For the web app, which is not built yet |
 | `report.web_port` | `8000` | For the web app, which is not built yet |
 | `stats.bot_logins` | `["dependabot[bot]", "renovate[bot]"]` | Authors left out of contributor counts and the top-contributors table |
@@ -166,7 +166,7 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | 2 | A command line that cannot be run: an unknown option, a malformed target or date, a clash such as `--full-refresh` with `--no-fetch`, or a bad config file or setting |
 | 130 | Interrupted with Ctrl-C |
 
-Each failure prints one line to stderr that says what to do, such as setting `GITHUB_TOKEN` or running `gitstat cache clear`. Reports go to stdout and logs to stderr, so `--format json` can be piped; if the reader of a pipe goes away (`| head`), gitstat ends quietly with status 1.
+Each failure prints one line to stderr that says what to do, such as setting `GITHUB_TOKEN` or running `wambatic cache clear`. Reports go to stdout and logs to stderr, so `--format json` can be piped; if the reader of a pipe goes away (`| head`), wambatic ends quietly with status 1.
 
 ## Limits
 

@@ -7,13 +7,13 @@ import urllib.parse
 
 import loguru
 
-import gitstat.fetch.client
-import gitstat.fetch.errors
-import gitstat.fetch.queries
-import gitstat.settings
+import wambatic.fetch.client
+import wambatic.fetch.errors
+import wambatic.fetch.queries
+import wambatic.settings
 
 if typing.TYPE_CHECKING:
-    import gitstat.fetch.cache
+    import wambatic.fetch.cache
 
 RESOURCES = frozenset(
     {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
@@ -102,8 +102,8 @@ class NewCommit:
     is_merge: bool
 
 
-def malformed(what: str) -> gitstat.fetch.errors.GraphQLError:
-    return gitstat.fetch.errors.GraphQLError([('MALFORMED', f'unexpected shape: {what}')])
+def malformed(what: str) -> wambatic.fetch.errors.GraphQLError:
+    return wambatic.fetch.errors.GraphQLError([('MALFORMED', f'unexpected shape: {what}')])
 
 
 def mapping(value: object, what: str) -> dict[str, object]:
@@ -208,14 +208,14 @@ class Fetcher:
     def __init__(
         self,
         token: str,
-        cache: gitstat.fetch.cache.Cache,
-        settings: gitstat.settings.FetchSettings,
+        cache: wambatic.fetch.cache.Cache,
+        settings: wambatic.settings.FetchSettings,
         *,
-        client: gitstat.fetch.client.GitHubClient | None = None,
+        client: wambatic.fetch.client.GitHubClient | None = None,
     ) -> None:
         self.cache = cache
         self.settings = settings
-        self.client = client or gitstat.fetch.client.GitHubClient(token, settings)
+        self.client = client or wambatic.fetch.client.GitHubClient(token, settings)
         self.semaphore = asyncio.Semaphore(settings.workers)
 
     async def __aenter__(self) -> Fetcher:
@@ -254,7 +254,7 @@ class Fetcher:
             return 'user'
         if kind == 'Organization':
             return 'org'
-        raise gitstat.fetch.errors.NotFoundError(
+        raise wambatic.fetch.errors.NotFoundError(
             f'{login} is not a user or an organisation (type: {kind!r})'
         )
 
@@ -262,20 +262,20 @@ class Fetcher:
         """The subject's repositories from GitHub, after the fork and archived filters."""
         if subject.kind == 'repo':
             data = await self.client.graphql(
-                gitstat.fetch.queries.REPOSITORY, {'owner': subject.login, 'name': subject.name}
+                wambatic.fetch.queries.REPOSITORY, {'owner': subject.login, 'name': subject.name}
             )
             if data.get('repository') is None:
-                raise gitstat.fetch.errors.NotFoundError(f'{subject.full_name} not found')
+                raise wambatic.fetch.errors.NotFoundError(f'{subject.full_name} not found')
             return [parse_repo(data['repository'])]
         repos: list[Repo] = []
         cursor: str | None = None
         while True:
             data = await self.client.graphql(
-                gitstat.fetch.queries.OWNER_REPOSITORIES,
+                wambatic.fetch.queries.OWNER_REPOSITORIES,
                 {'login': subject.login, 'cursor': cursor},
             )
             if data.get('repositoryOwner') is None:
-                raise gitstat.fetch.errors.NotFoundError(f'{subject.login} not found')
+                raise wambatic.fetch.errors.NotFoundError(f'{subject.login} not found')
             connection = mapping(
                 mapping(data['repositoryOwner'], 'repositoryOwner').get('repositories'),
                 'repositories',
@@ -368,7 +368,7 @@ class Fetcher:
             cursor: str | None = None
             while True:
                 data = await self.client.graphql(
-                    gitstat.fetch.queries.COMMIT_HISTORY,
+                    wambatic.fetch.queries.COMMIT_HISTORY,
                     {'owner': owner, 'name': name, 'cursor': cursor},
                 )
                 repository = mapping(data.get('repository'), 'repository')
@@ -397,7 +397,7 @@ class Fetcher:
         while True:
             try:
                 body = await self.rest_cached(path, {'per_page': str(PAGE_SIZE), 'page': str(page)})
-            except gitstat.fetch.errors.NotFoundError:
+            except wambatic.fetch.errors.NotFoundError:
                 return None
             fields = mapping(body, 'compare')
             if page == 1:
@@ -416,7 +416,7 @@ class Fetcher:
         counts: dict[str, tuple[int, int]] = {}
         for start in range(0, len(new), PAGE_SIZE):
             ids = [commit.node_id for commit in new[start : start + PAGE_SIZE]]
-            data = await self.client.graphql(gitstat.fetch.queries.COMMIT_NODES, {'ids': ids})
+            data = await self.client.graphql(wambatic.fetch.queries.COMMIT_NODES, {'ids': ids})
             for node in sequence(data.get('nodes'), 'nodes'):
                 if node is None:
                     continue
@@ -428,7 +428,7 @@ class Fetcher:
         commits: list[Commit] = []
         for commit in new:
             if commit.oid not in counts:
-                raise gitstat.fetch.errors.GraphQLError(
+                raise wambatic.fetch.errors.GraphQLError(
                     [('MISSING', f'no line counts returned for commit {commit.oid}')]
                 )
             additions, deletions = counts[commit.oid]

@@ -1,7 +1,7 @@
 import asyncio
 
-import gitstat.fetch.base
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
 
 
 def test_every_net_is_added_minus_deleted() -> None:
@@ -49,10 +49,10 @@ def test_the_top_contributors_sum_to_the_totals_less_the_bot() -> None:
 
 
 def test_the_fetcher_returns_every_fixture_commit(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
-    async def read() -> list[gitstat.fetch.base.Commit]:
-        found: list[gitstat.fetch.base.Commit] = []
+    async def read() -> list[wambatic.fetch.base.Commit]:
+        found: list[wambatic.fetch.base.Commit] = []
         for subject in (fixture.ORG, fixture.USER):
             for repo in await stats_fetcher.repos(subject):
                 found.extend([c async for c in stats_fetcher.commits(repo, None, None)])

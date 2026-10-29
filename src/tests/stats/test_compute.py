@@ -7,17 +7,17 @@ import hypothesis
 import hypothesis.strategies as st
 import pytest
 
-import gitstat.fetch.base
-import gitstat.stats
-import gitstat.stats.base
-import gitstat.stats.errors
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
+import wambatic.stats
+import wambatic.stats.base
+import wambatic.stats.errors
 
-Granularity = gitstat.stats.base.Granularity
-Request = gitstat.stats.base.StatsRequest
+Granularity = wambatic.stats.base.Granularity
+Request = wambatic.stats.base.StatsRequest
 UTC = datetime.UTC
 BERLIN = zoneinfo.ZoneInfo('Europe/Berlin')
-ALPHA_SUBJECT = gitstat.fetch.base.Subject('repo', 'octo-org', 'alpha')
+ALPHA_SUBJECT = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
 ACTIVITY = frozenset({'activity'})
 TOTALS = ('commits', 'contributors', 'active_days', 'lines_added', 'lines_deleted', 'lines_net')
 BREAKDOWN = ('commits', 'lines_added', 'lines_deleted', 'lines_net')
@@ -38,15 +38,15 @@ def request(**changes: object) -> Request:
 
 
 def compute(
-    fetcher: gitstat.fetch.base.Fetcher,
-    subject: gitstat.fetch.base.Subject = fixture.ORG,
+    fetcher: wambatic.fetch.base.Fetcher,
+    subject: wambatic.fetch.base.Subject = fixture.ORG,
     **changes: object,
-) -> gitstat.stats.base.StatsResult:
-    return asyncio.run(gitstat.stats.compute(subject, fetcher, request(**changes), clock=clock))
+) -> wambatic.stats.base.StatsResult:
+    return asyncio.run(wambatic.stats.compute(subject, fetcher, request(**changes), clock=clock))
 
 
 def pick(
-    result: gitstat.stats.base.StatsResult,
+    result: wambatic.stats.base.StatsResult,
     metric: str,
     by: str | None = None,
     by_kind: str | None = None,
@@ -62,16 +62,16 @@ class Untouchable:
         raise AssertionError(f'the fetcher was used: {name}')
 
 
-def untouched(subject: gitstat.fetch.base.Subject = fixture.ORG, **changes: object) -> None:
-    fetcher = typing.cast(gitstat.fetch.base.Fetcher, Untouchable())
-    asyncio.run(gitstat.stats.compute(subject, fetcher, request(**changes), clock=clock))
+def untouched(subject: wambatic.fetch.base.Subject = fixture.ORG, **changes: object) -> None:
+    fetcher = typing.cast(wambatic.fetch.base.Fetcher, Untouchable())
+    asyncio.run(wambatic.stats.compute(subject, fetcher, request(**changes), clock=clock))
 
 
 # resources_for
 
 
 def test_resources_for_maps_each_group() -> None:
-    resources_for = gitstat.stats.resources_for
+    resources_for = wambatic.stats.resources_for
     assert resources_for(frozenset({'activity'})) == {'commits'}
     assert resources_for(frozenset({'flow'})) == {'issues', 'pull_requests'}
     assert resources_for(frozenset({'delivery'})) == {'releases', 'star_events', 'workflow_runs'}
@@ -84,8 +84,8 @@ def test_resources_for_maps_each_group() -> None:
 
 
 def test_resources_for_names_each_unknown_group_sorted() -> None:
-    with pytest.raises(gitstat.stats.errors.UnknownGroupError, match='alpha, zeta') as raised:
-        gitstat.stats.resources_for(frozenset({'zeta', 'activity', 'alpha'}))
+    with pytest.raises(wambatic.stats.errors.UnknownGroupError, match='alpha, zeta') as raised:
+        wambatic.stats.resources_for(frozenset({'zeta', 'activity', 'alpha'}))
     assert 'activity' not in str(raised.value)
 
 
@@ -93,7 +93,7 @@ def test_resources_for_names_each_unknown_group_sorted() -> None:
 
 
 def test_an_org_by_month_matches_the_hand_written_values_with_repo_series_only(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher)
     for metric in TOTALS:
@@ -111,7 +111,7 @@ def test_an_org_by_month_matches_the_hand_written_values_with_repo_series_only(
     assert result.subject == fixture.ORG
 
 
-def test_by_author_adds_the_author_series(stats_fetcher: gitstat.fetch.base.Fetcher) -> None:
+def test_by_author_adds_the_author_series(stats_fetcher: wambatic.fetch.base.Fetcher) -> None:
     result = compute(stats_fetcher, by_author=True)
     for login, months in fixture.ORG_BY_AUTHOR_UTC.items():
         for position, metric in enumerate(BREAKDOWN):
@@ -121,7 +121,7 @@ def test_by_author_adds_the_author_series(stats_fetcher: gitstat.fetch.base.Fetc
 
 
 def test_the_org_in_berlin_matches_the_hand_written_values(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, tz=BERLIN)
     for metric in TOTALS:
@@ -133,7 +133,7 @@ def test_the_org_in_berlin_matches_the_hand_written_values(
         assert pick(total, metric) == {'total': fixture.ORG_TOTAL_BERLIN[metric]}
 
 
-def test_a_repo_subject_has_no_per_repo_series(stats_fetcher: gitstat.fetch.base.Fetcher) -> None:
+def test_a_repo_subject_has_no_per_repo_series(stats_fetcher: wambatic.fetch.base.Fetcher) -> None:
     result = compute(stats_fetcher, ALPHA_SUBJECT)
     assert not [s for s in result.series if s.by_kind == 'repo']
     assert pick(result, 'commits') == {'2026-10': 4, '2026-11': 0, '2026-12': 1, '2027-01': 1}
@@ -146,7 +146,7 @@ def test_a_repo_subject_has_no_per_repo_series(stats_fetcher: gitstat.fetch.base
 
 
 def test_a_user_subject_counts_only_the_users_own_commits_in_the_users_repos(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, fixture.USER)
     assert pick(result, 'commits')['2026-10'] == 1  # g1, not monalisa's g2
@@ -157,13 +157,13 @@ def test_a_user_subject_counts_only_the_users_own_commits_in_the_users_repos(
     assert [row['login'] for row in result.tables['top_contributors']] == ['Octocat']
 
 
-def test_a_user_is_matched_case_insensitively(stats_fetcher: gitstat.fetch.base.Fetcher) -> None:
-    result = compute(stats_fetcher, gitstat.fetch.base.Subject('user', 'OCTOCAT'))
+def test_a_user_is_matched_case_insensitively(stats_fetcher: wambatic.fetch.base.Fetcher) -> None:
+    result = compute(stats_fetcher, wambatic.fetch.base.Subject('user', 'OCTOCAT'))
     assert pick(result, 'commits')['2026-10'] == 1
 
 
 def test_since_and_until_cut_at_local_dates_inclusively(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     after = compute(stats_fetcher, tz=BERLIN, since=datetime.date(2027, 1, 1))
     assert pick(after, 'commits') == {'2027-01': 3}  # a5 at 00:30 on the 1st in Berlin
@@ -178,7 +178,7 @@ def test_since_and_until_cut_at_local_dates_inclusively(
 
 
 def test_an_open_end_uses_the_clock_and_flags_the_last_bucket_partial(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, since=None, until=None)
     assert (result.since, result.until) == (datetime.date(2026, 10, 1), datetime.date(2027, 1, 20))
@@ -187,7 +187,7 @@ def test_an_open_end_uses_the_clock_and_flags_the_last_bucket_partial(
 
 
 def test_an_open_start_begins_at_the_earliest_commits_bucket(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     month = compute(stats_fetcher, since=None)
     assert month.since == datetime.date(2026, 10, 1)
@@ -199,11 +199,11 @@ def test_an_open_start_begins_at_the_earliest_commits_bucket(
 
 
 def test_a_commit_after_today_is_left_out_when_the_end_is_open(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     early_clock = datetime.datetime(2027, 1, 10, 12, 0, tzinfo=UTC)
     result = asyncio.run(
-        gitstat.stats.compute(
+        wambatic.stats.compute(
             fixture.ORG, stats_fetcher, request(until=None), clock=lambda: early_clock
         )
     )
@@ -212,9 +212,9 @@ def test_a_commit_after_today_is_left_out_when_the_end_is_open(
 
 
 def test_the_default_request_lists_flow_as_unavailable_and_still_returns_activity(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
-    result = asyncio.run(gitstat.stats.compute(fixture.ORG, stats_fetcher, Request(), clock=clock))
+    result = asyncio.run(wambatic.stats.compute(fixture.ORG, stats_fetcher, Request(), clock=clock))
     assert pick(result, 'commits')
     rows = {row['metric']: row['reason'] for row in result.tables['unavailable']}
     assert 'step 6' in rows['flow']
@@ -224,7 +224,7 @@ def test_the_default_request_lists_flow_as_unavailable_and_still_returns_activit
 
 
 def test_every_requested_group_is_in_the_series_or_unavailable(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, groups=frozenset({'activity', 'flow', 'delivery'}))
     rows = {row['metric'] for row in result.tables['unavailable']}
@@ -233,11 +233,11 @@ def test_every_requested_group_is_in_the_series_or_unavailable(
 
 
 def test_the_provenance_records_the_cache_the_clock_the_zone_and_the_partial_buckets(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, tz=BERLIN, since=datetime.date(2026, 10, 15), until=None)
     provenance = result.provenance
-    assert {'schema_version', 'gitstat_version'} <= provenance.keys()
+    assert {'schema_version', 'wambatic_version'} <= provenance.keys()
     assert provenance['fetched_at:commits'] == fixture.ALPHA_SYNCED_AT.isoformat()
     assert provenance['computed_at'] == fixture.NOW.isoformat()
     assert provenance['timezone'] == 'Europe/Berlin'
@@ -252,27 +252,29 @@ def test_the_provenance_records_the_cache_the_clock_the_zone_and_the_partial_buc
 
 
 def test_every_error_in_the_validation_order_comes_before_the_cache_is_read() -> None:
-    with pytest.raises(gitstat.stats.errors.UnknownGroupError):
+    with pytest.raises(wambatic.stats.errors.UnknownGroupError):
         untouched(fixture.USER, groups=frozenset({'nope'}), by_author=True)
-    with pytest.raises(gitstat.stats.errors.InvalidRequestError):
+    with pytest.raises(wambatic.stats.errors.InvalidRequestError):
         untouched(fixture.USER, by_author=True, since=fixture.UNTIL, until=fixture.SINCE)
-    with pytest.raises(gitstat.stats.errors.InvalidRangeError):
+    with pytest.raises(wambatic.stats.errors.InvalidRangeError):
         untouched(since=fixture.UNTIL, until=fixture.SINCE)
-    with pytest.raises(gitstat.stats.errors.EmptySubjectError, match=r'flow \(step 6\)'):
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'flow \(step 6\)'):
         untouched(groups=frozenset({'flow'}))
-    with pytest.raises(gitstat.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
         untouched(groups=frozenset({'delivery', 'flow'}))
 
 
-def test_a_subject_with_no_repositories_is_empty(stats_fetcher: gitstat.fetch.base.Fetcher) -> None:
-    with pytest.raises(gitstat.stats.errors.EmptySubjectError, match='repositories'):
-        compute(stats_fetcher, gitstat.fetch.base.Subject('org', 'nobody'))
+def test_a_subject_with_no_repositories_is_empty(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='repositories'):
+        compute(stats_fetcher, wambatic.fetch.base.Subject('org', 'nobody'))
 
 
-def test_a_range_with_no_commits_is_empty(stats_fetcher: gitstat.fetch.base.Fetcher) -> None:
-    with pytest.raises(gitstat.stats.errors.EmptySubjectError, match='range'):
+def test_a_range_with_no_commits_is_empty(stats_fetcher: wambatic.fetch.base.Fetcher) -> None:
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='range'):
         compute(stats_fetcher, since=datetime.date(2025, 1, 1), until=datetime.date(2025, 2, 1))
-    with pytest.raises(gitstat.stats.errors.EmptySubjectError):
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError):
         compute(
             stats_fetcher,
             tz=BERLIN,
@@ -282,12 +284,12 @@ def test_a_range_with_no_commits_is_empty(stats_fetcher: gitstat.fetch.base.Fetc
 
 
 def test_an_open_start_after_an_open_end_is_an_invalid_range(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     long_ago = datetime.datetime(2026, 9, 1, tzinfo=UTC)
-    with pytest.raises(gitstat.stats.errors.InvalidRangeError):
+    with pytest.raises(wambatic.stats.errors.InvalidRangeError):
         asyncio.run(
-            gitstat.stats.compute(
+            wambatic.stats.compute(
                 fixture.ORG, stats_fetcher, request(since=None, until=None), clock=lambda: long_ago
             )
         )
@@ -297,7 +299,7 @@ def test_an_open_start_after_an_open_end_is_an_invalid_range(
 
 
 def test_compute_never_syncs_and_sends_no_request(
-    stats_fetcher: gitstat.fetch.base.Fetcher, monkeypatch: pytest.MonkeyPatch
+    stats_fetcher: wambatic.fetch.base.Fetcher, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def forbidden(*args: object, **kwargs: object) -> typing.NoReturn:
         raise AssertionError('sync was called')
@@ -327,14 +329,14 @@ def spans(draw: st.DrawFn) -> tuple[datetime.date, datetime.date]:
 )
 @hypothesis.given(spans(), st.sampled_from(list(Granularity)))
 def test_the_total_lines_added_are_the_non_merge_additions_in_range(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
     span: tuple[datetime.date, datetime.date],
     granularity: Granularity,
 ) -> None:
     since, until = span
     expected = [c for c in fixture.ORG_COMMITS if since <= c.authored_at.date() <= until]
     if not expected:
-        with pytest.raises(gitstat.stats.errors.EmptySubjectError):
+        with pytest.raises(wambatic.stats.errors.EmptySubjectError):
             compute(stats_fetcher, since=since, until=until, granularity=granularity)
         return
     result = compute(stats_fetcher, since=since, until=until, granularity=granularity)

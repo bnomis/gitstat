@@ -4,7 +4,7 @@
 month with an author breakdown, then checked by hand on 2026-10-29: every number against the
 hand-worked totals in `tests.fixtures.stats` (periods, breakdowns by repository and by author,
 top contributors) and the layout against the reports spec's Terminal section. The version in
-the provenance footer is `{gitstat_version}`, filled in by the test; trailing spaces are not
+the provenance footer is `{wambatic_version}`, filled in by the test; trailing spaces are not
 kept, so the test compares lines without them.
 """
 
@@ -73,6 +73,6 @@ Unavailable
 Provenance
 computed_at: 2027-01-20T12:00:00+00:00
 fetched_at:commits: 2027-02-01T10:00:00+00:00
-gitstat_version: {gitstat_version}
+wambatic_version: {wambatic_version}
 schema_version: 1
 """

@@ -1,18 +1,18 @@
 import ast
 import pathlib
 
-SOURCE = pathlib.Path(__file__).parents[1] / 'gitstat'
-COMPOSITION_ROOTS = ('gitstat.cli', 'gitstat.__main__')
+SOURCE = pathlib.Path(__file__).parents[1] / 'wambatic'
+COMPOSITION_ROOTS = ('wambatic.cli', 'wambatic.__main__')
 
 
-def gitstat_imports(path: pathlib.Path) -> set[str]:
+def wambatic_imports(path: pathlib.Path) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             found.add(node.module)
-    return {name for name in found if name == 'gitstat' or name.startswith('gitstat.')}
+    return {name for name in found if name == 'wambatic' or name.startswith('wambatic.')}
 
 
 def module_name(path: pathlib.Path, package_dir: pathlib.Path) -> str:
@@ -28,35 +28,35 @@ def violations(package_dir: pathlib.Path) -> list[str]:
     found: list[str] = []
     for path in sorted(package_dir.rglob('*.py')):
         module = module_name(path, package_dir)
-        for name in sorted(gitstat_imports(path)):
-            if is_within(module, 'gitstat.fetch') and not any(
+        for name in sorted(wambatic_imports(path)):
+            if is_within(module, 'wambatic.fetch') and not any(
                 is_within(name, allowed)
-                for allowed in ('gitstat.fetch', 'gitstat.settings', 'gitstat.version')
+                for allowed in ('wambatic.fetch', 'wambatic.settings', 'wambatic.version')
             ):
                 found.append(f'{module} imports {name}')
-            elif is_within(module, 'gitstat.stats') and not any(
+            elif is_within(module, 'wambatic.stats') and not any(
                 is_within(name, allowed)
                 for allowed in (
-                    'gitstat.stats',
-                    'gitstat.fetch',
-                    'gitstat.settings',
-                    'gitstat.version',
+                    'wambatic.stats',
+                    'wambatic.fetch',
+                    'wambatic.settings',
+                    'wambatic.version',
                 )
             ):
                 found.append(f'{module} imports {name}')
-            elif is_within(module, 'gitstat.reports') and not any(
+            elif is_within(module, 'wambatic.reports') and not any(
                 is_within(name, allowed)
                 for allowed in (
-                    'gitstat.reports',
-                    'gitstat.stats',
-                    'gitstat.settings',
-                    'gitstat.version',
+                    'wambatic.reports',
+                    'wambatic.stats',
+                    'wambatic.settings',
+                    'wambatic.version',
                 )
             ):
                 found.append(f'{module} imports {name}')
-            elif module in ('gitstat.settings', 'gitstat.version'):
+            elif module in ('wambatic.settings', 'wambatic.version'):
                 found.append(f'{module} imports {name}')
-            elif is_within(name, 'gitstat.cli') and module not in COMPOSITION_ROOTS:
+            elif is_within(name, 'wambatic.cli') and module not in COMPOSITION_ROOTS:
                 found.append(f'{module} imports {name}')
     return found
 
@@ -66,49 +66,49 @@ def test_layering() -> None:
 
 
 def test_detects_fetch_importing_reports(tmp_path: pathlib.Path) -> None:
-    package = tmp_path / 'gitstat'
+    package = tmp_path / 'wambatic'
     (package / 'fetch').mkdir(parents=True)
-    (package / 'fetch' / 'probe.py').write_text('import gitstat.reports\n')
-    assert violations(package) == ['gitstat.fetch.probe imports gitstat.reports']
+    (package / 'fetch' / 'probe.py').write_text('import wambatic.reports\n')
+    assert violations(package) == ['wambatic.fetch.probe imports wambatic.reports']
 
 
 def test_detects_stats_importing_reports_or_the_logs_module(tmp_path: pathlib.Path) -> None:
-    package = tmp_path / 'gitstat'
+    package = tmp_path / 'wambatic'
     (package / 'stats').mkdir(parents=True)
-    (package / 'stats' / 'probe.py').write_text('import gitstat.reports\nimport gitstat.logs\n')
+    (package / 'stats' / 'probe.py').write_text('import wambatic.reports\nimport wambatic.logs\n')
     (package / 'stats' / 'fine.py').write_text(
-        'import gitstat.fetch.base\nimport gitstat.settings\nimport gitstat.stats.base\n'
+        'import wambatic.fetch.base\nimport wambatic.settings\nimport wambatic.stats.base\n'
     )
     assert violations(package) == [
-        'gitstat.stats.probe imports gitstat.logs',
-        'gitstat.stats.probe imports gitstat.reports',
+        'wambatic.stats.probe imports wambatic.logs',
+        'wambatic.stats.probe imports wambatic.reports',
     ]
 
 
 def test_detects_reports_importing_fetch_or_the_cli(tmp_path: pathlib.Path) -> None:
-    package = tmp_path / 'gitstat'
+    package = tmp_path / 'wambatic'
     (package / 'reports').mkdir(parents=True)
     (package / 'reports' / 'probe.py').write_text(
-        'import gitstat.cli\nimport gitstat.fetch.base\nimport gitstat.logs\n'
+        'import wambatic.cli\nimport wambatic.fetch.base\nimport wambatic.logs\n'
     )
     (package / 'reports' / 'fine.py').write_text(
-        'import gitstat.reports.base\nimport gitstat.settings\nimport gitstat.stats.base\n'
-        'import gitstat.version\n'
+        'import wambatic.reports.base\nimport wambatic.settings\nimport wambatic.stats.base\n'
+        'import wambatic.version\n'
     )
     assert violations(package) == [
-        'gitstat.reports.probe imports gitstat.cli',
-        'gitstat.reports.probe imports gitstat.fetch.base',
-        'gitstat.reports.probe imports gitstat.logs',
+        'wambatic.reports.probe imports wambatic.cli',
+        'wambatic.reports.probe imports wambatic.fetch.base',
+        'wambatic.reports.probe imports wambatic.logs',
     ]
 
 
 def test_only_the_composition_root_may_import_the_cli(tmp_path: pathlib.Path) -> None:
-    package = tmp_path / 'gitstat'
+    package = tmp_path / 'wambatic'
     package.mkdir()
-    (package / 'logs.py').write_text('import gitstat.cli\n')
-    (package / '__main__.py').write_text('import gitstat.cli\n')
+    (package / 'logs.py').write_text('import wambatic.cli\n')
+    (package / '__main__.py').write_text('import wambatic.cli\n')
     (package / 'cli.py').write_text(
-        'import gitstat.fetch.base\nimport gitstat.logs\nimport gitstat.reports.base\n'
-        'import gitstat.stats\nimport gitstat.cli\n'
+        'import wambatic.fetch.base\nimport wambatic.logs\nimport wambatic.reports.base\n'
+        'import wambatic.stats\nimport wambatic.cli\n'
     )
-    assert violations(package) == ['gitstat.logs imports gitstat.cli']
+    assert violations(package) == ['wambatic.logs imports wambatic.cli']

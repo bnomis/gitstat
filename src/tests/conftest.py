@@ -7,19 +7,19 @@ import typing
 
 import pytest
 
-import gitstat.fetch.base
-import gitstat.fetch.cache
-import gitstat.fetch.client
-import gitstat.settings
-import gitstat.stats
-import gitstat.stats.base
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 import tests.fixtures.settings
 import tests.fixtures.stats
+import wambatic.fetch.base
+import wambatic.fetch.cache
+import wambatic.fetch.client
+import wambatic.settings
+import wambatic.stats
+import wambatic.stats.base
 
-MakeClient = typing.Callable[..., gitstat.fetch.client.GitHubClient]
-MakeFetcher = typing.Callable[..., gitstat.fetch.base.Fetcher]
+MakeClient = typing.Callable[..., wambatic.fetch.client.GitHubClient]
+MakeFetcher = typing.Callable[..., wambatic.fetch.base.Fetcher]
 
 
 @pytest.fixture
@@ -32,9 +32,9 @@ def config_file(tmp_path: pathlib.Path) -> pathlib.Path:
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     monkeypatch.setattr(
-        gitstat.settings, 'DEFAULT_CONFIG_PATH', tmp_path / 'default' / 'config.json'
+        wambatic.settings, 'DEFAULT_CONFIG_PATH', tmp_path / 'default' / 'config.json'
     )
-    monkeypatch.delenv('GITSTAT_CONFIG', raising=False)
+    monkeypatch.delenv('WAMBATIC_CONFIG', raising=False)
     monkeypatch.delenv('GITHUB_TOKEN', raising=False)
 
 
@@ -49,17 +49,17 @@ def sleeps() -> Sleeps:
 
 
 @pytest.fixture
-def fetch_settings() -> gitstat.settings.FetchSettings:
-    return dataclasses.replace(gitstat.settings.FetchSettings(), max_retries=2, stats_retries=2)
+def fetch_settings() -> wambatic.settings.FetchSettings:
+    return dataclasses.replace(wambatic.settings.FetchSettings(), max_retries=2, stats_retries=2)
 
 
 @pytest.fixture
-def make_client(sleeps: Sleeps, fetch_settings: gitstat.settings.FetchSettings) -> MakeClient:
+def make_client(sleeps: Sleeps, fetch_settings: wambatic.settings.FetchSettings) -> MakeClient:
     def make(
         server: tests.fixtures.fetch.server.ReplayServer,
-        settings: gitstat.settings.FetchSettings = fetch_settings,
-    ) -> gitstat.fetch.client.GitHubClient:
-        return gitstat.fetch.client.GitHubClient(
+        settings: wambatic.settings.FetchSettings = fetch_settings,
+    ) -> wambatic.fetch.client.GitHubClient:
+        return wambatic.fetch.client.GitHubClient(
             'test-token',
             settings,
             api_url=server.url,
@@ -75,19 +75,19 @@ def make_client(sleeps: Sleeps, fetch_settings: gitstat.settings.FetchSettings) 
 def make_fetcher(
     tmp_path: pathlib.Path,
     make_client: MakeClient,
-    fetch_settings: gitstat.settings.FetchSettings,
+    fetch_settings: wambatic.settings.FetchSettings,
 ) -> typing.Iterator[MakeFetcher]:
-    caches: list[gitstat.fetch.cache.Cache] = []
+    caches: list[wambatic.fetch.cache.Cache] = []
 
     def make(
         server: tests.fixtures.fetch.server.ReplayServer,
-        settings: gitstat.settings.FetchSettings = fetch_settings,
-        cache: gitstat.fetch.cache.Cache | None = None,
-    ) -> gitstat.fetch.base.Fetcher:
+        settings: wambatic.settings.FetchSettings = fetch_settings,
+        cache: wambatic.fetch.cache.Cache | None = None,
+    ) -> wambatic.fetch.base.Fetcher:
         if cache is None:
-            cache = gitstat.fetch.cache.Cache.open(tmp_path / 'cache' / 'cache.sqlite3')
+            cache = wambatic.fetch.cache.Cache.open(tmp_path / 'cache' / 'cache.sqlite3')
             caches.append(cache)
-        return gitstat.fetch.base.Fetcher(
+        return wambatic.fetch.base.Fetcher(
             'test-token', cache, settings, client=make_client(server, settings)
         )
 
@@ -97,10 +97,10 @@ def make_fetcher(
 
 
 def store_commits(
-    cache: gitstat.fetch.cache.Cache, repo: gitstat.fetch.base.Repo, synced_at: datetime.datetime
+    cache: wambatic.fetch.cache.Cache, repo: wambatic.fetch.base.Repo, synced_at: datetime.datetime
 ) -> None:
     commits = [c for c in tests.fixtures.stats.COMMITS if c.repo == repo.name_with_owner]
-    state = gitstat.fetch.base.SyncState(
+    state = wambatic.fetch.base.SyncState(
         repo=repo.name_with_owner,
         resource='commits',
         watermark=None,
@@ -114,10 +114,10 @@ def store_commits(
 
 
 @pytest.fixture
-def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[gitstat.fetch.cache.Cache]:
+def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.Cache]:
     """A cache holding the stats fixture's repositories and commits."""
     fixture = tests.fixtures.stats
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
     alpha, beta, gamma = fixture.REPOS
     cache.upsert_repos('octo-org', [alpha, beta], complete=True)
     cache.upsert_repos('octocat', [gamma], complete=True)
@@ -129,42 +129,44 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[gitstat.fetch.cache.C
 
 
 @pytest.fixture
-def stats_cache_path(stats_cache: gitstat.fetch.cache.Cache) -> pathlib.Path:
+def stats_cache_path(stats_cache: wambatic.fetch.cache.Cache) -> pathlib.Path:
     return pathlib.Path(stats_cache.connection.execute('PRAGMA database_list').fetchone()[2])
 
 
 @pytest.fixture
-def stats_fetcher(stats_cache: gitstat.fetch.cache.Cache) -> gitstat.fetch.base.Fetcher:
+def stats_fetcher(stats_cache: wambatic.fetch.cache.Cache) -> wambatic.fetch.base.Fetcher:
     """A fetcher over `stats_cache`, never entered, so any request fails."""
-    return gitstat.fetch.base.Fetcher('test-token', stats_cache, gitstat.settings.FetchSettings())
+    return wambatic.fetch.base.Fetcher('test-token', stats_cache, wambatic.settings.FetchSettings())
 
 
 def compute_stats(
-    fetcher: gitstat.fetch.base.Fetcher,
-    subject: gitstat.fetch.base.Subject,
-    request: gitstat.stats.base.StatsRequest,
-) -> gitstat.stats.base.StatsResult:
+    fetcher: wambatic.fetch.base.Fetcher,
+    subject: wambatic.fetch.base.Subject,
+    request: wambatic.stats.base.StatsRequest,
+) -> wambatic.stats.base.StatsResult:
     return asyncio.run(
-        gitstat.stats.compute(subject, fetcher, request, clock=lambda: tests.fixtures.stats.NOW)
+        wambatic.stats.compute(subject, fetcher, request, clock=lambda: tests.fixtures.stats.NOW)
     )
 
 
 @pytest.fixture
-def org_result(stats_fetcher: gitstat.fetch.base.Fetcher) -> gitstat.stats.base.StatsResult:
+def org_result(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.stats.base.StatsResult:
     """The stats fixture's org by month with an author breakdown, from the default groups."""
-    request = gitstat.stats.base.StatsRequest(
+    request = wambatic.stats.base.StatsRequest(
         since=tests.fixtures.stats.SINCE, until=tests.fixtures.stats.UNTIL, by_author=True
     )
     return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
 
 
 @pytest.fixture
-def repo_total_result(stats_fetcher: gitstat.fetch.base.Fetcher) -> gitstat.stats.base.StatsResult:
+def repo_total_result(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.stats.base.StatsResult:
     """The stats fixture's repo octo-org/alpha as one bucket."""
-    request = gitstat.stats.base.StatsRequest(
-        granularity=gitstat.stats.base.Granularity.TOTAL,
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.TOTAL,
         since=tests.fixtures.stats.SINCE,
         until=tests.fixtures.stats.UNTIL,
     )
-    subject = gitstat.fetch.base.Subject('repo', 'octo-org', 'alpha')
+    subject = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
     return compute_stats(stats_fetcher, subject, request)

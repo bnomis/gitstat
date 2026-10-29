@@ -44,7 +44,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Tests never print, log or assert on the real token. Use the literal `'test-token'` in unit tests.
 - Fixtures written from GitHub's documentation carry a comment with the documentation URL they came from; recorded ones carry the recording date.
 - Times are timezone-aware UTC everywhere; the cache stores them as ISO 8601 text and reads them back aware.
-- `gitstat.fetch` modules import nothing from gitstat outside `gitstat.fetch`, `gitstat.settings` and `gitstat.version`; `src/tests/test_layering.py` enforces it.
+- `wambatic.fetch` modules import nothing from wambatic outside `wambatic.fetch`, `wambatic.settings` and `wambatic.version`; `src/tests/test_layering.py` enforces it.
 
 ---
 
@@ -59,14 +59,14 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/fetch/base.py` with `Subject`, `RESOURCES`, `Repo`, `Commit`, `SyncState` and `SyncReport` exactly as the spec's API (frozen, slotted dataclasses; field names, types and defaults as written)
+- [ ] Add `src/wambatic/fetch/base.py` with `Subject`, `RESOURCES`, `Repo`, `Commit`, `SyncState` and `SyncReport` exactly as the spec's API (frozen, slotted dataclasses; field names, types and defaults as written)
 - [ ] `Subject.__post_init__` raises `ValueError` when `kind == 'repo'` and `name` is `None`, or when `kind != 'repo'` and `name` is not `None`
 - [ ] Add a `Subject.full_name` property returning `'login/name'` for a repo subject and raising `ValueError` otherwise
 - [ ] Write `src/tests/fetch/test_base.py`: valid subjects of each kind construct; the invalid combinations raise `ValueError`; records are immutable (`dataclasses.FrozenInstanceError`); `RESOURCES` holds exactly the six names in the spec
 
 **Acceptance Criteria:**
 
-- [ ] `base.py` performs no I/O and imports nothing from gitstat (`Fetcher` and its imports are added in Task 5)
+- [ ] `base.py` performs no I/O and imports nothing from wambatic (`Fetcher` and its imports are added in Task 5)
 - [ ] `Commit` has `is_merge`
 
 **Definition of Done:**
@@ -81,7 +81,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Notes:**
 
 - Depends on tasks-1.md Task 13 (step 2), done
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_base.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_base.py`
 
 ---
 
@@ -92,18 +92,18 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Complexity:** medium
 **Spec Reference:** API (`Cache.open`, `close`, `identity`, `SCHEMA_VERSION`); Error handling (`CacheVersionError`); Implementation (Cache; Cache identity; Transport: one connection, `threading.Lock`)
 
-**User Story:** As a gitstat user, I want gitstat to refuse a cache written by a different version of itself and tell me how to fix it, so that a report never silently mixes data fetched under two query or schema versions.
+**User Story:** As a wambatic user, I want wambatic to refuse a cache written by a different version of itself and tell me how to fix it, so that a report never silently mixes data fetched under two query or schema versions.
 
 **Subtasks:**
 
-- [ ] Add `CacheVersionError(FetchError)` to `src/gitstat/fetch/errors.py`, built from a `dict[str, tuple[str | None, str]]` of differing keys to (recorded, running) values; the message names each key with both values and says to run `gitstat cache clear` or pass `--ignore-cache-version`
-- [ ] Add `src/gitstat/fetch/cache.py` with `SCHEMA_VERSION = 1` and `Cache` holding one `sqlite3.Connection` opened with `check_same_thread=False` and a `threading.Lock` taken by every public method
+- [ ] Add `CacheVersionError(FetchError)` to `src/wambatic/fetch/errors.py`, built from a `dict[str, tuple[str | None, str]]` of differing keys to (recorded, running) values; the message names each key with both values and says to run `wambatic cache clear` or pass `--ignore-cache-version`
+- [ ] Add `src/wambatic/fetch/cache.py` with `SCHEMA_VERSION = 1` and `Cache` holding one `sqlite3.Connection` opened with `check_same_thread=False` and a `threading.Lock` taken by every public method
 - [ ] `Cache.open(path, *, ignore_version=False)`: create the parent directory, connect, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, create `meta(key TEXT PRIMARY KEY, value TEXT)`, `repos`, `commits`, `etags` and `sync_state` with `CREATE TABLE IF NOT EXISTS`
 - [ ] Table columns: `repos(name_with_owner PRIMARY KEY, owner, default_branch, head_oid, is_archived, is_fork, pushed_at, updated_at, missing)`; `commits(repo, oid, authored_at, author_login, additions, deletions, is_merge, PRIMARY KEY (repo, oid))` with an index on `(repo, authored_at)`; `etags(url PRIMARY KEY, etag, body)` with `body` as JSON text; `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at, PRIMARY KEY (repo, resource))`
-- [ ] `expected_identity()`: `schema_version`, `gitstat_version` from `gitstat.version.VERSION`, and `query:<NAME>` = `hashlib.sha256(text.encode()).hexdigest()` for every module-level `str` constant in `gitstat.fetch.queries`, iterated the same way `src/tests/fetch/test_queries.py` iterates them
+- [ ] `expected_identity()`: `schema_version`, `wambatic_version` from `wambatic.version.VERSION`, and `query:<NAME>` = `hashlib.sha256(text.encode()).hexdigest()` for every module-level `str` constant in `wambatic.fetch.queries`, iterated the same way `src/tests/fetch/test_queries.py` iterates them
 - [ ] On open: an empty `meta` gets the expected identity written in one transaction; otherwise compare every key in either set and raise `CacheVersionError` on any difference, closing the connection first; with `ignore_version=True`, write `version_override_at` (UTC ISO now) to `meta` and continue
 - [ ] `identity()` returns the recorded `meta` rows except `version_override_at`
-- [ ] Write `src/tests/fetch/test_cache.py`: a new file is created in WAL mode with the expected identity; reopening succeeds; a changed `schema_version`, `gitstat_version` or query hash (monkeypatch the module constant or add a query constant) raises `CacheVersionError` naming that key and both values; `ignore_version=True` opens and records `version_override_at`; no column or `meta` value contains `'test-token'` after a test that ran a fetcher with that token (move this assertion to Task 10 if no fetcher exists yet, and say so in that task)
+- [ ] Write `src/tests/fetch/test_cache.py`: a new file is created in WAL mode with the expected identity; reopening succeeds; a changed `schema_version`, `wambatic_version` or query hash (monkeypatch the module constant or add a query constant) raises `CacheVersionError` naming that key and both values; `ignore_version=True` opens and records `version_override_at`; no column or `meta` value contains `'test-token'` after a test that ran a fetcher with that token (move this assertion to Task 10 if no fetcher exists yet, and say so in that task)
 
 **Acceptance Criteria:**
 
@@ -125,7 +125,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - The override and error follow `.agents/claude/rules/versions.md`: record, check where saved work meets the running code, refuse a mismatch.
 - `sqlite3` is stdlib; no dependency is added.
 - Built 2026-10-29. `CacheVersionError` takes `dict[str, tuple[str | None, str | None]]`: a key can also be recorded and no longer in the running code (a removed query), so the running value may be `None` too. `ignore_version` writes `version_override_at` only when it bypasses a difference. The no-token check could not run here because no fetcher existed yet; it is in Task 10's tests.
-- Key files: `src/gitstat/fetch/cache.py`, `src/gitstat/fetch/errors.py`, `src/tests/fetch/test_cache.py`, `src/tests/fetch/test_errors.py`
+- Key files: `src/wambatic/fetch/cache.py`, `src/wambatic/fetch/errors.py`, `src/tests/fetch/test_cache.py`, `src/tests/fetch/test_errors.py`
 
 ---
 
@@ -167,7 +167,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 - Depends on Task 2
 - `sqlite3` connections used as context managers commit or roll back the transaction ([sqlite3 docs](https://docs.python.org/3.14/library/sqlite3.html#sqlite3-connection-context-manager)); they do not close the connection.
-- Key files: `src/gitstat/fetch/cache.py`, `src/tests/fetch/test_cache.py`
+- Key files: `src/wambatic/fetch/cache.py`, `src/tests/fetch/test_cache.py`
 
 ---
 
@@ -182,7 +182,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 **Subtasks:**
 
-- [ ] In `src/gitstat/fetch/queries.py`, extend `OWNER_REPOSITORIES` to order by `{field: PUSHED_AT, direction: DESC}` and select per node `nameWithOwner isArchived isFork pushedAt updatedAt defaultBranchRef { name target { oid } }`, keeping `pageInfo` and `rateLimit`
+- [ ] In `src/wambatic/fetch/queries.py`, extend `OWNER_REPOSITORIES` to order by `{field: PUSHED_AT, direction: DESC}` and select per node `nameWithOwner isArchived isFork pushedAt updatedAt defaultBranchRef { name target { oid } }`, keeping `pageInfo` and `rateLimit`
 - [ ] Add `REPOSITORY`: `repository(owner: $owner, name: $name)` selecting the same node fields, plus `rateLimit { cost remaining resetAt }`
 - [ ] Add `COMMIT_HISTORY`: `repository(owner:, name:) { defaultBranchRef { target { ... on Commit { history(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { oid authoredDate author { user { login } } additions deletions parents { totalCount } } } } } } }` plus `rateLimit`
 - [ ] Add `COMMIT_NODES`: `nodes(ids: $ids) { ... on Commit { oid additions deletions } }` plus `rateLimit`
@@ -214,7 +214,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - GitHub documentation was not reachable from the planning session, so the field names above are from the documentation as known; a recorded response or a GraphQL error naming an unknown field settles any difference, and the query is corrected to match.
 - Deviation, 2026-10-29: the build session's `GITHUB_TOKEN` is refused by `api.github.com` (GraphQL answers 403 "not available from Claude Code sessions", REST 403, and the live tests get 401), so every fixture is written from GitHub's documented shapes with the URL beside it, and its commit ids are synthetic. `OWNER_REPOSITORIES_OK`, `REPOSITORY_OK`, `COMMIT_HISTORY_OK`, `COMPARE_AHEAD`, `COMMIT_NODES_OK` and `REPO` still need recording from a session with network access; the module docstring says so. The query field names are from the documentation as known and unconfirmed against the live schema.
 - The fixtures module also holds `repo_node`, `history_node`, `compare_commit` and `nodes_response`, and `src/tests/fixtures/fetch/upstream.py` holds a fake GitHub (`Upstream`) that answers the queries and the compare call from per-repo histories, so the sync tests change the upstream between runs instead of ordering canned replies.
-- Key files: `src/gitstat/fetch/queries.py`, `src/tests/fixtures/fetch/responses.py`, `src/tests/fetch/test_queries.py`
+- Key files: `src/wambatic/fetch/queries.py`, `src/tests/fixtures/fetch/responses.py`, `src/tests/fetch/test_queries.py`
 
 ---
 
@@ -229,7 +229,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 **Subtasks:**
 
-- [ ] Add `Fetcher` to `src/gitstat/fetch/base.py` with the spec's `__init__(token, cache, settings, *, client=None)`; build `GitHubClient(token, settings)` when `client` is `None`; hold an `asyncio.Semaphore(settings.workers)`
+- [ ] Add `Fetcher` to `src/wambatic/fetch/base.py` with the spec's `__init__(token, cache, settings, *, client=None)`; build `GitHubClient(token, settings)` when `client` is `None`; hold an `asyncio.Semaphore(settings.workers)`
 - [ ] `__aenter__` enters the client and returns `self`; `__aexit__` exits it; the cache is the caller's to close
 - [ ] Add an internal `db(fn, *args, **kwargs)` coroutine that runs a `Cache` method through `asyncio.to_thread`
 - [ ] Add an internal `rest_cached(path, params)` that sends the stored ETag for the URL (path plus sorted query string) through `client.rest_get`, stores a 200's ETag and body, and returns the stored body on a 304
@@ -253,8 +253,8 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Notes:**
 
 - Depends on Task 3
-- `cache.py` imports `gitstat.fetch.base` for the records; `base.py` imports `gitstat.fetch.cache` only under `typing.TYPE_CHECKING` (it receives a `Cache`, never builds one), and imports `gitstat.fetch.client` at run time. This keeps the import graph acyclic (spec 1.2, the comment on `SyncState`).
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`, `src/tests/conftest.py`
+- `cache.py` imports `wambatic.fetch.base` for the records; `base.py` imports `wambatic.fetch.cache` only under `typing.TYPE_CHECKING` (it receives a `Cache`, never builds one), and imports `wambatic.fetch.client` at run time. This keeps the import graph acyclic (spec 1.2, the comment on `SyncState`).
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`, `src/tests/conftest.py`
 
 ---
 
@@ -265,7 +265,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.repos`); Implementation (Incremental sync 1); Settings (`include_forks`, `include_archived`); Error handling (`NotFoundError`)
 
-**User Story:** As a gitstat user reporting on an organisation, I want each run to re-read the repo list cheaply and skip repos that have not changed, so that a large org costs a few requests when nothing happened.
+**User Story:** As a wambatic user reporting on an organisation, I want each run to re-read the repo list cheaply and skip repos that have not changed, so that a large org costs a few requests when nothing happened.
 
 **Subtasks:**
 
@@ -295,7 +295,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 - Depends on Task 4, Task 5
 - Missing repos are left out of `repos()` per review-1.md choice 6.
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
@@ -306,7 +306,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.commits`); Implementation (Incremental sync 2, `commits`: first sync; 4 atomic advance); Implementation (GraphQL cost control)
 
-**User Story:** As a gitstat user, I want the first run on a repo to read its whole default-branch history with lines added and deleted per commit, so that every later report has complete totals.
+**User Story:** As a wambatic user, I want the first run on a repo to read its whole default-branch history with lines added and deleted per commit, so that every later report has complete totals.
 
 **Subtasks:**
 
@@ -334,7 +334,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 - Depends on Task 6
 - The head is taken from the listing, not from the history's first node, so a push during paging is caught as a changed head on the next run (Task 8) rather than lost.
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
@@ -377,7 +377,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Implements review-1.md Decision 1, answered A (compare from the stored head) on 2026-10-29.
 - `rest_get` takes a path, so the `page` parameter is passed explicitly rather than following `next_url`.
 - Deviation, 2026-10-29: when the listed head equals the stored head, `update_commits` still writes the new `pushed_at`/`updated_at` into `sync_state` (no commit rows), instead of writing nothing. A push to another branch, or a settings change on GitHub, moves those values without moving the head; writing nothing would leave the repo never skipped. It is the same write as the `identical` case, and no request is sent either way.
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
@@ -388,7 +388,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Complexity:** small
 **Spec Reference:** Implementation (Incremental sync 2, `commits`: rewritten history; 5 `full_refresh`); implementation order step 3 "Done when" (a simulated force-push triggers a full refetch)
 
-**User Story:** As a gitstat user whose team force-pushes the default branch, I want gitstat to notice and re-read that repo's history, so that commits that no longer exist stop counting.
+**User Story:** As a wambatic user whose team force-pushes the default branch, I want wambatic to notice and re-read that repo's history, so that commits that no longer exist stop counting.
 
 **Subtasks:**
 
@@ -414,7 +414,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 - Depends on Task 8
 - Commits are not re-read on the `fetch.full_refresh_after` interval (spec 1.2, Incremental sync 5).
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
@@ -425,7 +425,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.sync`, `SyncReport`); Implementation (Transport: `fetch.workers` semaphore; Incremental sync 1 and 4); implementation order step 3 "Done when" (a second run fetches nothing; an interrupted run resumes)
 
-**User Story:** As a gitstat user, I want one call to bring a user, repo or org up to date, with bounded concurrency and a summary of what it did, so that a second run right after the first costs only the repo listing.
+**User Story:** As a wambatic user, I want one call to bring a user, repo or org up to date, with bounded concurrency and a summary of what it did, so that a second run right after the first costs only the repo listing.
 
 **Subtasks:**
 
@@ -461,7 +461,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - "A second run fetches nothing" in the implementation order means no per-repo requests: the spec re-reads the repo list on every sync.
 - `Fetcher.sync` unwraps the task group's `ExceptionGroup` and raises its first exception, so callers still catch `FetchError` and `aiohttp.ClientResponseError` directly. The no-token check from Task 2 is `test_no_value_in_the_cache_file_holds_the_token`, which reads every table and the raw cache and WAL files.
 - `src/tests/fixtures/fetch/server.py` gained `Canned.delay`, a `default` responder and `max_in_flight`, with tests in `src/tests/fetch/test_server.py`.
-- Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`, `src/tests/fixtures/fetch/server.py`
+- Key files: `src/wambatic/fetch/base.py`, `src/tests/fetch/test_fetcher.py`, `src/tests/fixtures/fetch/server.py`
 
 ---
 
@@ -510,15 +510,15 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Status:** done
 **Priority:** medium
 **Complexity:** small
-**Spec Reference:** Module location; API; system spec API (`Subject`, `Fetcher` re-exported from `gitstat`); implementation order step 3 "Done when"
+**Spec Reference:** Module location; API; system spec API (`Subject`, `Fetcher` re-exported from `wambatic`); implementation order step 3 "Done when"
 
 **Technical Goal:** Expose the step 3 names, confirm the layering still holds, run every test this list can affect, and mark the step done.
 
 **Subtasks:**
 
-- [ ] In `src/gitstat/fetch/__init__.py`, add `Cache`, `CacheVersionError`, `Commit`, `Fetcher`, `RESOURCES`, `Repo`, `Subject` and `SyncReport` to the imports and `__all__`, alphabetically
-- [ ] In `src/gitstat/__init__.py`, re-export `Fetcher` and `Subject` and add them to `__all__` (system spec, API)
-- [ ] Extend `src/tests/test_package.py` to check that every name in `gitstat.__all__` and `gitstat.fetch.__all__` resolves
+- [ ] In `src/wambatic/fetch/__init__.py`, add `Cache`, `CacheVersionError`, `Commit`, `Fetcher`, `RESOURCES`, `Repo`, `Subject` and `SyncReport` to the imports and `__all__`, alphabetically
+- [ ] In `src/wambatic/__init__.py`, re-export `Fetcher` and `Subject` and add them to `__all__` (system spec, API)
+- [ ] Extend `src/tests/test_package.py` to check that every name in `wambatic.__all__` and `wambatic.fetch.__all__` resolves
 - [ ] Confirm `src/tests/test_layering.py` passes with the new modules
 - [ ] Check the implementation order's "Done when" for step 3: second run (Task 10), interrupted run (Task 10), simulated force-push (Task 9), live line totals (Task 11, or its recorded skip and the CI `live` result)
 - [ ] Run every test that imports a changed module directly or transitively: `pytest src/tests/fetch src/tests/test_package.py src/tests/test_layering.py`
@@ -526,7 +526,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 **Acceptance Criteria:**
 
-- [ ] `import gitstat; gitstat.Fetcher; gitstat.Subject` works
+- [ ] `import wambatic; wambatic.Fetcher; wambatic.Subject` works
 - [ ] Every step 3 "Done when" item is met, or its gap is recorded in the task that owns it
 
 **Definition of Done:**
@@ -541,8 +541,8 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Notes:**
 
 - Depends on Tasks 1 to 11
-- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (outside `src/tests/fetch/`, `gitstat` and `gitstat.fetch` are imported only by `src/tests/test_package.py` and checked by `src/tests/test_layering.py`).
+- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (outside `src/tests/fetch/`, `wambatic` and `wambatic.fetch` are imported only by `src/tests/test_package.py` and checked by `src/tests/test_layering.py`).
 - The fetch spec's `**Status:**` stays `proposed` (see the header).
-- Key files: `src/gitstat/fetch/__init__.py`, `src/gitstat/__init__.py`, `src/tests/test_package.py`, `agents/specs/implementation-order.md`
+- Key files: `src/wambatic/fetch/__init__.py`, `src/wambatic/__init__.py`, `src/tests/test_package.py`, `agents/specs/implementation-order.md`
 
 ---

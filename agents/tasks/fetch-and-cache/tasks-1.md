@@ -93,7 +93,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/fetch/errors.py` with `FetchError(Exception)` and its subclasses `AuthError`, `GraphQLError`, `NotFoundError`, `RateLimitError` and `StatsPendingError`
+- [ ] Add `src/wambatic/fetch/errors.py` with `FetchError(Exception)` and its subclasses `AuthError`, `GraphQLError`, `NotFoundError`, `RateLimitError` and `StatsPendingError`
 - [ ] `RateLimitError.__init__(self, reset_at: datetime.datetime)` keeps `reset_at` as an attribute and builds its own message stating the reset time in UTC ISO format, so every call site is `RateLimitError(reset_at)`
 - [ ] `GraphQLError.__init__(self, errors: list[tuple[str, str]])` keeps `errors` as `(type, message)` pairs and joins them into the message
 - [ ] `AuthError` has a module constant `NO_TOKEN_MESSAGE` telling the user to set `GITHUB_TOKEN` or run `gh auth login`
@@ -101,7 +101,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 **Acceptance Criteria:**
 
-- [ ] `issubclass(cls, gitstat.fetch.errors.FetchError)` for each error class
+- [ ] `issubclass(cls, wambatic.fetch.errors.FetchError)` for each error class
 - [ ] `CacheVersionError` is not defined here (step 3 list)
 
 **Definition of Done:**
@@ -116,8 +116,8 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Task 1
-- `errors.py` imports nothing from gitstat, so every other fetch module can import it without a cycle.
-- Key files: `src/gitstat/fetch/errors.py`, `src/tests/fetch/test_errors.py`
+- `errors.py` imports nothing from wambatic, so every other fetch module can import it without a cycle.
+- Key files: `src/wambatic/fetch/errors.py`, `src/tests/fetch/test_errors.py`
 
 ---
 
@@ -128,11 +128,11 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Complexity:** small
 **Spec Reference:** API (`resolve_token`, `redact`); Error handling (`AuthError`); Implementation (Secrets)
 
-**User Story:** As a gitstat user, I want my token found from `GITHUB_TOKEN` or my `gh` login and never shown anywhere, so that I can run gitstat without putting a secret in a config file or a log.
+**User Story:** As a wambatic user, I want my token found from `GITHUB_TOKEN` or my `gh` login and never shown anywhere, so that I can run wambatic without putting a secret in a config file or a log.
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/fetch/auth.py` with `resolve_token() -> str`: return `os.environ['GITHUB_TOKEN']` stripped when it is set and non-blank; otherwise run `subprocess.run(['gh', 'auth', 'token'], capture_output=True, text=True, timeout=10, check=False)` and return its stripped stdout when the exit status is 0 and stdout is non-blank; otherwise raise `AuthError(NO_TOKEN_MESSAGE)`
+- [ ] Add `src/wambatic/fetch/auth.py` with `resolve_token() -> str`: return `os.environ['GITHUB_TOKEN']` stripped when it is set and non-blank; otherwise run `subprocess.run(['gh', 'auth', 'token'], capture_output=True, text=True, timeout=10, check=False)` and return its stripped stdout when the exit status is 0 and stdout is non-blank; otherwise raise `AuthError(NO_TOKEN_MESSAGE)`
 - [ ] Treat `FileNotFoundError` (no `gh`) and `subprocess.TimeoutExpired` as "no token" and raise `AuthError` from them; never include stdout or stderr in any message or log
 - [ ] Add `redact(text: str, token: str) -> str` replacing every occurrence of `token` with `***`; an empty `token` returns `text` unchanged
 - [ ] Write `src/tests/fetch/test_auth.py`: environment token wins and `gh` is not called (monkeypatch `subprocess.run` to fail the test if called); blank `GITHUB_TOKEN` falls through to `gh`; `gh` success returns its token; `gh` missing, failing, timing out or printing nothing each raise `AuthError`, and the error text contains neither the fake `gh` output nor stderr
@@ -156,7 +156,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 2
 - The autouse fixture in `src/tests/conftest.py` already removes `GITHUB_TOKEN`; tests set it with `monkeypatch.setenv`.
-- Key files: `src/gitstat/fetch/auth.py`, `src/tests/fetch/test_auth.py`
+- Key files: `src/wambatic/fetch/auth.py`, `src/tests/fetch/test_auth.py`
 
 ---
 
@@ -171,7 +171,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/fetch/ratelimit.py` with `BACKOFF_BASE = 1.0`, `BACKOFF_CAP = 60.0`, `SECONDARY_WAIT = 60.0`, `utc_now()`, and the frozen, slotted `RateLimitState(remaining: int | None = None, reset_at: datetime.datetime | None = None)`
+- [ ] Add `src/wambatic/fetch/ratelimit.py` with `BACKOFF_BASE = 1.0`, `BACKOFF_CAP = 60.0`, `SECONDARY_WAIT = 60.0`, `utc_now()`, and the frozen, slotted `RateLimitState(remaining: int | None = None, reset_at: datetime.datetime | None = None)`
 - [ ] `RateLimitState.from_headers(headers)` reads `x-ratelimit-remaining` (int) and `x-ratelimit-reset` (epoch seconds, to an aware UTC datetime); either header absent gives `None` for that field
 - [ ] `RateLimitState.from_graphql(rate_limit)` reads `remaining` and `resetAt` (ISO 8601 with `Z`) from the `rateLimit` object
 - [ ] `RateLimitState.exhausted(now)` is true only when `remaining == 0` and `reset_at` is later than `now`
@@ -197,7 +197,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 1
 - Full jitter is from [AWS, Exponential backoff and jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/); header semantics from [GitHub REST rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
-- Key files: `src/gitstat/fetch/ratelimit.py`, `src/tests/fetch/test_ratelimit.py`
+- Key files: `src/wambatic/fetch/ratelimit.py`, `src/tests/fetch/test_ratelimit.py`
 
 ---
 
@@ -214,8 +214,8 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - [ ] Add `src/tests/fixtures/fetch/server.py` with a `ReplayServer` helper: built from an ordered list of canned responses (status, headers, JSON body) per `(method, path)`, served by `aiohttp.test_utils.TestServer` around an `aiohttp.web.Application`, recording each received request's method, path, query, headers and JSON body; exposes `url` for `api_url`; fails the test on a request with no canned response left
 - [ ] Add fixtures for it to `src/tests/conftest.py` per the shared testing rule
-- [ ] Add `src/gitstat/fetch/client.py` with `REQUEST_TIMEOUT = 60.0` and `GitHubClient.__init__(token, settings, *, api_url, sleep, clock, rng)` exactly as the spec's API, storing them; `rng` defaults to a new `random.Random()`
-- [ ] `__aenter__` creates one `aiohttp.ClientSession` with `aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)` and default headers `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, `User-Agent: gitstat/<gitstat.version.VERSION>`; `__aexit__` closes it
+- [ ] Add `src/wambatic/fetch/client.py` with `REQUEST_TIMEOUT = 60.0` and `GitHubClient.__init__(token, settings, *, api_url, sleep, clock, rng)` exactly as the spec's API, storing them; `rng` defaults to a new `random.Random()`
+- [ ] `__aenter__` creates one `aiohttp.ClientSession` with `aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)` and default headers `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, `User-Agent: wambatic/<wambatic.version.VERSION>`; `__aexit__` closes it
 - [ ] Using `graphql` or `rest_get` outside `async with` raises `RuntimeError`
 - [ ] Create the client's logger as `loguru.logger.patch(...)` with a patcher that sets `record['message'] = redact(record['message'], token)`; log each request at `debug` as method, URL and status only
 - [ ] Add `graphql_limit` and `rest_limit` properties returning the current `RateLimitState` (empty until the first response)
@@ -240,8 +240,8 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Task 3, Task 4
-- `client.py` may import `gitstat.settings` and `gitstat.version`; `src/tests/test_layering.py` enforces that it imports nothing else from gitstat outside `gitstat.fetch`.
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/server.py`, `src/tests/conftest.py`
+- `client.py` may import `wambatic.settings` and `wambatic.version`; `src/tests/test_layering.py` enforces that it imports nothing else from wambatic outside `wambatic.fetch`.
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/server.py`, `src/tests/conftest.py`
 
 ---
 
@@ -281,8 +281,8 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Task 5
-- Construct settings with `dataclasses.replace(gitstat.settings.FetchSettings(), max_retries=2)` to keep tests short.
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
+- Construct settings with `dataclasses.replace(wambatic.settings.FetchSettings(), max_retries=2)` to keep tests short.
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -293,7 +293,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Complexity:** medium
 **Spec Reference:** API (`GitHubClient.graphql`); Error handling (`NotFoundError`, `GraphQLError`); Implementation (Transport; GraphQL cost control; Requests, retries and rate limits: the `rateLimit` rule; Testing)
 
-**User Story:** As a gitstat developer, I want one GraphQL call that returns `data` or a typed error and keeps the rate-limit budget current, so that every later query gets error handling and accounting for free.
+**User Story:** As a wambatic developer, I want one GraphQL call that returns `data` or a typed error and keeps the rate-limit budget current, so that every later query gets error handling and accounting for free.
 
 **Subtasks:**
 
@@ -302,7 +302,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 - [ ] Map `errors`: any `NOT_FOUND` type raises `NotFoundError`; `RATE_LIMITED` is left to Task 9 (raise `GraphQLError` until then); any other type raises `GraphQLError` with every `(type, message)` pair, discarding partial `data`
 - [ ] A response with `data` and no `errors` that lacks `data['rateLimit']` raises `GraphQLError`
 - [ ] Return `data` as `dict[str, object]`
-- [ ] Add `src/gitstat/fetch/queries.py` with `OWNER_REPOSITORIES`: `repositoryOwner(login: $login)` with `repositories(first: 100, after: $cursor, ownerAffiliations: OWNER)` selecting `pageInfo { hasNextPage endCursor }` and `nodes { nameWithOwner }`, plus `rateLimit { cost remaining resetAt }`
+- [ ] Add `src/wambatic/fetch/queries.py` with `OWNER_REPOSITORIES`: `repositoryOwner(login: $login)` with `repositories(first: 100, after: $cursor, ownerAffiliations: OWNER)` selecting `pageInfo { hasNextPage endCursor }` and `nodes { nameWithOwner }`, plus `rateLimit { cost remaining resetAt }`
 - [ ] Record one real response to `OWNER_REPOSITORIES` for `login: 'octocat'` once, first checking `[ -n "${GITHUB_TOKEN:-}" ]` and printing only yes or no (shared security rule); if no token is available, stop the task as `blocked`, naming the missing token. Trim it to the selected fields, note the recording date in a comment, and save it in `src/tests/fixtures/fetch/responses.py`; never write the token or response headers other than `x-ratelimit-*` into the fixture
 - [ ] Add `NOT_FOUND` and an `INTERNAL` error fixture written from [GitHub's GraphQL docs](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api) shapes
 - [ ] Write `src/tests/fetch/test_queries.py`: every query constant in `queries.py` contains `rateLimit { cost remaining resetAt }` (iterate the module's string constants, so a new query is checked automatically)
@@ -327,7 +327,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 - Depends on Task 6
 - `OWNER_REPOSITORIES` is a probe for this step's live test; the step 3 list extends or replaces it with the repo fields, forks and archived filters `repos()` needs.
 - Deviation, 2026-10-29: the build session could not reach the live GraphQL API (the sandbox proxy refuses GraphQL), so the `OWNER_REPOSITORIES_OK` fixture is hand-written from GitHub's documented shapes, not recorded. Record it from a session with network access and replace it.
-- Key files: `src/gitstat/fetch/client.py`, `src/gitstat/fetch/queries.py`, `src/tests/fetch/test_client.py`, `src/tests/fetch/test_queries.py`, `src/tests/fixtures/fetch/responses.py`
+- Key files: `src/wambatic/fetch/client.py`, `src/wambatic/fetch/queries.py`, `src/tests/fetch/test_client.py`, `src/tests/fetch/test_queries.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -342,7 +342,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 **Subtasks:**
 
-- [ ] Add the frozen, slotted `RestResponse(status, data, etag, next_url)` to `src/gitstat/fetch/client.py`
+- [ ] Add the frozen, slotted `RestResponse(status, data, etag, next_url)` to `src/wambatic/fetch/client.py`
 - [ ] Implement `rest_get(path, params=None, etag=None)` through the Task 6 loop, sending `If-None-Match: etag` when given
 - [ ] Update the REST `RateLimitState` from the `x-ratelimit-*` headers of every response
 - [ ] 200 returns parsed JSON, the response `ETag` and `next_url`; 304 returns `data=None` with the request's `etag`
@@ -369,7 +369,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 - Depends on Task 6
 - Storing ETags in SQLite is the step 3 list's; this task only sends and returns them.
 - Deviation, 2026-10-29: as Task 7, the `REPO` fixture is hand-written, not recorded.
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -380,7 +380,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Complexity:** medium
 **Spec Reference:** Error handling (`RateLimitError`); Implementation (Requests, retries and rate limits, steps 3 and 6); Settings (`fetch.on_rate_limit`)
 
-**User Story:** As a gitstat user, I want a run that hits GitHub's hourly limit to either wait for the reset with an ETA or stop at once with the reset time, as I configured, so that a large org report neither fails silently nor hammers the API.
+**User Story:** As a wambatic user, I want a run that hits GitHub's hourly limit to either wait for the reset with an ETA or stop at once with the reset time, as I configured, so that a large org report neither fails silently nor hammers the API.
 
 **Subtasks:**
 
@@ -410,7 +410,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 - Depends on Task 7, Task 8
 - The ETA line format is in `.agents/claude/rules/python/logging.md`.
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -449,7 +449,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Task 9
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -485,7 +485,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Task 8
-- Key files: `src/gitstat/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
+- Key files: `src/wambatic/fetch/client.py`, `src/tests/fetch/test_client.py`, `src/tests/fixtures/fetch/responses.py`
 
 ---
 
@@ -534,12 +534,12 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Complexity:** small
 **Spec Reference:** Module location; API; implementation order step 2 ("Done when")
 
-**Technical Goal:** Expose the step 2 names from `gitstat.fetch`, confirm the layering still holds, run every test this list can affect, and mark the step done.
+**Technical Goal:** Expose the step 2 names from `wambatic.fetch`, confirm the layering still holds, run every test this list can affect, and mark the step done.
 
 **Subtasks:**
 
-- [ ] In `src/gitstat/fetch/__init__.py`, re-export `AuthError`, `FetchError`, `GitHubClient`, `GraphQLError`, `NotFoundError`, `RateLimitError`, `StatsPendingError` and `resolve_token` and list them in `__all__`, alphabetically; `gitstat.__all__` is not extended (system API re-exports `Subject` and `Fetcher`, from the step 3 list)
-- [ ] Extend `src/tests/test_package.py` to check that each name in `gitstat.fetch.__all__` resolves
+- [ ] In `src/wambatic/fetch/__init__.py`, re-export `AuthError`, `FetchError`, `GitHubClient`, `GraphQLError`, `NotFoundError`, `RateLimitError`, `StatsPendingError` and `resolve_token` and list them in `__all__`, alphabetically; `wambatic.__all__` is not extended (system API re-exports `Subject` and `Fetcher`, from the step 3 list)
+- [ ] Extend `src/tests/test_package.py` to check that each name in `wambatic.fetch.__all__` resolves
 - [ ] Confirm `src/tests/test_layering.py` passes with the new modules
 - [ ] Check the implementation order's "Done when" for step 2: fixtures cover 401 (Task 6), 404 (Tasks 6 and 7), primary limits (Task 9), secondary limits (Task 10) and REST 202 (Task 11); the live test exists (Task 12)
 - [ ] Run every test that imports a changed module directly or transitively: `pytest src/tests/fetch src/tests/test_package.py src/tests/test_layering.py`
@@ -547,7 +547,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 
 **Acceptance Criteria:**
 
-- [ ] `import gitstat.fetch; gitstat.fetch.resolve_token; gitstat.fetch.GitHubClient` works
+- [ ] `import wambatic.fetch; wambatic.fetch.resolve_token; wambatic.fetch.GitHubClient` works
 - [ ] Every step 2 "Done when" item is met
 
 **Definition of Done:**
@@ -562,7 +562,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Notes:**
 
 - Depends on Tasks 2 to 12
-- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (`gitstat.fetch` is imported only by `src/tests/test_package.py` outside `src/tests/fetch/`).
-- Key files: `src/gitstat/fetch/__init__.py`, `src/tests/test_package.py`, `agents/specs/implementation-order.md`
+- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (`wambatic.fetch` is imported only by `src/tests/test_package.py` outside `src/tests/fetch/`).
+- Key files: `src/wambatic/fetch/__init__.py`, `src/tests/test_package.py`, `agents/specs/implementation-order.md`
 
 ---

@@ -33,7 +33,7 @@ class StatsPendingError(FetchError):
 
 
 class CacheVersionError(FetchError):
-    """The cache was written under a different schema, gitstat or query version.
+    """The cache was written under a different schema, wambatic or query version.
 
     `differences` maps each differing key to its (recorded, running) values; None means the key
     is absent on that side.
@@ -42,10 +42,10 @@ class CacheVersionError(FetchError):
     def __init__(self, differences: dict[str, tuple[str | None, str | None]]) -> None:
         self.differences = differences
         lines = '; '.join(
-            f'{key}: cache has {recorded or "nothing"}, this gitstat has {running or "nothing"}'
+            f'{key}: cache has {recorded or "nothing"}, this wambatic has {running or "nothing"}'
             for key, (recorded, running) in sorted(differences.items())
         )
         super().__init__(
-            f'The cache was written by a different version ({lines}). Run `gitstat cache clear` '
+            f'The cache was written by a different version ({lines}). Run `wambatic cache clear` '
             'to start again, or pass `--ignore-cache-version` for this run'
         )

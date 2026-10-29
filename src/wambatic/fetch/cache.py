@@ -6,10 +6,10 @@ import pathlib
 import sqlite3
 import threading
 
-import gitstat.fetch.base
-import gitstat.fetch.errors
-import gitstat.fetch.queries
-import gitstat.version
+import wambatic.fetch.base
+import wambatic.fetch.errors
+import wambatic.fetch.queries
+import wambatic.version
 
 SCHEMA_VERSION = 1
 
@@ -58,9 +58,9 @@ def expected_identity() -> dict[str, str]:
     """What a cache written by the running code records in `meta`."""
     identity = {
         'schema_version': str(SCHEMA_VERSION),
-        'gitstat_version': gitstat.version.VERSION,
+        'wambatic_version': wambatic.version.VERSION,
     }
-    for name, value in vars(gitstat.fetch.queries).items():
+    for name, value in vars(wambatic.fetch.queries).items():
         if name.isupper() and isinstance(value, str):
             identity[f'query:{name}'] = hashlib.sha256(value.encode()).hexdigest()
     return identity
@@ -96,9 +96,9 @@ def optional_from_text(value: str | None) -> datetime.datetime | None:
     return None if value is None else from_text(value)
 
 
-def repo_from_row(row: tuple[object, ...]) -> gitstat.fetch.base.Repo:
+def repo_from_row(row: tuple[object, ...]) -> wambatic.fetch.base.Repo:
     name, branch, head, archived, fork, pushed_at, updated_at, missing = row
-    return gitstat.fetch.base.Repo(
+    return wambatic.fetch.base.Repo(
         name_with_owner=str(name),
         default_branch=None if branch is None else str(branch),
         head_oid=None if head is None else str(head),
@@ -110,9 +110,9 @@ def repo_from_row(row: tuple[object, ...]) -> gitstat.fetch.base.Repo:
     )
 
 
-def commit_from_row(repo: str, row: tuple[object, ...]) -> gitstat.fetch.base.Commit:
+def commit_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.Commit:
     oid, authored_at, login, additions, deletions, is_merge = row
-    return gitstat.fetch.base.Commit(
+    return wambatic.fetch.base.Commit(
         repo=repo,
         oid=str(oid),
         authored_at=from_text(str(authored_at)),
@@ -169,7 +169,7 @@ class Cache:
             if not differences:
                 return
             if not ignore_version:
-                raise gitstat.fetch.errors.CacheVersionError(differences)
+                raise wambatic.fetch.errors.CacheVersionError(differences)
             self.connection.execute(
                 'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
                 (OVERRIDE_KEY, to_text(datetime.datetime.now(datetime.UTC))),
@@ -192,7 +192,7 @@ class Cache:
         return None if row is None else str(row[0])
 
     def upsert_repos(
-        self, owner: str, repos: list[gitstat.fetch.base.Repo], *, complete: bool
+        self, owner: str, repos: list[wambatic.fetch.base.Repo], *, complete: bool
     ) -> None:
         """Insert or replace each repo; with `complete`, mark the owner's other repos missing."""
         with self.lock, self.connection:
@@ -219,7 +219,7 @@ class Cache:
                 ],
             )
 
-    def read_repos(self, subject: gitstat.fetch.base.Subject) -> list[gitstat.fetch.base.Repo]:
+    def read_repos(self, subject: wambatic.fetch.base.Subject) -> list[wambatic.fetch.base.Repo]:
         columns = (
             'name_with_owner, default_branch, head_oid, is_archived, is_fork, pushed_at, '
             'updated_at, missing'
@@ -238,7 +238,7 @@ class Cache:
                 ).fetchall()
         return [repo_from_row(row) for row in rows]
 
-    def sync_state(self, repo: str, resource: str) -> gitstat.fetch.base.SyncState | None:
+    def sync_state(self, repo: str, resource: str) -> wambatic.fetch.base.SyncState | None:
         with self.lock:
             row = self.connection.execute(
                 'SELECT watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at '
@@ -248,7 +248,7 @@ class Cache:
         if row is None:
             return None
         watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at = row
-        return gitstat.fetch.base.SyncState(
+        return wambatic.fetch.base.SyncState(
             repo=repo,
             resource=resource,
             watermark=optional_from_text(watermark),
@@ -259,7 +259,7 @@ class Cache:
             full_synced_at=from_text(full_synced_at),
         )
 
-    def put_state(self, state: gitstat.fetch.base.SyncState) -> None:
+    def put_state(self, state: wambatic.fetch.base.SyncState) -> None:
         """Write a `sync_state` row inside the caller's transaction."""
         self.connection.execute(
             'INSERT OR REPLACE INTO sync_state (repo, resource, watermark, head_oid, pushed_at, '
@@ -279,8 +279,8 @@ class Cache:
     def write_commits(
         self,
         repo: str,
-        commits: list[gitstat.fetch.base.Commit],
-        state: gitstat.fetch.base.SyncState,
+        commits: list[wambatic.fetch.base.Commit],
+        state: wambatic.fetch.base.SyncState,
         *,
         replace: bool,
     ) -> int:
@@ -315,7 +315,7 @@ class Cache:
 
     def read_commits(
         self, repo: str, since: datetime.datetime | None, until: datetime.datetime | None
-    ) -> list[gitstat.fetch.base.Commit]:
+    ) -> list[wambatic.fetch.base.Commit]:
         query = (
             'SELECT oid, authored_at, author_login, additions, deletions, is_merge '
             'FROM commits WHERE repo = ?'

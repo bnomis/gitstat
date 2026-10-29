@@ -5,12 +5,12 @@ import rich.console
 import rich.table
 import rich.text
 
-import gitstat.stats.activity
-import gitstat.stats.base
+import wambatic.stats.activity
+import wambatic.stats.base
 
 BLOCKS = '▁▂▃▄▅▆▇█'
-TOTAL_METRICS = tuple(metric for metric, _ in gitstat.stats.activity.TOTAL_METRICS)
-UNATTRIBUTED = gitstat.stats.activity.UNATTRIBUTED
+TOTAL_METRICS = tuple(metric for metric, _ in wambatic.stats.activity.TOTAL_METRICS)
+UNATTRIBUTED = wambatic.stats.activity.UNATTRIBUTED
 PARTIAL_MARK = ' *'
 TOP_CONTRIBUTORS_SHOWN = 20
 BREAKDOWN_TITLES = (('repo', 'By repository'), ('author', 'By author'))
@@ -51,15 +51,15 @@ def make_table(title: str, columns: collections.abc.Sequence[tuple[str, bool]]) 
     return table
 
 
-def subject_text(result: gitstat.stats.base.StatsResult) -> str:
+def subject_text(result: wambatic.stats.base.StatsResult) -> str:
     subject = result.subject
     name = subject.full_name if subject.kind == 'repo' else subject.login
     return f'{subject.kind} {name}'
 
 
-def title_line(result: gitstat.stats.base.StatsResult) -> rich.text.Text:
+def title_line(result: wambatic.stats.base.StatsResult) -> rich.text.Text:
     granularity = result.request.granularity
-    by = 'total' if granularity is gitstat.stats.base.Granularity.TOTAL else f'by {granularity}'
+    by = 'total' if granularity is wambatic.stats.base.Granularity.TOTAL else f'by {granularity}'
     return rich.text.Text(
         f'{subject_text(result)}, {result.since} to {result.until}, {by}, {result.request.tz}',
         style='bold',
@@ -67,8 +67,8 @@ def title_line(result: gitstat.stats.base.StatsResult) -> rich.text.Text:
 
 
 def total_series(
-    result: gitstat.stats.base.StatsResult,
-) -> dict[str, list[tuple[gitstat.stats.base.Bucket, float]]]:
+    result: wambatic.stats.base.StatsResult,
+) -> dict[str, list[tuple[wambatic.stats.base.Bucket, float]]]:
     """Each total series' points (the ones with no breakdown) in bucket order, by metric."""
     return {
         series.metric: sorted(series.points.items())
@@ -77,19 +77,19 @@ def total_series(
     }
 
 
-def partial_labels(result: gitstat.stats.base.StatsResult) -> frozenset[str]:
+def partial_labels(result: wambatic.stats.base.StatsResult) -> frozenset[str]:
     return frozenset(
         label for label in result.provenance.get('partial_buckets', '').split(',') if label
     )
 
 
-def contributor_count(result: gitstat.stats.base.StatsResult) -> int:
+def contributor_count(result: wambatic.stats.base.StatsResult) -> int:
     return sum(
         1 for row in result.tables.get('top_contributors', []) if row['login'] != UNATTRIBUTED
     )
 
 
-def period_table(result: gitstat.stats.base.StatsResult) -> rich.table.Table:
+def period_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
     series = total_series(result)
     partial = partial_labels(result)
     buckets = [bucket for bucket, _ in series['commits']]
@@ -147,7 +147,7 @@ def value_range(values: list[float], *, signed: bool) -> str:
     return f'{low} to {high}'
 
 
-def trend_lines(result: gitstat.stats.base.StatsResult, width: int) -> list[str]:
+def trend_lines(result: wambatic.stats.base.StatsResult, width: int) -> list[str]:
     """One `<metric>  <sparkline>  <min> to <max>` line per total series, cropped to the latest
     buckets that fit `width` with `last N periods` added."""
     series = total_series(result)
@@ -168,15 +168,15 @@ def trend_lines(result: gitstat.stats.base.StatsResult, width: int) -> list[str]
     return lines
 
 
-def provenance_lines(result: gitstat.stats.base.StatsResult) -> list[str]:
+def provenance_lines(result: wambatic.stats.base.StatsResult) -> list[str]:
     provenance = result.provenance
     keys = ['computed_at', *sorted(k for k in provenance if k.startswith('fetched_at:'))]
-    keys += ['gitstat_version', 'schema_version']
+    keys += ['wambatic_version', 'schema_version']
     lines = [f'{key}: {provenance[key]}' for key in keys if key in provenance]
     if 'version_override_at' in provenance:
         lines.append(
             f'Warning: the cache was read with --ignore-cache-version at '
-            f'{provenance["version_override_at"]}; its recorded version differs from this gitstat'
+            f'{provenance["version_override_at"]}; its recorded version differs from this wambatic'
         )
     return lines
 
@@ -187,7 +187,7 @@ def heading(console: rich.console.Console, text: str) -> None:
 
 
 def breakdown_rows(
-    result: gitstat.stats.base.StatsResult, kind: str
+    result: wambatic.stats.base.StatsResult, kind: str
 ) -> list[tuple[str, dict[str, float]]]:
     """Each breakdown name of `kind` with its metrics summed over the range, most commits first
     and then by name, leaving out names whose metrics are all zero."""
@@ -200,7 +200,7 @@ def breakdown_rows(
 
 
 def render_breakdowns(
-    result: gitstat.stats.base.StatsResult, console: rich.console.Console
+    result: wambatic.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
     """By repository and By author (item 4 of the terminal layout)."""
     for kind, title in BREAKDOWN_TITLES:
@@ -224,7 +224,7 @@ def render_breakdowns(
 
 
 def render_top_contributors(
-    result: gitstat.stats.base.StatsResult, console: rich.console.Console
+    result: wambatic.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
     """Top contributors (item 5): the first TOP_CONTRIBUTORS_SHOWN rows of the table."""
     rows = result.tables.get('top_contributors', [])
@@ -257,7 +257,7 @@ def render_top_contributors(
 
 
 def render_unavailable(
-    result: gitstat.stats.base.StatsResult, console: rich.console.Console
+    result: wambatic.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
     """Unavailable (item 6): the metrics the report leaves out, and why."""
     rows = result.tables.get('unavailable', [])
@@ -270,7 +270,7 @@ def render_unavailable(
     console.print(table)
 
 
-def render_terminal(result: gitstat.stats.base.StatsResult, console: rich.console.Console) -> None:
+def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
     console.print(title_line(result))
     console.print(period_table(result))
     if len(total_series(result)['commits']) > 1:

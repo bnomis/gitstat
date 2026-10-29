@@ -7,12 +7,12 @@ import typing
 import hypothesis
 import hypothesis.strategies as st
 
-import gitstat.fetch.base
-import gitstat.reports.base
-import gitstat.settings
-import gitstat.stats.base
 import tests.conftest
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
+import wambatic.reports.base
+import wambatic.settings
+import wambatic.stats.base
 
 TOP_LEVEL_KEYS = [
     'format_version',
@@ -29,18 +29,18 @@ SERIES_KEYS = ['metric', 'unit', 'by', 'by_kind', 'points']
 POINT_KEYS = ['label', 'start', 'value']
 
 
-def as_dict(result: gitstat.stats.base.StatsResult) -> dict[str, typing.Any]:
-    return gitstat.reports.base.result_to_dict(result)
+def as_dict(result: wambatic.stats.base.StatsResult) -> dict[str, typing.Any]:
+    return wambatic.reports.base.result_to_dict(result)
 
 
-def render(result: gitstat.stats.base.StatsResult) -> str:
+def render(result: wambatic.stats.base.StatsResult) -> str:
     stream = io.StringIO()
-    gitstat.reports.base.render_json(result, stream)
+    wambatic.reports.base.render_json(result, stream)
     return stream.getvalue()
 
 
 def test_top_level_keys_are_in_the_specified_order(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     assert list(data) == TOP_LEVEL_KEYS
@@ -51,7 +51,7 @@ def test_top_level_keys_are_in_the_specified_order(
 
 
 def test_the_header_fields_are_as_requested_and_as_resolved(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     assert data['subject'] == {'kind': 'org', 'login': 'octo-org', 'name': None}
@@ -66,12 +66,12 @@ def test_the_header_fields_are_as_requested_and_as_resolved(
 
 
 def test_unrequested_dates_are_null_and_a_repo_subject_has_its_name(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = tests.conftest.compute_stats(
         stats_fetcher,
-        gitstat.fetch.base.Subject('repo', 'octo-org', 'alpha'),
-        gitstat.stats.base.StatsRequest(granularity=gitstat.stats.base.Granularity.TOTAL),
+        wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha'),
+        wambatic.stats.base.StatsRequest(granularity=wambatic.stats.base.Granularity.TOTAL),
     )
     data = as_dict(result)
     request = data['request']
@@ -81,19 +81,19 @@ def test_unrequested_dates_are_null_and_a_repo_subject_has_its_name(
 
 
 def test_render_json_round_trips_through_result_to_dict(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     assert json.loads(render(org_result)) == as_dict(org_result)
 
 
-def test_output_ends_with_exactly_one_newline(org_result: gitstat.stats.base.StatsResult) -> None:
+def test_output_ends_with_exactly_one_newline(org_result: wambatic.stats.base.StatsResult) -> None:
     text = render(org_result)
     assert text.endswith('}\n')
     assert not text.endswith('\n\n')
 
 
 def test_a_series_points_are_in_bucket_order_with_matching_label_and_start(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     commits = [s for s in data['series'] if (s['metric'], s['by']) == ('commits', None)]
@@ -109,7 +109,7 @@ def test_a_series_points_are_in_bucket_order_with_matching_label_and_start(
 
 
 def test_count_day_and_line_values_are_integers(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     for series in data['series']:
@@ -118,27 +118,29 @@ def test_count_day_and_line_values_are_integers(
 
 
 def test_other_units_are_floats() -> None:
-    bucket = gitstat.stats.base.Bucket(datetime.date(2026, 10, 1), '2026-10')
-    series = gitstat.stats.base.Series('lead_time', 'hours', {bucket: 3.0})
+    bucket = wambatic.stats.base.Bucket(datetime.date(2026, 10, 1), '2026-10')
+    series = wambatic.stats.base.Series('lead_time', 'hours', {bucket: 3.0})
     (point,) = typing.cast(
-        list[dict[str, typing.Any]], gitstat.reports.base.series_to_dict(series)['points']
+        list[dict[str, typing.Any]], wambatic.reports.base.series_to_dict(series)['points']
     )
     assert type(point['value']) is float
 
 
 def test_the_failure_window_is_written_as_seconds_and_parses_back(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     settings = data['request']['settings']
     assert settings['failure_window'] == '604800s'
-    assert gitstat.settings.parse_duration(settings['failure_window']) == datetime.timedelta(days=7)
+    assert wambatic.settings.parse_duration(settings['failure_window']) == datetime.timedelta(
+        days=7
+    )
     assert settings['bot_logins'] == ['dependabot[bot]', 'renovate[bot]']
     assert settings['deploy_workflow'] is None
 
 
 def test_non_ascii_logins_are_written_as_they_are(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     rows = [{**row, 'login': 'zoë'} for row in org_result.tables['top_contributors'][:1]]
     changed = dataclasses.replace(
@@ -160,7 +162,7 @@ words = st.lists(st.text(max_size=12), max_size=4).map(tuple)
 )
 @hypothesis.given(
     settings=st.builds(
-        gitstat.settings.StatsSettings,
+        wambatic.settings.StatsSettings,
         bot_logins=words,
         deploy_workflow=st.none() | st.text(max_size=12),
         exclude_merge_commits=st.booleans(),
@@ -170,11 +172,11 @@ words = st.lists(st.text(max_size=12), max_size=4).map(tuple)
     )
 )
 def test_any_stats_settings_survive_json_and_durations_parse_back(
-    org_result: gitstat.stats.base.StatsResult, settings: gitstat.settings.StatsSettings
+    org_result: wambatic.stats.base.StatsResult, settings: wambatic.settings.StatsSettings
 ) -> None:
     result = dataclasses.replace(
         org_result, request=dataclasses.replace(org_result.request, settings=settings)
     )
     written = as_dict(result)['request']['settings']
     assert json.loads(json.dumps(written)) == written
-    assert gitstat.settings.parse_duration(written['failure_window']) == settings.failure_window
+    assert wambatic.settings.parse_duration(written['failure_window']) == settings.failure_window

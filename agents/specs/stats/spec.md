@@ -6,13 +6,13 @@
 
 Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into statistics for a user, repository or organisation, optionally bucketed by year, month, week or day. It does no network or rendering of its own: `compute` reads the cache through the fetcher, and the aggregation functions it calls are pure. [Reports](../reports/spec.md) consumes its output.
 
-**Prerequisite:** the `gitstat.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import gitstat.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` and `star_events()` (step 8).
+**Prerequisite:** the `wambatic.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import wambatic.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` and `star_events()` (step 8).
 
 Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md).
 
 ## Module location
 
-`src/gitstat/stats/`, with tests in `src/tests/stats/` and fixtures in `src/tests/fixtures/stats.py`:
+`src/wambatic/stats/`, with tests in `src/tests/stats/` and fixtures in `src/tests/fixtures/stats.py`:
 
 | Module | Holds | Built in implementation step |
 |--------|-------|------------------------------|
@@ -35,7 +35,7 @@ import datetime
 import enum
 import typing
 
-import gitstat.settings
+import wambatic.settings
 
 GROUPS = frozenset({'activity', 'delivery', 'flow'})
 
@@ -95,7 +95,7 @@ class StatsRequest:
     until: datetime.date | None = None     # last local date counted, inclusive; None: today in tz
     by_author: bool = False
     tz: datetime.tzinfo = datetime.UTC
-    settings: gitstat.settings.StatsSettings = dataclasses.field(default_factory=gitstat.settings.StatsSettings)
+    settings: wambatic.settings.StatsSettings = dataclasses.field(default_factory=wambatic.settings.StatsSettings)
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StatsResult:
@@ -172,7 +172,7 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 
 Every result records what produced it, so a saved report can be traced and a mismatch with a later run is detectable. `provenance` holds:
 
-- from `Fetcher.provenance(subject, resources)` (fetch spec): the cache identity (`schema_version`, `gitstat_version` as recorded, `query:<NAME>` hashes), `version_override_at` when the cache was opened with the version override, and `fetched_at:<resource>` for each resource read, the earliest `synced_at` over the subject's repos (the oldest data in the result), or `never` when a repo has no sync state for it;
+- from `Fetcher.provenance(subject, resources)` (fetch spec): the cache identity (`schema_version`, `wambatic_version` as recorded, `query:<NAME>` hashes), `version_override_at` when the cache was opened with the version override, and `fetched_at:<resource>` for each resource read, the earliest `synced_at` over the subject's repos (the oldest data in the result), or `never` when a repo has no sync state for it;
 - from stats: `computed_at` (ISO UTC, from `clock`), `timezone` (`str(tz)`), and `partial_buckets`.
 
 ## Settings
@@ -190,5 +190,5 @@ Every result records what produced it, so a saved report can be traced and a mis
 
 ## External dependencies
 
-- `gitstat.fetch` (see [Fetch and cache](../fetch-and-cache/spec.md)) and `gitstat.settings`.
+- `wambatic.fetch` (see [Fetch and cache](../fetch-and-cache/spec.md)) and `wambatic.settings`.
 - Stdlib only: `bisect`, `datetime`, `zoneinfo`, `statistics`, `dataclasses`. No dependency is added.
