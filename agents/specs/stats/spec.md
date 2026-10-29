@@ -1,6 +1,6 @@
 # Stats
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -8,7 +8,7 @@ Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into st
 
 **Prerequisite:** the `wambatic.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import wambatic.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` and `star_events()` (step 8).
 
-Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md).
+Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.2 settles what step 6 needed for the `flow` group: what each flow metric counts and its series names, how the range and an empty result are found when several groups are read, and the user-subject rule for pull requests and issues; the choices are in [review-2.md](review-2.md).
 
 ## Module location
 
@@ -117,7 +117,7 @@ All stats errors subclass `StatsError(Exception)`, so a front end can catch them
 - `InvalidRangeError`: `since` is after `until` (after resolving `None` bounds). A range shorter than one bucket is valid and gives one partial bucket.
 - `InvalidRequestError`: `by_author` with a `user` subject. The CLI rejects this first with its own `UsageError`; this error is for other callers.
 - `UnknownGroupError`: `request.groups` names a group outside `GROUPS`; the message names each unknown group.
-- `EmptySubjectError`: the cache holds no repositories for the subject, no records of the requested groups in range, or no requested group is built yet (the message names the steps that build them); callers print a message rather than an empty report.
+- `EmptySubjectError`: the cache holds no repositories for the subject, no records of any requested built group in range (a group with records still reports the others as zeros), or no requested group is built yet (the message names the steps that build them); callers print a message rather than an empty report.
 - Fetch errors (`AuthError`, `RateLimitError`, `CacheVersionError`) propagate unchanged.
 - Records with `author_login is None` are counted under the `unattributed` key, never dropped.
 
@@ -127,9 +127,9 @@ Validation happens before any cache read, in this order: unknown groups, `by_aut
 
 All timestamps are stored UTC and converted once to `request.tz` before bucketing; a record belongs to the local date of `authored_at.astimezone(tz)`. Weeks follow [ISO 8601](https://en.wikipedia.org/wiki/ISO_week_date), so a week can straddle a year boundary and carries the ISO year in its label (`2026-12-31` is in `2026-W53`, and so is `2027-01-01`). Labels are `YYYY`, `YYYY-MM`, `YYYY-Www` with a two-digit week, `YYYY-MM-DD`, and `total`. Bucket boundaries are half-open on local dates: a bucket runs from its `start` up to the next bucket's `start`.
 
-**Range.** `since` and `until` are local dates in `tz`, both inclusive (`--until 2026-10-31` includes the 31st). A `None` `since` resolves to the start of the bucket holding the earliest record, so the first bucket is never partial for lack of a bound; for `TOTAL` it resolves to the earliest record's local date. A `None` `until` resolves to today in `tz` from `clock`, so the current bucket is partial. The resolved bounds are in `StatsResult.since` and `until`.
+**Range.** `since` and `until` are local dates in `tz`, both inclusive (`--until 2026-10-31` includes the 31st). A `None` `since` resolves to the start of the bucket holding the earliest record of any requested built group (a commit's `authored_at`, a pull request's or issue's `created_at`), so the first bucket is never partial for lack of a bound; for `TOTAL` it resolves to the earliest record's local date. A `None` `until` resolves to today in `tz` from `clock`, so the current bucket is partial. The resolved bounds are in `StatsResult.since` and `until`.
 
-**Reading the cache.** `compute` converts the range to UTC instants for `Fetcher.commits` widened by one day at each end, then keeps only records whose local date is in the range. The widening makes the result independent of how `tz` handles midnight (a zone whose clocks skip midnight has no `00:00` on that date).
+**Reading the cache.** `compute` converts the range to UTC instants for `Fetcher.commits` widened by one day at each end, then keeps only records whose local date is in the range. For `flow` it passes the widened lower instant to `Fetcher.pull_requests` and `Fetcher.issues`, which filter on `updated_at` (every event of an item is at or before it), and each flow metric then keeps the events whose local date is in the range. The widening makes the result independent of how `tz` handles midnight (a zone whose clocks skip midnight has no `00:00` on that date).
 
 **Partial buckets.** `partial_buckets` names the first and last bucket when the range covers only part of them; their labels are recorded comma-separated in `provenance['partial_buckets']` (empty when none), and reports chart them with a hatch pattern.
 
@@ -146,11 +146,13 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 - `stars`, `forks`, `watchers` cumulative and per bucket, `languages` (bytes per language, latest snapshot table). Not built in step 4: they are listed in `tables['unavailable']` until the step that fetches them (stars from `star_events` in step 8; forks, watchers and languages have no fetch resource yet, see review-1.md).
 - `tables['top_contributors']`: one row per author over the whole range, `{'login', 'commits', 'lines_added', 'lines_deleted', 'lines_net', 'active_days'}`, with the same merge rule as the series, ordered by `commits` descending then `login`. Bots are left out; unattributed commits are one row with `login` `'unattributed'`. Produced for every subject, with or without `by_author`.
 
-**flow** (pull requests and issues)
+**flow** (pull requests and issues; total series only, built in step 6)
 
-- `prs_opened`, `prs_merged`, `issues_opened`, `issues_closed`.
-- `time_to_first_review`, `time_to_merge`, `time_to_close` as median and 90th percentile in hours per bucket, using `statistics.quantiles`, bucketed by the end event's date.
-- `pr_size` median additions plus deletions.
+- Counts (unit `count`), each bucketed by the local date of its event: `prs_opened` (`created_at`), `prs_merged` (`merged_at`), `issues_opened` (`created_at`), `issues_closed` (`closed_at`, issues closed now; a reopened issue is open). A pull request closed without merging is in none of them.
+- Durations (unit `hours`), each bucketed by the local date of its end event, as `<name>_p50` (`statistics.median`) and `<name>_p90` (`statistics.quantiles(values, n=10, method='inclusive')[8]`, which stays inside the values, unlike the default `exclusive` method, and accepts one value on Python 3.13 and later): `time_to_first_review` (pull request `created_at` to `first_review_at`), `time_to_merge` (`created_at` to `merged_at`) and `time_to_close` (issue `created_at` to `closed_at`; pull requests have `time_to_merge`). Hours are `(end - start).total_seconds() / 3600`.
+- `pr_size_p50` (unit `lines`): `statistics.median_low` of `additions + deletions` over the pull requests merged in the bucket, so the value is one pull request's real size and an integer, as the JSON output requires of `lines`.
+- Bots are counted: `stats.bot_logins` affects contributor counts only, as in `activity`. Who reviewed is settled by the fetch layer (`first_review_at` leaves out the author and bots).
+- Series order: `prs_opened`, `prs_merged`, `issues_opened`, `issues_closed`, `time_to_first_review_p50`, `time_to_first_review_p90`, `time_to_merge_p50`, `time_to_merge_p90`, `time_to_close_p50`, `time_to_close_p90`, `pr_size_p50`.
 
 **delivery** (CI and delivery; approximations, labelled as proxies in reports)
 
@@ -160,12 +162,13 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 
 ### Aggregation
 
-- `user` subject: repositories owned by the user, counting only commits whose `author_login` matches the subject's login case-insensitively; `by_author` is not meaningful and is rejected. Per-repo breakdown series as for `org`.
+- `user` subject: repositories owned by the user, counting only commits, pull requests and issues whose `author_login` matches the subject's login case-insensitively; `by_author` is not meaningful and is rejected. Per-repo breakdown series as for `org`.
 - `repo` subject: one repository, optionally per author.
 - `org` subject: sum across org repositories, with per-repo breakdown series always and per-author breakdown series with `by_author`.
 - **Breakdown series** are `commits`, `lines_added`, `lines_deleted` and `lines_net` with `by` set to the author login (or `'unattributed'`, `by_kind='author'`) or the repo's `owner/name` (`by_kind='repo'`). Per-author series include bots: they are not contributors, but their lines are counted.
 - A series' `points` holds every bucket of the range in chronological order: empty buckets are zero for counts and lines, and absent for medians and ratios. Breakdown series are filled over the whole range too, so they align with the totals.
-- `series` is ordered: the group's total series in the order listed above, then breakdown series ordered by `by_kind` (`author` before `repo`), then `by`, then metric in the order listed above.
+- `flow` has no breakdown series; `by_author` and the per-repo breakdowns apply to `activity` only.
+- `series` is ordered: the `activity` total series, then the `flow` total series, each in the order listed above, then breakdown series ordered by `by_kind` (`author` before `repo`), then `by`, then metric in the order listed above.
 - Summing an `activity` breakdown's points over every `by` of one `by_kind` gives the total series' points, for each of its four metrics.
 
 ### Provenance
