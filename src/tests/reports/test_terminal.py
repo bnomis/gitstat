@@ -12,6 +12,7 @@ import gitstat.fetch.base
 import gitstat.reports.terminal
 import gitstat.stats.base
 import tests.conftest
+import tests.fixtures.reports
 import tests.fixtures.stats as fixture
 
 METRICS = ('commits', 'contributors', 'active_days', 'lines_added', 'lines_deleted', 'lines_net')
@@ -193,3 +194,134 @@ def test_the_provenance_footer_lists_the_run_and_the_versions(
         f'gitstat_version: {org_result.provenance["gitstat_version"]}',
         'schema_version: 1',
     ]
+
+
+def without_trailing_spaces(text: str) -> str:
+    return '\n'.join(line.rstrip() for line in text.split('\n'))
+
+
+def test_the_org_by_month_rendering_matches_the_known_good_text(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    expected = tests.fixtures.reports.ORG_MONTH_TERMINAL.format(
+        gitstat_version=org_result.provenance['gitstat_version']
+    )
+    assert without_trailing_spaces(render(org_result)) == expected
+
+
+def table_rows(output: str, title: str) -> dict[str, list[int]]:
+    """The rows of the table headed `title`, by first column, as their numeric cells."""
+    lines = output.splitlines()
+    rows: dict[str, list[int]] = {}
+    first = next(index for index, line in enumerate(lines) if line.strip() == title)
+    for line in lines[first + 4 :]:
+        if not line.strip():
+            break
+        name, *cells = line.split()
+        rows[name] = [number(cell) for cell in cells]
+    return rows
+
+
+def test_the_repository_rows_add_up_to_the_total_row(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    output = render(org_result)
+    rows = table_rows(output, 'By repository')
+    assert set(rows) == {fixture.ALPHA, fixture.BETA}
+    total = period_rows(output)['Total']
+    sums = [sum(column) for column in zip(*rows.values(), strict=True)]
+    assert sums == [
+        total['commits'],
+        total['lines_added'],
+        total['lines_deleted'],
+        total['lines_net'],
+    ]
+
+
+def test_the_author_rows_add_up_to_the_total_row_and_are_ordered_by_commits_then_name(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    output = render(org_result)
+    rows = table_rows(output, 'By author')
+    assert list(rows) == ['Octocat', 'hubot', 'dependabot[bot]', 'monalisa', 'unattributed']
+    total = period_rows(output)['Total']
+    sums = [sum(column) for column in zip(*rows.values(), strict=True)]
+    assert sums == [
+        total['commits'],
+        total['lines_added'],
+        total['lines_deleted'],
+        total['lines_net'],
+    ]
+
+
+def test_by_author_appears_only_when_requested(
+    stats_fetcher: gitstat.fetch.base.Fetcher,
+) -> None:
+    output = render(recompute(stats_fetcher))
+    assert 'By repository' in output
+    assert 'By author' not in output
+
+
+def test_a_repo_has_no_repository_breakdown(
+    repo_total_result: gitstat.stats.base.StatsResult,
+) -> None:
+    assert 'By repository' not in render(repo_total_result)
+
+
+def test_breakdown_rows_that_are_all_zero_are_left_out(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    zero = gitstat.stats.base.Series(
+        'commits', 'count', dict.fromkeys(org_result.series[0].points, 0), 'ghost', 'author'
+    )
+    padded = dataclasses.replace(org_result, series=[*org_result.series, zero])
+    assert 'ghost' not in render(padded)
+
+
+def test_top_contributors_follow_the_table_order(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    rows = table_rows(render(org_result), 'Top contributors')
+    assert list(rows) == [row['login'] for row in fixture.ORG_TOP_CONTRIBUTORS]
+    assert rows['hubot'] == [3, 35, 12, 23, 3]
+
+
+def test_at_most_twenty_top_contributors_are_shown_then_a_count_of_the_rest(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    many = [{**fixture.ORG_TOP_CONTRIBUTORS[0], 'login': f'person{n:02d}'} for n in range(25)]
+    output = render(
+        dataclasses.replace(org_result, tables={**org_result.tables, 'top_contributors': many})
+    )
+    shown = [line for line in output.splitlines() if line.strip().startswith('person')]
+    assert len(shown) == gitstat.reports.terminal.TOP_CONTRIBUTORS_SHOWN == 20
+    assert shown[-1].split()[0] == 'person19'
+    assert 'and 5 more' in output
+
+
+def test_exactly_twenty_top_contributors_have_no_more_line(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    twenty = [{**fixture.ORG_TOP_CONTRIBUTORS[0], 'login': f'person{n:02d}'} for n in range(20)]
+    output = render(
+        dataclasses.replace(org_result, tables={**org_result.tables, 'top_contributors': twenty})
+    )
+    assert ' more' not in output
+
+
+def test_unavailable_lists_flow_and_the_unbuilt_activity_metrics(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    output = render(org_result)
+    assert 'Unavailable' in output
+    for metric in ('flow', 'stars', 'forks', 'watchers', 'languages'):
+        assert re.search(rf'^\s+{metric}\s+\S', output, re.MULTILINE), metric
+
+
+def test_unavailable_is_absent_when_the_table_is_empty(
+    org_result: gitstat.stats.base.StatsResult,
+) -> None:
+    output = render(
+        dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': []})
+    )
+    assert 'Unavailable' not in output

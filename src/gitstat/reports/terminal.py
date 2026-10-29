@@ -18,6 +18,8 @@ TOTAL_METRICS = (
 )
 UNATTRIBUTED = 'unattributed'
 PARTIAL_MARK = ' *'
+TOP_CONTRIBUTORS_SHOWN = 20
+BREAKDOWN_TITLES = (('repo', 'By repository'), ('author', 'By author'))
 SIGNED_METRICS = frozenset({'lines_net'})
 
 
@@ -190,22 +192,88 @@ def heading(console: rich.console.Console, text: str) -> None:
     console.print(rich.text.Text(text, style='bold'))
 
 
+def breakdown_rows(
+    result: gitstat.stats.base.StatsResult, kind: str
+) -> list[tuple[str, dict[str, float]]]:
+    """Each breakdown name of `kind` with its metrics summed over the range, most commits first
+    and then by name, leaving out names whose metrics are all zero."""
+    totals: dict[str, dict[str, float]] = {}
+    for series in result.series:
+        if series.by_kind == kind and series.by is not None:
+            totals.setdefault(series.by, {})[series.metric] = sum(series.points.values())
+    rows = [(name, metrics) for name, metrics in totals.items() if any(metrics.values())]
+    return sorted(rows, key=lambda row: (-row[1].get('commits', 0), row[0]))
+
+
 def render_breakdowns(
     result: gitstat.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
     """By repository and By author (item 4 of the terminal layout)."""
+    for kind, title in BREAKDOWN_TITLES:
+        rows = breakdown_rows(result, kind)
+        if not any(series.by_kind == kind for series in result.series):
+            continue
+        table = make_table(
+            title,
+            [('Name', False), ('Commits', True), ('Added', True), ('Deleted', True), ('Net', True)],
+        )
+        for name, metrics in rows:
+            table.add_row(
+                text_cell(name),
+                format_number(metrics['commits']),
+                format_number(metrics['lines_added']),
+                format_number(metrics['lines_deleted']),
+                format_number(metrics['lines_net'], signed=True),
+            )
+        console.print()
+        console.print(table)
 
 
 def render_top_contributors(
     result: gitstat.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
-    """Top contributors (item 5)."""
+    """Top contributors (item 5): the first TOP_CONTRIBUTORS_SHOWN rows of the table."""
+    rows = result.tables.get('top_contributors', [])
+    if not rows:
+        return
+    table = make_table(
+        'Top contributors',
+        [
+            ('Login', False),
+            ('Commits', True),
+            ('Added', True),
+            ('Deleted', True),
+            ('Net', True),
+            ('Active days', True),
+        ],
+    )
+    for row in rows[:TOP_CONTRIBUTORS_SHOWN]:
+        table.add_row(
+            text_cell(row['login']),
+            format_number(row['commits']),
+            format_number(row['lines_added']),
+            format_number(row['lines_deleted']),
+            format_number(row['lines_net'], signed=True),
+            format_number(row['active_days']),
+        )
+    console.print()
+    console.print(table)
+    if len(rows) > TOP_CONTRIBUTORS_SHOWN:
+        console.print(rich.text.Text(f'and {len(rows) - TOP_CONTRIBUTORS_SHOWN} more'))
 
 
 def render_unavailable(
     result: gitstat.stats.base.StatsResult, console: rich.console.Console
 ) -> None:
-    """Unavailable (item 6)."""
+    """Unavailable (item 6): the metrics the report leaves out, and why."""
+    rows = result.tables.get('unavailable', [])
+    if not rows:
+        return
+    table = make_table('Unavailable', [('Metric', False), ('Reason', False)])
+    for row in rows:
+        table.add_row(text_cell(row['metric']), text_cell(row['reason']))
+    console.print()
+    console.print(table)
 
 
 def render_terminal(result: gitstat.stats.base.StatsResult, console: rich.console.Console) -> None:
