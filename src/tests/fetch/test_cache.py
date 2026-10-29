@@ -12,6 +12,7 @@ import gitstat.fetch.cache
 import gitstat.fetch.errors
 import gitstat.fetch.queries
 import gitstat.version
+import tests.fixtures.stats
 
 UTC = datetime.UTC
 T0 = datetime.datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
@@ -441,3 +442,107 @@ def test_etag_round_trip(cache: gitstat.fetch.cache.Cache) -> None:
     assert cache.etag('/repos/x?page=1') == ('"abc"', {'a': [1, 2], 'b': None})
     cache.store_etag('/repos/x?page=1', '"def"', [])
     assert cache.etag('/repos/x?page=1') == ('"def"', [])
+
+
+def test_inspect_cache_of_a_missing_path_is_none_and_creates_nothing(
+    cache_path: pathlib.Path,
+) -> None:
+    assert gitstat.fetch.cache.inspect_cache(cache_path) is None
+    assert not cache_path.exists()
+    assert not cache_path.parent.exists()
+
+
+def test_inspect_cache_reports_counts_identity_and_latest_sync(
+    stats_cache: gitstat.fetch.cache.Cache,
+) -> None:
+    path = pathlib.Path(stats_cache.connection.execute('PRAGMA database_list').fetchone()[2])
+    info = gitstat.fetch.cache.inspect_cache(path)
+    assert info is not None
+    assert info.path == path
+    assert info.repos == len(tests.fixtures.stats.REPOS)
+    assert info.commits == len(tests.fixtures.stats.COMMITS)
+    assert info.identity == gitstat.fetch.cache.expected_identity()
+    assert info.differences == {}
+    assert info.version_override_at is None
+    assert info.last_synced_at == tests.fixtures.stats.BETA_SYNCED_AT
+    assert info.size_bytes >= path.stat().st_size
+
+
+def test_inspect_cache_counts_only_repos_not_marked_missing(
+    cache: gitstat.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    cache.upsert_repos('octocat', [repo(HELLO), repo(SPOON)], complete=True)
+    cache.upsert_repos('octocat', [repo(HELLO)], complete=True)
+    info = gitstat.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert info.repos == 1
+
+
+def write_other_schema_version(path: pathlib.Path) -> None:
+    gitstat.fetch.cache.Cache.open(path).close()
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute("UPDATE meta SET value = '0' WHERE key = 'schema_version'")
+    connection.close()
+
+
+def test_inspect_cache_reads_a_cache_that_open_refuses_and_changes_nothing(
+    cache_path: pathlib.Path,
+) -> None:
+    write_other_schema_version(cache_path)
+
+    def meta() -> list[tuple[str, str]]:
+        connection = sqlite3.connect(cache_path)
+        try:
+            return connection.execute('SELECT key, value FROM meta ORDER BY key').fetchall()
+        finally:
+            connection.close()
+
+    before = meta()
+    info = gitstat.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert info.differences == {'schema_version': ('0', str(gitstat.fetch.cache.SCHEMA_VERSION))}
+    assert info.version_override_at is None
+    with pytest.raises(gitstat.fetch.errors.CacheVersionError):
+        gitstat.fetch.cache.Cache.open(cache_path).close()
+    assert meta() == before
+
+
+def test_inspect_cache_reports_the_version_override_time(cache_path: pathlib.Path) -> None:
+    write_other_schema_version(cache_path)
+    gitstat.fetch.cache.Cache.open(cache_path, ignore_version=True).close()
+    info = gitstat.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert info.version_override_at is not None
+    assert gitstat.fetch.cache.OVERRIDE_KEY not in info.identity
+
+
+def test_inspect_cache_of_an_empty_sqlite_file_has_zero_counts_and_adds_no_tables(
+    cache_path: pathlib.Path,
+) -> None:
+    cache_path.parent.mkdir(parents=True)
+    sqlite3.connect(cache_path).close()
+    info = gitstat.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert (info.repos, info.commits, info.last_synced_at) == (0, 0, None)
+    assert info.identity == {}
+    assert set(info.differences) == set(gitstat.fetch.cache.expected_identity())
+    connection = sqlite3.connect(cache_path)
+    try:
+        assert connection.execute('SELECT COUNT(*) FROM sqlite_master').fetchone() == (0,)
+    finally:
+        connection.close()
+
+
+def test_clear_cache_removes_the_file_and_its_wal_and_shm_files(cache_path: pathlib.Path) -> None:
+    cache = gitstat.fetch.cache.Cache.open(cache_path)
+    cache.upsert_repos('octocat', [repo(HELLO)], complete=True)
+    wal = cache_path.with_name(cache_path.name + '-wal')
+    shm = cache_path.with_name(cache_path.name + '-shm')
+    assert wal.exists()
+    assert shm.exists()
+    removed = gitstat.fetch.cache.clear_cache(cache_path)
+    assert removed == [cache_path, wal, shm]
+    assert not any(path.exists() for path in removed)
+    assert gitstat.fetch.cache.clear_cache(cache_path) == []
+    cache.close()
