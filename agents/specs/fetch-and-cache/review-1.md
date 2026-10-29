@@ -62,4 +62,6 @@ For each choice: approve it or flag it. For each decision: pick an option.
 
 ## Answers
 
-(empty: filled in with the date when answered)
+- 2026-10-29, Decision 1: A, compare from the stored head (Simon, decision card).
+- 2026-10-29, Decision 2: A, opt-in live test only (Simon, decision card).
+- 2026-10-29, Choices 1 to 9: none flagged; PR #10, which carried them, was merged.

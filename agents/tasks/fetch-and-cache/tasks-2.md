@@ -371,7 +371,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Notes:**
 
 - Depends on Task 7
-- Written on the recommended option of review-1.md Decision 1. If the answer there is option B, this task is replaced before the list runs; do not start it while that review's Answers section is empty and the answer is not recorded in this task's Notes.
+- Implements review-1.md Decision 1, answered A (compare from the stored head) on 2026-10-29.
 - `rest_get` takes a path, so the `page` parameter is passed explicitly rather than following `next_url`.
 - Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
@@ -492,7 +492,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 **Notes:**
 
 - Depends on Task 10
-- Written on the recommended option of review-1.md Decision 2 (live test only).
+- Implements review-1.md Decision 2, answered A (live test only) on 2026-10-29.
 - GitHub returns 202 while it computes the statistics; step 2's `stats_retries` handling waits for it.
 - Key files: `src/tests/fetch/test_live.py`
 
