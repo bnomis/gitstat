@@ -1,6 +1,6 @@
 # Fetch and cache
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -22,7 +22,7 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 
 `Fetcher` owns one `GitHubClient` and one `Cache`; its `__aenter__` enters the client and its `__aexit__` exits it. `Fetcher` is therefore built in step 3, when `Cache` exists; step 2 builds the client it wraps.
 
-`Fetcher.sync` is the only method that reaches the network. `repos`, `commits` and the other record methods read the cache alone, so a caller syncs first and then reads, and a report from a warm cache makes no requests (system spec, Data flow step 3).
+`Fetcher.sync` is the only method that reaches the network. `repos`, `commits`, `provenance` (added in 1.3 for the stats step) and the other record methods read the cache alone, so a caller syncs first and then reads, and a report from a warm cache makes no requests (system spec, Data flow step 3).
 
 ## API
 
@@ -100,6 +100,12 @@ class Fetcher:
     async def commits(self, repo: Repo, since: datetime.datetime | None, until: datetime.datetime | None) -> typing.AsyncIterator[Commit]:
         """From the cache: default-branch commits with `since <= authored_at < until`, oldest first."""
 
+    async def provenance(self, subject: Subject, resources: frozenset[str]) -> dict[str, str]:
+        """From the cache: `Cache.identity()`, `version_override_at` when recorded, and for each
+        resource `fetched_at:<resource>`, the earliest `synced_at` (ISO UTC) over `repos(subject)`,
+        or 'never' when one of them has no sync state for it. Stats copies it into
+        `StatsResult.provenance`."""
+
     async def pull_requests(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[PullRequest]: ...
     async def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[Issue]: ...
     async def releases(self, repo: Repo) -> typing.AsyncIterator[Release]: ...
@@ -141,7 +147,10 @@ class Cache:
         `ignore_version`, which is recorded in `meta` as `version_override_at`."""
     def close(self) -> None: ...
 
-    def identity(self) -> dict[str, str]: ...
+    def identity(self) -> dict[str, str]:
+        """The recorded `meta` rows except `version_override_at`."""
+    def version_override_at(self) -> str | None:
+        """The recorded `version_override_at`, or None when the identity matched."""
     def upsert_repos(self, owner: str, repos: list[Repo], *, complete: bool) -> None:
         """Insert or replace each repo; with `complete`, mark the owner's other repos missing."""
     def read_repos(self, subject: Subject) -> list[Repo]: ...

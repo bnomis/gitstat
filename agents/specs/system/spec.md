@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -68,8 +68,8 @@ Rules that hold across the system:
 ## Data flow
 
 1. The CLI or web handler parses `<target>` into a `Subject` and the flags into a `StatsRequest`.
-2. `compute` asks `Fetcher` for the subject's repositories, then for each resource the requested groups need (commits for activity, pull requests and issues for flow, releases and workflow runs for delivery).
-3. `Fetcher` backfills everything on a subject's first query and afterwards fetches only the delta since each per-repo, per-resource watermark, writes it back atomically, and yields typed records from the cache.
+2. Unless `--no-fetch` applies, the front end calls `Fetcher.sync` for the resources the requested groups need (`stats.resources_for`: commits for activity, pull requests and issues for flow, releases, workflow runs and star events for delivery).
+3. `Fetcher` backfills everything on a subject's first sync and afterwards fetches only the delta since each per-repo, per-resource watermark, and writes it back atomically. `compute` then asks `Fetcher` for the subject's repositories and their typed records, which come from the cache alone; `compute` never syncs.
 4. `compute` normalises timestamps to the request timezone, assigns each record to a bucket, aggregates per group, and returns the `StatsResult`.
 5. A renderer presents the result. The web app repeats steps 1 to 5 per request; the cache makes repeats cheap.
 
@@ -79,7 +79,7 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 - `settings` raises `SettingsError`.
 - `fetch` raises `AuthError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `GraphQLError`, `CacheVersionError`, all subclasses of `FetchError`.
-- `stats` raises `InvalidRangeError`, `UnknownGroupError`, `EmptySubjectError`.
+- `stats` raises `InvalidRangeError`, `InvalidRequestError`, `UnknownGroupError`, `EmptySubjectError`, all subclasses of `StatsError`.
 - `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for `UsageError` and `SettingsError`) and in the web app's exception handlers (HTTP 400 or 502).
 - Unexpected exceptions propagate and are logged with `loguru.logger.exception`.
 

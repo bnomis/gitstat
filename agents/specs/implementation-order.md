@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -21,7 +21,7 @@ The order in which gitstat is built, with what each step delivers, what it depen
 | 1 | Skeleton and settings | [system](system/spec.md) | none | done |
 | 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 | done: [tasks-1](../tasks/fetch-and-cache/tasks-1.md) |
 | 3 | Cache and incremental sync for repos and commits | [fetch-and-cache](fetch-and-cache/spec.md) | 2 | done: [tasks-2](../tasks/fetch-and-cache/tasks-2.md) |
-| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | not started |
+| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | planned: [tasks-1](../tasks/stats/tasks-1.md) |
 | 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | not started |
 | 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | not started |
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | not started |
@@ -50,7 +50,7 @@ Done when: a second run of the same fixture fetches nothing; an interrupted run 
 
 ### 4. Activity stats
 
-Deliver: `Granularity`, `bucket_for` (ISO weeks, timezones, partial buckets), `compute` for the `activity` group including lines added, deleted and net and `by_author`.
+Deliver: `Granularity`, `bucket_for` and `bucket_range` (ISO weeks, timezones, partial buckets), the stats errors, `Fetcher.provenance`, and `compute` for the `activity` group's commit metrics: commits, contributors, active days, lines added, deleted and net, per-repo and `by_author` breakdowns, and the top-contributors table. Groups and metrics not built yet are listed as `unavailable`; stars, forks, watchers and languages wait for step 8.
 Done when: hypothesis tests show buckets partition any date range with no gaps or overlaps, and known-good fixture totals match by hand.
 
 ### 5. Terminal report and CLI
@@ -70,7 +70,7 @@ Done when: the file opens offline, shows all four granularities, and passes a he
 
 ### 8. Delivery data and stats
 
-Deliver: `releases()`, `workflow_runs()`, `star_events()`, the `delivery` group, and DORA proxies emitted only when configured.
+Deliver: `releases()`, `workflow_runs()`, `star_events()`, the `delivery` group, DORA proxies emitted only when configured, and the `activity` metrics step 4 left unavailable (stars, forks, watchers, languages; the fetch spec needs resources for forks, watchers and languages first).
 Done when: unconfigured proxies are listed as `unavailable` with a reason, and in-progress runs are refreshed on the next sync.
 
 ### 9. Local web app
