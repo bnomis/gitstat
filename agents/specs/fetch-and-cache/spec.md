@@ -1,6 +1,6 @@
 # Fetch and cache
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -17,12 +17,14 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 | `ratelimit.py` | `RateLimitState`, `backoff_delay` | 2 |
 | `client.py` | `GitHubClient`, `RestResponse`: the aiohttp transport | 2 |
 | `queries.py` | GraphQL query texts | 2 (first query), 3 onwards |
-| `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags | 3 |
-| `base.py` | `Subject`, `RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, the rest with their resources), `SyncReport`, `Fetcher` | 3 |
+| `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags; `CacheInfo`, `inspect_cache`, `clear_cache` | 3 (`CacheInfo`, `inspect_cache`, `clear_cache` in 5) |
+| `base.py` | `Subject`, `RESOURCES`, `BUILT_RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, the rest with their resources), `SyncReport`, `Fetcher` | 3 (`BUILT_RESOURCES`, `Fetcher.owner_kind` in 5) |
 
 `Fetcher` owns one `GitHubClient` and one `Cache`; its `__aenter__` enters the client and its `__aexit__` exits it. `Fetcher` is therefore built in step 3, when `Cache` exists; step 2 builds the client it wraps.
 
-`Fetcher.sync` is the only method that reaches the network. `repos`, `commits`, `provenance` (added in 1.3 for the stats step) and the other record methods read the cache alone, so a caller syncs first and then reads, and a report from a warm cache makes no requests (system spec, Data flow step 3).
+`Fetcher.sync` and `Fetcher.owner_kind` (added in 1.4 for the CLI's bare `NAME` target) are the only methods that reach the network. `repos`, `commits`, `provenance` (added in 1.3 for the stats step) and the other record methods read the cache alone, so a caller syncs first and then reads, and a report from a warm cache makes no requests (system spec, Data flow step 3). A `Fetcher` that is never entered opens no aiohttp session, and the CLI relies on that to read a warm cache without a token.
+
+Version 1.4 adds what step 5's CLI needs: `BUILT_RESOURCES`, `Fetcher.owner_kind`, and `inspect_cache` and `clear_cache` for the `cache` command. The choices are in the [reports review](../reports/review-1.md).
 
 ## API
 
@@ -38,6 +40,9 @@ class Subject:
     name: str | None = None    # repo name when kind == 'repo'
 
 RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'})
+# The resources whose implementation step is built; each later step adds its own. `sync` raises
+# NotImplementedError for a resource in RESOURCES but not here, and callers sync only these.
+BUILT_RESOURCES = frozenset({'commits'})
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Repo:
@@ -106,6 +111,11 @@ class Fetcher:
         or 'never' when one of them has no sync state for it. Stats copies it into
         `StatsResult.provenance`."""
 
+    async def owner_kind(self, login: str) -> typing.Literal['user', 'org']:
+        """Whether `login` is a user or an organisation: REST `GET /users/{login}`, whose
+        `type` is `User` (-> 'user') or `Organization` (-> 'org'). A 404, or any other type,
+        raises NotFoundError naming the login. Not ETag-cached and writes nothing."""
+
     async def pull_requests(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[PullRequest]: ...
     async def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[Issue]: ...
     async def releases(self, repo: Repo) -> typing.AsyncIterator[Release]: ...
@@ -162,6 +172,25 @@ class Cache:
     def etag(self, url: str) -> tuple[str, object] | None:
         """The stored ETag and parsed body for a REST URL."""
     def store_etag(self, url: str, etag: str, body: object) -> None: ...
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CacheInfo:
+    path: pathlib.Path
+    size_bytes: int                                        # the file plus its -wal file
+    identity: dict[str, str]                               # recorded `meta` rows, as Cache.identity()
+    differences: dict[str, tuple[str | None, str | None]]  # key -> (recorded, running), as CacheVersionError
+    version_override_at: str | None
+    repos: int                                             # rows not marked missing
+    commits: int
+    last_synced_at: datetime.datetime | None               # latest `sync_state.synced_at`
+
+def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
+    """None when `path` does not exist. Otherwise reads the file with plain SELECTs on its own
+    connection: no schema creation, no identity check or write, no WAL pragma, so a cache that
+    `Cache.open` refuses can still be inspected. A table absent from the file counts as 0 rows."""
+
+def clear_cache(path: pathlib.Path) -> list[pathlib.Path]:
+    """Delete `path` and its `-wal` and `-shm` files where present; return those deleted."""
 ```
 
 The transport, used only inside `gitstat.fetch`:

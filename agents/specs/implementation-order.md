@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -55,8 +55,8 @@ Done when: hypothesis tests show buckets partition any date range with no gaps o
 
 ### 5. Terminal report and CLI
 
-Deliver: `cli.main` with `report` and `cache` commands, `<target>` parsing, `--by`, `--since`, `--until`, `--tz`, `--format terminal|json`, `--no-fetch`, `--max-age`, and the single error-to-exit-status conversion.
-Done when: `gitstat report repo:OWNER/NAME --by month` prints a correct report from a warm cache with no network, and every typed error maps to its documented exit status.
+Deliver: the `rich` and `cappa` dependencies, `cli.main` with `report` and `cache` commands, `<target>` parsing (bare `NAME` through `Fetcher.owner_kind`), `--by`, `--since`, `--until`, `--groups`, `--by-author`, `--tz`, `--format terminal|json`, `--full-refresh`, `--no-fetch`, `--max-age`, `--ignore-cache-version`, `-v`/`-q`, the terminal renderer and JSON output, `BUILT_RESOURCES`, `inspect_cache` and `clear_cache`, the `gitstat` console script, a README user guide, and the single error-to-exit-status conversion. `--format html` and `--out` wait for step 7 and `serve` for step 9.
+Done when: `gitstat report repo:OWNER/NAME --by month --no-fetch` (or with a `--max-age` the cache is younger than) prints a correct report from a warm cache with no network and no `GITHUB_TOKEN`, and every typed error maps to its documented exit status. Without either flag the report syncs first, since `fetch.max_age` defaults to zero.
 
 ### 6. Flow data and stats
 

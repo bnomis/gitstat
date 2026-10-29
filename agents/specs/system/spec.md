@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -45,7 +45,7 @@ def load_settings(config_path: pathlib.Path | None, overrides: dict[str, object]
 
 ## Architecture
 
-Three layers with one-way dependencies: `reports` imports `stats`, `stats` imports `fetch`, and `fetch` imports nothing from gitstat except `settings` and `version`. `settings` and `version` are leaves: they import nothing from gitstat, and any layer may import them. No layer reaches around the one beneath it.
+Three layers with one-way dependencies: `reports` imports `stats`, `stats` imports `fetch`, and `fetch` imports nothing from gitstat except `settings` and `version`. `settings` and `version` are leaves: they import nothing from gitstat, and any layer may import them. No layer reaches around the one beneath it. `gitstat.cli` sits above the three as the composition root: it builds the `Cache` and `Fetcher`, syncs, calls `compute` and a renderer, so it alone imports every layer (and `gitstat.logs`).
 
 ```text
 GitHub GraphQL / REST
