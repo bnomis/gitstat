@@ -4,7 +4,7 @@
 **Status:** proposed
 **Date:** 2026-10-29
 
-The order in which gitstat is built, with what each step delivers, what it depends on and how to tell it is done. It turns the milestone list in the [system spec](system/spec.md) into steps that [taskdev](../../.agents/claude/skills/taskdev/SKILL.md) can break into tasks. Component detail stays in the component specs; this document only sequences them.
+The order in which gitstat is built, with what each step delivers, what it depends on and how to tell it is done. It sequences the components in the [system spec](system/spec.md) into steps that [taskdev](../../.agents/claude/skills/taskdev/SKILL.md) can break into tasks. Component detail stays in the component specs; this document only sequences them.
 
 ## Principles
 
