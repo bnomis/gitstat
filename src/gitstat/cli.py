@@ -8,7 +8,9 @@ import zoneinfo
 
 import cappa
 import loguru
+import rich.box
 import rich.console
+import rich.table
 
 import gitstat.fetch.auth
 import gitstat.fetch.base
@@ -319,3 +321,52 @@ async def run_report(
         gitstat.reports.base.render_json(result, stdout)
     else:
         gitstat.reports.terminal.render_terminal(result, console)
+
+
+def cache_info_table(info: gitstat.fetch.cache.CacheInfo) -> rich.table.Table:
+    table = rich.table.Table(show_header=False, box=rich.box.SIMPLE, title='Cache')
+    table.add_column(justify='left', no_wrap=True)
+    table.add_column(justify='left')
+    rows: list[tuple[str, str]] = [
+        ('path', str(info.path)),
+        ('size', f'{gitstat.reports.terminal.format_number(info.size_bytes)} bytes'),
+        *sorted(info.identity.items()),
+    ]
+    for key, (recorded, running) in info.differences.items():
+        rows.append((f'differs: {key}', f'{recorded or "nothing"} -> {running or "nothing"}'))
+    if not info.differences:
+        rows.append(('differences', 'none'))
+    if info.version_override_at is not None:
+        rows.append(('version_override_at', info.version_override_at))
+    rows += [
+        ('repositories', gitstat.reports.terminal.format_number(info.repos)),
+        ('commits', gitstat.reports.terminal.format_number(info.commits)),
+        (
+            'last synced',
+            'never' if info.last_synced_at is None else info.last_synced_at.isoformat(),
+        ),
+    ]
+    for name, value in rows:
+        table.add_row(
+            gitstat.reports.terminal.text_cell(name), gitstat.reports.terminal.text_cell(value)
+        )
+    return table
+
+
+def run_cache(
+    command: CacheCommand, settings: gitstat.settings.Settings, console: rich.console.Console
+) -> None:
+    """`cache info` describes the cache, `cache clear` removes it; neither uses the network."""
+    path = settings.fetch.cache_path
+    if command.action == 'info':
+        info = gitstat.fetch.cache.inspect_cache(path)
+        if info is None:
+            console.print(gitstat.reports.terminal.text_cell(f'no cache at {path}'))
+        else:
+            console.print(cache_info_table(info))
+        return
+    removed = gitstat.fetch.cache.clear_cache(path)
+    for deleted in removed:
+        loguru.logger.info(f'Removed {deleted}')
+    if not removed:
+        loguru.logger.info(f'no cache at {path}')

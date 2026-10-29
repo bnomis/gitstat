@@ -14,6 +14,7 @@ import zoneinfo
 import cappa
 import hypothesis
 import hypothesis.strategies as st
+import loguru
 import pytest
 import rich.console
 
@@ -836,3 +837,75 @@ def test_needs_sync(
 def test_a_cache_exactly_max_age_old_is_stale() -> None:
     provenance = {'fetched_at:commits': (NOW - datetime.timedelta(days=1)).isoformat()}
     assert gitstat.cli.needs_sync(provenance, COMMITS, fetch_settings('1d'), False, False, NOW)
+
+
+def run_cache(
+    action: typing.Literal['clear', 'info'], cache_path: pathlib.Path
+) -> tuple[str, list[str]]:
+    """The console output and the info-level log lines of `gitstat cache <action>`."""
+    messages: list[str] = []
+    sink = loguru.logger.add(
+        lambda message: messages.append(message.record['message']), level='INFO'
+    )
+    out = io.StringIO()
+    try:
+        gitstat.cli.run_cache(
+            gitstat.cli.CacheCommand(action),
+            cli_settings(report(), cache_path),
+            rich.console.Console(file=out, width=120, color_system=None, legacy_windows=False),
+        )
+    finally:
+        loguru.logger.remove(sink)
+    return out.getvalue(), messages
+
+
+def test_cache_info_lists_the_counts_and_no_differences(stats_cache_path: pathlib.Path) -> None:
+    output, messages = run_cache('info', stats_cache_path)
+    assert messages == []
+    rows = {line.split()[0]: line.split()[1:] for line in output.splitlines() if line.strip()}
+    assert rows['repositories'] == ['3']
+    assert rows['commits'] == [str(len(tests.fixtures.stats.COMMITS))]
+    assert rows['differences'] == ['none']
+    assert rows['last'] == ['synced', tests.fixtures.stats.BETA_SYNCED_AT.isoformat()]
+    assert rows['schema_version'] == ['1']
+    assert str(stats_cache_path) in output
+    assert 'differs' not in output
+
+
+def test_cache_info_shows_why_a_cache_is_refused_and_leaves_it_alone(
+    stats_cache_path: pathlib.Path,
+) -> None:
+    set_schema_version(stats_cache_path, '0')
+
+    def meta() -> list[tuple[str, str]]:
+        connection = sqlite3.connect(stats_cache_path)
+        try:
+            return connection.execute('SELECT key, value FROM meta ORDER BY key').fetchall()
+        finally:
+            connection.close()
+
+    before = meta()
+    output, _ = run_cache('info', stats_cache_path)
+    assert 'differs: schema_version' in output
+    assert '0 -> 1' in output
+    assert meta() == before
+
+
+def test_cache_info_of_a_missing_path_says_so_and_creates_nothing(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / 'missing' / 'cache.sqlite3'
+    output, _ = run_cache('info', path)
+    assert output.strip() == f'no cache at {path}'
+    assert not path.parent.exists()
+
+
+def test_cache_clear_removes_the_files_then_reports_nothing_to_remove(
+    stats_cache: gitstat.fetch.cache.Cache, stats_cache_path: pathlib.Path
+) -> None:
+    wal = stats_cache_path.with_name(stats_cache_path.name + '-wal')
+    shm = stats_cache_path.with_name(stats_cache_path.name + '-shm')
+    assert wal.exists()
+    _, removed = run_cache('clear', stats_cache_path)
+    assert removed == [f'Removed {stats_cache_path}', f'Removed {wal}', f'Removed {shm}']
+    assert not stats_cache_path.exists()
+    _, again = run_cache('clear', stats_cache_path)
+    assert again == [f'no cache at {stats_cache_path}']
