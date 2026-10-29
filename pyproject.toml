@@ -1,0 +1,51 @@
+[project]
+name = 'gitstat'
+version = '0.1.0'
+description = 'Visualisation and report of statistics from github.com for a user, a repo or an organisation.'
+readme = 'AGENTS.md'
+requires-python = '>=3.14'
+dependencies = [
+    "loguru>=0.7.3",
+]
+
+[build-system]
+requires = ['uv_build>=0.11,<0.12']
+build-backend = 'uv_build'
+
+[tool.uv.build-backend]
+module-name = 'gitstat'
+module-root = 'src'
+
+[tool.ruff]
+extend-exclude = ['.agents', 'agents']
+line-length = 100
+src = ['src']
+
+[tool.ruff.format]
+quote-style = 'single'
+
+[tool.ruff.lint]
+select = ['ANN', 'B', 'E', 'F', 'I', 'UP']
+
+[tool.ruff.lint.isort]
+force-single-line = false
+known-first-party = ['gitstat']
+
+[tool.mypy]
+strict = true
+mypy_path = 'src'
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+testpaths = ['src/tests']
+pythonpath = ['src']
+markers = ['slow: loads large models or processes real datasets']
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.13",
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
