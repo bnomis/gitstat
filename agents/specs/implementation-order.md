@@ -16,17 +16,17 @@ The order in which gitstat is built, with what each step delivers, what it depen
 
 ## Steps
 
-| # | Step | Specs | Depends on |
-|---|------|-------|------------|
-| 1 | Skeleton and settings | [system](system/spec.md) | none |
-| 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 |
-| 3 | Cache and incremental sync for repos and commits | [fetch-and-cache](fetch-and-cache/spec.md) | 2 |
-| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 |
-| 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 |
-| 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 |
-| 7 | Static HTML report | [reports](reports/spec.md) | 5 |
-| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats | 6 |
-| 9 | Local web app | [reports](reports/spec.md) | 7 |
+| # | Step | Specs | Depends on | Status |
+|---|------|-------|------------|--------|
+| 1 | Skeleton and settings | [system](system/spec.md) | none | done |
+| 2 | Fetch core: auth, aiohttp client, rate limits | [fetch-and-cache](fetch-and-cache/spec.md) | 1 | not started |
+| 3 | Cache and incremental sync for repos and commits | [fetch-and-cache](fetch-and-cache/spec.md) | 2 | not started |
+| 4 | Activity stats with bucketing | [stats](stats/spec.md) | 3 | not started |
+| 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | not started |
+| 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | not started |
+| 7 | Static HTML report | [reports](reports/spec.md) | 5 | not started |
+| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats | 6 | not started |
+| 9 | Local web app | [reports](reports/spec.md) | 7 | not started |
 
 Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done.
 
