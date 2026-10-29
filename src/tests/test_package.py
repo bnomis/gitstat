@@ -3,11 +3,15 @@ import importlib
 import pytest
 
 import gitstat
+import gitstat.cli
 import gitstat.fetch
+import gitstat.reports
 import gitstat.stats
 
 
-@pytest.mark.parametrize('name', ['gitstat', 'gitstat.fetch', 'gitstat.reports', 'gitstat.stats'])
+@pytest.mark.parametrize(
+    'name', ['gitstat', 'gitstat.cli', 'gitstat.fetch', 'gitstat.reports', 'gitstat.stats']
+)
 def test_package_imports(name: str) -> None:
     assert importlib.import_module(name).__name__ == name
 
@@ -44,3 +48,26 @@ def test_the_stats_names_are_the_stats_layers() -> None:
     assert gitstat.compute is gitstat.stats.compute
     assert gitstat.StatsRequest is gitstat.stats.StatsRequest
     assert gitstat.StatsResult is gitstat.stats.StatsResult
+
+
+@pytest.mark.parametrize('name', ['BUILT_RESOURCES', 'CacheInfo', 'clear_cache', 'inspect_cache'])
+def test_the_step_5_fetch_names_are_exported(name: str) -> None:
+    assert name in gitstat.fetch.__all__
+    assert getattr(gitstat.fetch, name)
+
+
+@pytest.mark.parametrize('name', gitstat.reports.__all__)
+def test_reports_names_resolve(name: str) -> None:
+    assert getattr(gitstat.reports, name)
+
+
+@pytest.mark.parametrize(
+    'name', ['UsageError', 'render_json', 'render_terminal', 'result_to_dict', 'sparkline']
+)
+def test_reports_names_are_exported(name: str) -> None:
+    assert name in gitstat.reports.__all__
+
+
+def test_the_command_line_entry_points_are_callable() -> None:
+    assert callable(gitstat.cli.main)
+    assert callable(gitstat.cli.run)

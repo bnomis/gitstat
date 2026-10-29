@@ -227,3 +227,9 @@ REPO_ETAG = '"670f8b5e6ec1ff7a0e8f1d4d2e1ab2c4"'
 
 # https://docs.github.com/en/rest/metrics/statistics#a-word-about-caching
 STATS_PENDING = Canned(202)
+
+# Hand-written stand-ins for GET /users/octocat and GET /users/github, trimmed to the two fields
+# `owner_kind` reads; to be re-recorded from the live API.
+# https://docs.github.com/en/rest/users/users#get-a-user
+USER_OK = {'login': 'octocat', 'type': 'User'}
+ORGANIZATION_OK = {'login': 'github', 'type': 'Organization'}

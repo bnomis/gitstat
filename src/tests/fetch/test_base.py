@@ -63,3 +63,8 @@ def test_resources_are_the_spec_names() -> None:
         'star_events',
         'workflow_runs',
     }
+
+
+def test_built_resources_are_the_commits_only_and_a_subset_of_all_resources() -> None:
+    assert gitstat.fetch.base.BUILT_RESOURCES <= gitstat.fetch.base.RESOURCES
+    assert gitstat.fetch.base.BUILT_RESOURCES == frozenset({'commits'})

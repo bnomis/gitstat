@@ -1,6 +1,6 @@
 from .auth import resolve_token
-from .base import RESOURCES, Commit, Fetcher, Repo, Subject, SyncReport
-from .cache import Cache
+from .base import BUILT_RESOURCES, RESOURCES, Commit, Fetcher, Repo, Subject, SyncReport
+from .cache import Cache, CacheInfo, clear_cache, inspect_cache
 from .client import GitHubClient
 from .errors import (
     AuthError,
@@ -13,9 +13,11 @@ from .errors import (
 )
 
 __all__ = [
+    'BUILT_RESOURCES',
     'RESOURCES',
     'AuthError',
     'Cache',
+    'CacheInfo',
     'CacheVersionError',
     'Commit',
     'FetchError',
@@ -28,5 +30,7 @@ __all__ = [
     'StatsPendingError',
     'Subject',
     'SyncReport',
+    'clear_cache',
+    'inspect_cache',
     'resolve_token',
 ]

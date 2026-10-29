@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import datetime
 import pathlib
@@ -10,6 +11,8 @@ import gitstat.fetch.base
 import gitstat.fetch.cache
 import gitstat.fetch.client
 import gitstat.settings
+import gitstat.stats
+import gitstat.stats.base
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 import tests.fixtures.settings
@@ -126,6 +129,42 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[gitstat.fetch.cache.C
 
 
 @pytest.fixture
+def stats_cache_path(stats_cache: gitstat.fetch.cache.Cache) -> pathlib.Path:
+    return pathlib.Path(stats_cache.connection.execute('PRAGMA database_list').fetchone()[2])
+
+
+@pytest.fixture
 def stats_fetcher(stats_cache: gitstat.fetch.cache.Cache) -> gitstat.fetch.base.Fetcher:
     """A fetcher over `stats_cache`, never entered, so any request fails."""
     return gitstat.fetch.base.Fetcher('test-token', stats_cache, gitstat.settings.FetchSettings())
+
+
+def compute_stats(
+    fetcher: gitstat.fetch.base.Fetcher,
+    subject: gitstat.fetch.base.Subject,
+    request: gitstat.stats.base.StatsRequest,
+) -> gitstat.stats.base.StatsResult:
+    return asyncio.run(
+        gitstat.stats.compute(subject, fetcher, request, clock=lambda: tests.fixtures.stats.NOW)
+    )
+
+
+@pytest.fixture
+def org_result(stats_fetcher: gitstat.fetch.base.Fetcher) -> gitstat.stats.base.StatsResult:
+    """The stats fixture's org by month with an author breakdown, from the default groups."""
+    request = gitstat.stats.base.StatsRequest(
+        since=tests.fixtures.stats.SINCE, until=tests.fixtures.stats.UNTIL, by_author=True
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+@pytest.fixture
+def repo_total_result(stats_fetcher: gitstat.fetch.base.Fetcher) -> gitstat.stats.base.StatsResult:
+    """The stats fixture's repo octo-org/alpha as one bucket."""
+    request = gitstat.stats.base.StatsRequest(
+        granularity=gitstat.stats.base.Granularity.TOTAL,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+    )
+    subject = gitstat.fetch.base.Subject('repo', 'octo-org', 'alpha')
+    return compute_stats(stats_fetcher, subject, request)

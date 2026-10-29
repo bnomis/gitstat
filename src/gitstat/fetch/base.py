@@ -18,6 +18,7 @@ if typing.TYPE_CHECKING:
 RESOURCES = frozenset(
     {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
+BUILT_RESOURCES = frozenset({'commits'})
 UNBUILT_RESOURCE_STEPS = {
     'issues': 6,
     'pull_requests': 6,
@@ -242,6 +243,20 @@ class Fetcher:
         if response.etag is not None:
             await self.db(self.cache.store_etag, url, response.etag, response.data)
         return response.data
+
+    async def owner_kind(self, login: str) -> typing.Literal['user', 'org']:
+        """Whether `login` is a user or an organisation, from GitHub's own `type` field; one
+        request, nothing cached."""
+        response = await self.client.rest_get(f'/users/{login}')
+        body = response.data
+        kind = body.get('type') if isinstance(body, dict) else None
+        if kind == 'User':
+            return 'user'
+        if kind == 'Organization':
+            return 'org'
+        raise gitstat.fetch.errors.NotFoundError(
+            f'{login} is not a user or an organisation (type: {kind!r})'
+        )
 
     async def list_repos(self, subject: Subject) -> list[Repo]:
         """The subject's repositories from GitHub, after the fork and archived filters."""
@@ -472,7 +487,7 @@ class Fetcher:
         unknown = sorted(resources - RESOURCES)
         if unknown:
             raise ValueError(f'unknown resources: {", ".join(unknown)}')
-        unbuilt = sorted(resources - {'commits'})
+        unbuilt = sorted(resources - BUILT_RESOURCES)
         if unbuilt:
             steps = ', '.join(f'{name} (step {UNBUILT_RESOURCE_STEPS[name]})' for name in unbuilt)
             raise NotImplementedError(f'not built yet: {steps}')

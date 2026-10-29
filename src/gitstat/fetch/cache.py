@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -63,6 +64,17 @@ def expected_identity() -> dict[str, str]:
         if name.isupper() and isinstance(value, str):
             identity[f'query:{name}'] = hashlib.sha256(value.encode()).hexdigest()
     return identity
+
+
+def identity_differences(
+    recorded: dict[str, str], expected: dict[str, str]
+) -> dict[str, tuple[str | None, str | None]]:
+    """Each key whose recorded and expected values differ, as (recorded, expected)."""
+    return {
+        key: (recorded.get(key), expected.get(key))
+        for key in sorted(recorded.keys() | expected.keys())
+        if recorded.get(key) != expected.get(key)
+    }
 
 
 def to_text(value: datetime.datetime) -> str:
@@ -153,11 +165,7 @@ class Cache:
                     'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', expected.items()
                 )
                 return
-            differences = {
-                key: (recorded.get(key), expected.get(key))
-                for key in sorted(recorded.keys() | expected.keys())
-                if recorded.get(key) != expected.get(key)
-            }
+            differences = identity_differences(recorded, expected)
             if not differences:
                 return
             if not ignore_version:
@@ -337,3 +345,67 @@ class Cache:
                 'INSERT OR REPLACE INTO etags (url, etag, body) VALUES (?, ?, ?)',
                 (url, etag, json.dumps(body)),
             )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CacheInfo:
+    path: pathlib.Path
+    size_bytes: int
+    identity: dict[str, str]
+    differences: dict[str, tuple[str | None, str | None]]
+    version_override_at: str | None
+    repos: int
+    commits: int
+    last_synced_at: datetime.datetime | None
+
+
+def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
+    """What `path` holds, read with plain SELECTs on its own connection, or None when it does
+    not exist. It creates, migrates and stamps nothing, so a cache `Cache.open` refuses can still
+    be inspected; a table absent from the file counts as 0 rows."""
+    if not path.exists():
+        return None
+    connection = sqlite3.connect(path)
+    try:
+        tables = {
+            name
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+
+        def scalar(table: str, query: str) -> object:
+            return connection.execute(query).fetchone()[0] if table in tables else None
+
+        meta: dict[str, str] = (
+            dict(connection.execute('SELECT key, value FROM meta').fetchall())
+            if 'meta' in tables
+            else {}
+        )
+        last_synced = scalar('sync_state', 'SELECT MAX(synced_at) FROM sync_state')
+        repos = scalar('repos', 'SELECT COUNT(*) FROM repos WHERE missing = 0')
+        commits = scalar('commits', 'SELECT COUNT(*) FROM commits')
+    finally:
+        connection.close()
+    identity = {key: value for key, value in meta.items() if key != OVERRIDE_KEY}
+    wal = path.with_name(path.name + '-wal')
+    return CacheInfo(
+        path=path,
+        size_bytes=path.stat().st_size + (wal.stat().st_size if wal.exists() else 0),
+        identity=identity,
+        differences=identity_differences(identity, expected_identity()),
+        version_override_at=meta.get(OVERRIDE_KEY),
+        repos=int(str(repos or 0)),
+        commits=int(str(commits or 0)),
+        last_synced_at=None if last_synced is None else from_text(str(last_synced)),
+    )
+
+
+def clear_cache(path: pathlib.Path) -> list[pathlib.Path]:
+    """Delete `path` and its `-wal` and `-shm` files where present; return those deleted."""
+    deleted: list[pathlib.Path] = []
+    for candidate in (path, path.with_name(path.name + '-wal'), path.with_name(path.name + '-shm')):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        deleted.append(candidate)
+    return deleted
