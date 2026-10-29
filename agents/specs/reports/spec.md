@@ -1,6 +1,6 @@
 # Reports
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -51,6 +51,7 @@ gitstat cache   clear|info
 ## Error handling
 
 - `UsageError` (bad target, bad date, `--by-author` with a user target): exit status 2 with a one-line message.
+- `SettingsError` (bad config file, missing named config file, bad flag value): exit status 2 with a one-line message.
 - `AuthError`, `CacheVersionError`, `EmptySubjectError`, `InvalidRangeError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `UnknownGroupError`: caught at `main`, logged with `loguru.logger.error`, exit status 1. The message states the fix (set `GITHUB_TOKEN`, wait until the reset time, clear the cache).
 - `OSError` writing `--out`: exit status 1, no partial file left behind (write to a temp file, then rename).
 - The web app returns HTTP 400 for invalid query parameters and 502 with the upstream message when GitHub fails; it never shows a traceback.
@@ -79,7 +80,7 @@ gitstat cache   clear|info
 | `report.web_host` | `str` | `'127.0.0.1'` | Web app bind address |
 | `report.web_port` | `int` | `8000` | Web app port |
 
-Settings load from a TOML file (`~/.config/gitstat/config.toml`) and are overridden by flags. The token is deliberately not a setting.
+Settings load from a JSON file (`~/.config/gitstat/config.json`) and are overridden by flags. The token is deliberately not a setting.
 
 ## External dependencies
 
