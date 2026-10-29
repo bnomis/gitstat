@@ -50,7 +50,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 1: Records and subject
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** API (`Subject`, `RESOURCES`, `Repo`, `Commit`, `SyncReport`); Module location (`base.py`)
@@ -87,7 +87,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 2: Cache file, schema and identity
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`Cache.open`, `close`, `identity`, `SCHEMA_VERSION`); Error handling (`CacheVersionError`); Implementation (Cache; Cache identity; Transport: one connection, `threading.Lock`)
@@ -124,13 +124,14 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Depends on Task 1
 - The override and error follow `.agents/claude/rules/versions.md`: record, check where saved work meets the running code, refuse a mismatch.
 - `sqlite3` is stdlib; no dependency is added.
+- Built 2026-10-29. `CacheVersionError` takes `dict[str, tuple[str | None, str | None]]`: a key can also be recorded and no longer in the running code (a removed query), so the running value may be `None` too. `ignore_version` writes `version_override_at` only when it bypasses a difference. The no-token check could not run here because no fetcher existed yet; it is in Task 10's tests.
 - Key files: `src/gitstat/fetch/cache.py`, `src/gitstat/fetch/errors.py`, `src/tests/fetch/test_cache.py`, `src/tests/fetch/test_errors.py`
 
 ---
 
 ## Task 3: Cache reads and atomic writes
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`Cache.upsert_repos`, `read_repos`, `sync_state`, `write_commits`, `read_commits`, `etag`, `store_etag`); Implementation (Incremental sync 1 and 4; Cache: ETags)
@@ -172,7 +173,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 4: Queries and fixtures for repos and commits
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Implementation (GraphQL cost control; Incremental sync 1 and 2: the fields read; Testing)
@@ -211,13 +212,15 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Changing a query text changes the cache identity (Task 2); that is intended.
 - `test_client.py` replays `OWNER_REPOSITORIES_OK`; keep its assertions passing when the fixture gains fields.
 - GitHub documentation was not reachable from the planning session, so the field names above are from the documentation as known; a recorded response or a GraphQL error naming an unknown field settles any difference, and the query is corrected to match.
+- Deviation, 2026-10-29: the build session's `GITHUB_TOKEN` is refused by `api.github.com` (GraphQL answers 403 "not available from Claude Code sessions", REST 403, and the live tests get 401), so every fixture is written from GitHub's documented shapes with the URL beside it, and its commit ids are synthetic. `OWNER_REPOSITORIES_OK`, `REPOSITORY_OK`, `COMMIT_HISTORY_OK`, `COMPARE_AHEAD`, `COMMIT_NODES_OK` and `REPO` still need recording from a session with network access; the module docstring says so. The query field names are from the documentation as known and unconfirmed against the live schema.
+- The fixtures module also holds `repo_node`, `history_node`, `compare_commit` and `nodes_response`, and `src/tests/fixtures/fetch/upstream.py` holds a fake GitHub (`Upstream`) that answers the queries and the compare call from per-repo histories, so the sync tests change the upstream between runs instead of ordering canned replies.
 - Key files: `src/gitstat/fetch/queries.py`, `src/tests/fixtures/fetch/responses.py`, `src/tests/fetch/test_queries.py`
 
 ---
 
 ## Task 5: `Fetcher` shell and cached REST
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** API (`Fetcher.__init__`, `__aenter__`, `__aexit__`); Implementation (Transport: one session, `asyncio.to_thread`, `fetch.workers`; Cache: ETag revalidation)
@@ -257,7 +260,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 6: Repo listing and the skip rule
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.repos`); Implementation (Incremental sync 1); Settings (`include_forks`, `include_archived`); Error handling (`NotFoundError`)
@@ -298,7 +301,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 7: Commit backfill and `commits()`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.commits`); Implementation (Incremental sync 2, `commits`: first sync; 4 atomic advance); Implementation (GraphQL cost control)
@@ -337,7 +340,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 8: Incremental commits by compare
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Implementation (Incremental sync 2, `commits`: compare from the stored head; GraphQL cost control: `nodes(ids:)`)
@@ -373,13 +376,14 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Depends on Task 7
 - Implements review-1.md Decision 1, answered A (compare from the stored head) on 2026-10-29.
 - `rest_get` takes a path, so the `page` parameter is passed explicitly rather than following `next_url`.
+- Deviation, 2026-10-29: when the listed head equals the stored head, `update_commits` still writes the new `pushed_at`/`updated_at` into `sync_state` (no commit rows), instead of writing nothing. A push to another branch, or a settings change on GitHub, moves those values without moving the head; writing nothing would leave the repo never skipped. It is the same write as the `identical` case, and no request is sent either way.
 - Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
 ## Task 9: Rewritten history and full refresh
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Implementation (Incremental sync 2, `commits`: rewritten history; 5 `full_refresh`); implementation order step 3 "Done when" (a simulated force-push triggers a full refetch)
@@ -416,7 +420,7 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 ## Task 10: `sync()` across repos
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`Fetcher.sync`, `SyncReport`); Implementation (Transport: `fetch.workers` semaphore; Incremental sync 1 and 4); implementation order step 3 "Done when" (a second run fetches nothing; an interrupted run resumes)
@@ -455,13 +459,15 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 
 - Depends on Task 9
 - "A second run fetches nothing" in the implementation order means no per-repo requests: the spec re-reads the repo list on every sync.
+- `Fetcher.sync` unwraps the task group's `ExceptionGroup` and raises its first exception, so callers still catch `FetchError` and `aiohttp.ClientResponseError` directly. The no-token check from Task 2 is `test_no_value_in_the_cache_file_holds_the_token`, which reads every table and the raw cache and WAL files.
+- `src/tests/fixtures/fetch/server.py` gained `Canned.delay`, a `default` responder and `max_in_flight`, with tests in `src/tests/fetch/test_server.py`.
 - Key files: `src/gitstat/fetch/base.py`, `src/tests/fetch/test_fetcher.py`, `src/tests/fixtures/fetch/server.py`
 
 ---
 
 ## Task 11: Live check of line totals
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Implementation (Testing: the opt-in live tests; GraphQL cost control: `stats/code_frequency` in the live test only); implementation order step 3 "Done when" (line totals match `stats/code_frequency`)
@@ -494,13 +500,14 @@ The spec's `**Status:**` is not changed by this list: pull requests, issues, rel
 - Depends on Task 10
 - Implements review-1.md Decision 2, answered A (live test only) on 2026-10-29.
 - GitHub returns 202 while it computes the statistics; step 2's `stats_retries` handling waits for it.
+- Run 2026-10-29: not run against GitHub. `pytest -m live -rs src/tests/fetch/test_live.py` in the build session fails with `AuthError` (401), because the session's token is refused by `api.github.com`, the same refusal that stops Task 4's recordings. The test is unrun, so its exact totals comparison is unverified; the CI `live` job on the PR is the first real run. If it fails on a difference, this task is `blocked` for the user (the third subtask), not loosened.
 - Key files: `src/tests/fetch/test_live.py`
 
 ---
 
 ## Task 12: Exports and closing checks
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location; API; system spec API (`Subject`, `Fetcher` re-exported from `gitstat`); implementation order step 3 "Done when"

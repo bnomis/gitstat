@@ -5,6 +5,8 @@ import typing
 
 import pytest
 
+import gitstat.fetch.base
+import gitstat.fetch.cache
 import gitstat.fetch.client
 import gitstat.settings
 import tests.fixtures.fetch.responses
@@ -12,6 +14,7 @@ import tests.fixtures.fetch.server
 import tests.fixtures.settings
 
 MakeClient = typing.Callable[..., gitstat.fetch.client.GitHubClient]
+MakeFetcher = typing.Callable[..., gitstat.fetch.base.Fetcher]
 
 
 @pytest.fixture
@@ -61,3 +64,28 @@ def make_client(sleeps: Sleeps, fetch_settings: gitstat.settings.FetchSettings) 
         )
 
     return make
+
+
+@pytest.fixture
+def make_fetcher(
+    tmp_path: pathlib.Path,
+    make_client: MakeClient,
+    fetch_settings: gitstat.settings.FetchSettings,
+) -> typing.Iterator[MakeFetcher]:
+    caches: list[gitstat.fetch.cache.Cache] = []
+
+    def make(
+        server: tests.fixtures.fetch.server.ReplayServer,
+        settings: gitstat.settings.FetchSettings = fetch_settings,
+        cache: gitstat.fetch.cache.Cache | None = None,
+    ) -> gitstat.fetch.base.Fetcher:
+        if cache is None:
+            cache = gitstat.fetch.cache.Cache.open(tmp_path / 'cache' / 'cache.sqlite3')
+            caches.append(cache)
+        return gitstat.fetch.base.Fetcher(
+            'test-token', cache, settings, client=make_client(server, settings)
+        )
+
+    yield make
+    for cache in caches:
+        cache.close()
