@@ -1,5 +1,5 @@
 from .auth import resolve_token
-from .base import RESOURCES, Commit, Fetcher, Repo, Subject, SyncReport
+from .base import BUILT_RESOURCES, RESOURCES, Commit, Fetcher, Repo, Subject, SyncReport
 from .cache import Cache
 from .client import GitHubClient
 from .errors import (
@@ -13,6 +13,7 @@ from .errors import (
 )
 
 __all__ = [
+    'BUILT_RESOURCES',
     'RESOURCES',
     'AuthError',
     'Cache',

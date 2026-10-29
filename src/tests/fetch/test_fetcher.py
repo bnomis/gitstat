@@ -1068,3 +1068,76 @@ def test_no_value_in_the_cache_file_holds_the_token(
         connection.close()
     for candidate in tmp_path.rglob('cache.sqlite3*'):
         assert b'test-token' not in candidate.read_bytes(), candidate.name
+
+
+def cache_rows(fetcher: gitstat.fetch.base.Fetcher) -> list[tuple[str, int]]:
+    tables = [
+        row[0]
+        for row in fetcher.cache.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        )
+    ]
+    return [
+        (table, fetcher.cache.connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0])
+        for table in tables
+    ]
+
+
+@pytest.mark.parametrize(
+    ('login', 'body', 'expected'),
+    [
+        ('octocat', tests.fixtures.fetch.responses.USER_OK, 'user'),
+        ('github', tests.fixtures.fetch.responses.ORGANIZATION_OK, 'org'),
+    ],
+)
+def test_owner_kind_reads_the_type_with_one_request_and_writes_no_cache_rows(
+    make_fetcher: tests.conftest.MakeFetcher, login: str, body: dict[str, str], expected: str
+) -> None:
+    async def scenario() -> tuple[str, list[str], list[tuple[str, int]], list[tuple[str, int]]]:
+        routes = {('GET', f'/users/{login}'): [Canned(200, body)]}
+        async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
+            async with make_fetcher(server) as fetcher:
+                before = cache_rows(fetcher)
+                kind = await fetcher.owner_kind(login)
+                paths = [f'{r.method} {r.path}' for r in server.received]
+                return kind, paths, before, cache_rows(fetcher)
+
+    kind, paths, before, after = asyncio.run(scenario())
+    assert kind == expected
+    assert paths == [f'GET /users/{login}']
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    'canned',
+    [
+        Canned(404, tests.fixtures.fetch.responses.NOT_FOUND),
+        Canned(200, {'login': 'dependabot', 'type': 'Bot'}),
+        Canned(200, {'login': 'octocat'}),
+        Canned(200, ['not', 'an', 'object']),
+    ],
+)
+def test_owner_kind_raises_not_found_for_anything_that_is_not_a_user_or_an_organisation(
+    make_fetcher: tests.conftest.MakeFetcher, canned: Canned
+) -> None:
+    async def scenario() -> None:
+        routes = {('GET', '/users/nobody'): [canned]}
+        async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
+            async with make_fetcher(server) as fetcher:
+                await fetcher.owner_kind('nobody')
+
+    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+        asyncio.run(scenario())
+
+
+def test_owner_kind_names_the_login_and_type_in_its_error(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    async def scenario() -> None:
+        routes = {('GET', '/users/robot'): [Canned(200, {'login': 'robot', 'type': 'Bot'})]}
+        async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
+            async with make_fetcher(server) as fetcher:
+                await fetcher.owner_kind('robot')
+
+    with pytest.raises(gitstat.fetch.errors.NotFoundError, match="robot.*'Bot'"):
+        asyncio.run(scenario())
