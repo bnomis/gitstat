@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -78,7 +78,7 @@ Rules that hold across the system:
 Errors are typed in the layer that detects them and presented only at the edge:
 
 - `settings` raises `SettingsError`.
-- `fetch` raises `AuthError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `CacheVersionError`.
+- `fetch` raises `AuthError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `GraphQLError`, `CacheVersionError`, all subclasses of `FetchError`.
 - `stats` raises `InvalidRangeError`, `UnknownGroupError`, `EmptySubjectError`.
 - `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for `UsageError` and `SettingsError`) and in the web app's exception handlers (HTTP 400 or 502).
 - Unexpected exceptions propagate and are logged with `loguru.logger.exception`.
