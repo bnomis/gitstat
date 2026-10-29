@@ -1,6 +1,6 @@
 import re
 
-import gitstat.fetch.queries
+import wambatic.fetch.queries
 
 CONNECTION = re.compile(r'\b(?:history|repositories)\(([^)]*)\)')
 
@@ -8,7 +8,7 @@ CONNECTION = re.compile(r'\b(?:history|repositories)\(([^)]*)\)')
 def all_queries() -> dict[str, str]:
     return {
         name: value
-        for name, value in vars(gitstat.fetch.queries).items()
+        for name, value in vars(wambatic.fetch.queries).items()
         if name.isupper() and isinstance(value, str)
     }
 
@@ -31,9 +31,9 @@ def test_every_connection_asks_for_a_hundred_nodes() -> None:
 
 def test_owner_repositories_are_ordered_by_latest_push() -> None:
     assert 'orderBy: {field: PUSHED_AT, direction: DESC}' in (
-        gitstat.fetch.queries.OWNER_REPOSITORIES
+        wambatic.fetch.queries.OWNER_REPOSITORIES
     )
 
 
 def test_commit_nodes_takes_ids() -> None:
-    assert 'nodes(ids: $ids)' in gitstat.fetch.queries.COMMIT_NODES
+    assert 'nodes(ids: $ids)' in wambatic.fetch.queries.COMMIT_NODES

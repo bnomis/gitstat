@@ -35,27 +35,27 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Complexity:** medium
 **Spec Reference:** Module location; Implementation (Stack, Testing); External dependencies
 
-**Technical Goal:** Create the Python project so that every later task has uv, ruff, mypy, pytest, hypothesis and pre-commit to run, and the `src/gitstat/` and `src/tests/` layout the shared Python rules require.
+**Technical Goal:** Create the Python project so that every later task has uv, ruff, mypy, pytest, hypothesis and pre-commit to run, and the `src/wambatic/` and `src/tests/` layout the shared Python rules require.
 
 **Subtasks:**
 
 - [ ] Check the maintenance status of ruff, mypy, pytest, hypothesis, pre-commit and loguru per `.agents/claude/rules/tools-and-libraries.md` (PyPI latest release, GitHub archived or deprecated flags, open advisories); stop for the user if any check fails
-- [ ] `uv init --lib` equivalent by hand: `pyproject.toml` with `name = 'gitstat'`, `requires-python = '>=3.14'`, src layout build backend, and `.python-version` pinned with `uv python pin 3.14`
+- [ ] `uv init --lib` equivalent by hand: `pyproject.toml` with `name = 'wambatic'`, `requires-python = '>=3.14'`, src layout build backend, and `.python-version` pinned with `uv python pin 3.14`
 - [ ] `uv add loguru`; `uv add --dev hypothesis mypy pre-commit pytest ruff`; commit the generated `uv.lock`
-- [ ] Add `[tool.ruff]` (line length, single quotes in `[tool.ruff.format]`, isort with `known-first-party = ['gitstat']`, rule set including `I`, `UP`, `B`, `ANN`)
+- [ ] Add `[tool.ruff]` (line length, single quotes in `[tool.ruff.format]`, isort with `known-first-party = ['wambatic']`, rule set including `I`, `UP`, `B`, `ANN`)
 - [ ] Add `[tool.mypy]` with `strict = true` and `mypy_path = 'src'`
 - [ ] Add `[tool.pytest.ini_options]` with `testpaths = ['src/tests']`, `pythonpath = ['src']` and the `slow` marker registered
 - [ ] Add `.pre-commit-config.yaml` with ruff (check and format), mypy and the standard whitespace and end-of-file hooks
 - [ ] Add `bin/activate.sh` that activates `.venv` and prepends `src/` to `PYTHONPATH`, per `.agents/claude/rules/python/environment.md`
-- [ ] Create `src/gitstat/__init__.py` (empty `__all__`), `src/gitstat/fetch/__init__.py`, `src/gitstat/stats/__init__.py`, `src/gitstat/reports/__init__.py`, `src/tests/__init__.py`, `src/tests/conftest.py` and `src/tests/fixtures/__init__.py`
-- [ ] Write `src/tests/test_package.py` asserting that `gitstat`, `gitstat.fetch`, `gitstat.stats` and `gitstat.reports` import
+- [ ] Create `src/wambatic/__init__.py` (empty `__all__`), `src/wambatic/fetch/__init__.py`, `src/wambatic/stats/__init__.py`, `src/wambatic/reports/__init__.py`, `src/tests/__init__.py`, `src/tests/conftest.py` and `src/tests/fixtures/__init__.py`
+- [ ] Write `src/tests/test_package.py` asserting that `wambatic`, `wambatic.fetch`, `wambatic.stats` and `wambatic.reports` import
 - [ ] Add `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/` and `.hypothesis/` to `.gitignore`
 - [ ] Run `pre-commit install`
 
 **Acceptance Criteria:**
 
 - [ ] `uv sync` on a fresh clone creates `.venv` with no resolver errors
-- [ ] `source bin/activate.sh && python -c 'import gitstat'` succeeds from the repository root
+- [ ] `source bin/activate.sh && python -c 'import wambatic'` succeeds from the repository root
 - [ ] `pytest --co -q src/tests/test_package.py` collects the test and it passes
 
 **Definition of Done:**
@@ -71,28 +71,28 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Creating `uv.lock` and `.pre-commit-config.yaml` is the explicit instruction the shared coding standards require before those files are touched.
 - Runtime libraries other than loguru (aiohttp, Rich, Plotly, FastAPI, uvicorn, cappa) are added by the component task lists that first use them, each after its own maintenance check.
-- Key files: `pyproject.toml`, `.python-version`, `uv.lock`, `.pre-commit-config.yaml`, `bin/activate.sh`, `src/gitstat/`, `src/tests/`
+- Key files: `pyproject.toml`, `.python-version`, `uv.lock`, `.pre-commit-config.yaml`, `bin/activate.sh`, `src/wambatic/`, `src/tests/`
 
 ---
 
-## Task 2: Single source of the gitstat version
+## Task 2: Single source of the wambatic version
 
 **Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** Architecture ("Provenance travels with the data"); Settings (Version identity)
 
-**Technical Goal:** Give the cache identity and `StatsResult.provenance` one place to read the gitstat version from, so both record the same value, as the shared versions rule requires.
+**Technical Goal:** Give the cache identity and `StatsResult.provenance` one place to read the wambatic version from, so both record the same value, as the shared versions rule requires.
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/version.py` with `VERSION: str` read from `importlib.metadata.version('gitstat')`; the module imports nothing from gitstat
+- [ ] Add `src/wambatic/version.py` with `VERSION: str` read from `importlib.metadata.version('wambatic')`; the module imports nothing from wambatic
 - [ ] Write `src/tests/test_version.py`: `VERSION` equals the `[project] version` in `pyproject.toml` (read with `tomllib`; this is the packaging file, not the user config) and is a non-empty string
 
 **Acceptance Criteria:**
 
-- [ ] `gitstat.version.VERSION` matches `pyproject.toml`
-- [ ] `src/gitstat/version.py` has no `import gitstat` statement
+- [ ] `wambatic.version.VERSION` matches `pyproject.toml`
+- [ ] `src/wambatic/version.py` has no `import wambatic` statement
 
 **Definition of Done:**
 
@@ -107,7 +107,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Depends on Task 1
 - The spec makes `settings` and `version` leaves that any layer may import (Architecture; Settings, Version identity).
-- Key files: `src/gitstat/version.py`, `src/tests/test_version.py`
+- Key files: `src/wambatic/version.py`, `src/tests/test_version.py`
 
 ---
 
@@ -122,12 +122,12 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/logs.py` with `configure_logging(level: str) -> None` that removes loguru's default sink and adds one stderr sink at `level`
+- [ ] Add `src/wambatic/logs.py` with `configure_logging(level: str) -> None` that removes loguru's default sink and adds one stderr sink at `level`
 - [ ] Write `src/tests/test_logs.py`: after `configure_logging('WARNING')`, an `info` message does not reach the sink and a `warning` does (capture with a list sink or `capsys`)
 
 **Acceptance Criteria:**
 
-- [ ] Calling `configure_logging` twice leaves exactly one gitstat sink
+- [ ] Calling `configure_logging` twice leaves exactly one wambatic sink
 - [ ] No module imports stdlib `logging`
 
 **Definition of Done:**
@@ -144,7 +144,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 - Depends on Task 1
 - Token redaction in log records belongs to the fetch-and-cache lists (implementation order step 2); this task adds no filter.
 - `cli.main` calls `configure_logging`; that call is added by the reports lists.
-- Key files: `src/gitstat/logs.py`, `src/tests/test_logs.py`
+- Key files: `src/wambatic/logs.py`, `src/tests/test_logs.py`
 
 ---
 
@@ -159,7 +159,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 **Subtasks:**
 
-- [ ] Add `src/gitstat/settings.py` with `FetchSettings` (`cache_path`, `full_refresh_after`, `include_archived`, `include_forks`, `max_age`, `max_retries`, `on_rate_limit`, `overlap`, `stats_retries`, `workers`), `StatsSettings` (`bot_logins`, `deploy_workflow`, `exclude_merge_commits`, `failure_window`, `hotfix_labels`, `timezone`) and `ReportSettings` (`allow_remote`, `format`, `html_theme`, `out_dir`, `web_host`, `web_port`), each `@dataclasses.dataclass(frozen=True, slots=True)`, fields in alphabetical order
+- [ ] Add `src/wambatic/settings.py` with `FetchSettings` (`cache_path`, `full_refresh_after`, `include_archived`, `include_forks`, `max_age`, `max_retries`, `on_rate_limit`, `overlap`, `stats_retries`, `workers`), `StatsSettings` (`bot_logins`, `deploy_workflow`, `exclude_merge_commits`, `failure_window`, `hotfix_labels`, `timezone`) and `ReportSettings` (`allow_remote`, `format`, `html_theme`, `out_dir`, `web_host`, `web_port`), each `@dataclasses.dataclass(frozen=True, slots=True)`, fields in alphabetical order
 - [ ] Use `tuple[str, ...]` for the two list settings so the frozen dataclass stays hashable and immutable, defaulting through `dataclasses.field(default=...)`
 - [ ] Add `Settings` with `fetch`, `report` and `stats` fields defaulting via `default_factory`
 - [ ] Write `src/tests/test_settings.py` with one known-good test per component asserting every default against the spec tables
@@ -183,8 +183,8 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Depends on Task 1
 - The stats spec types `bot_logins` and `hotfix_labels` as `list[str]`; a tuple is the immutable equivalent in a frozen dataclass and loads from a JSON array unchanged.
-- `settings.py` imports nothing from gitstat, so `fetch` may import it.
-- Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`
+- `settings.py` imports nothing from wambatic, so `fetch` may import it.
+- Key files: `src/wambatic/settings.py`, `src/tests/test_settings.py`
 
 ---
 
@@ -195,22 +195,22 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Complexity:** medium
 **Spec Reference:** API (`load_settings`); Settings (Config file, Overrides, Values, Errors)
 
-**User Story:** As a gitstat user, I want defaults, my config file and my command-line flags layered with the later one winning, so that I set a preference once and override it for a single run.
+**User Story:** As a wambatic user, I want defaults, my config file and my command-line flags layered with the later one winning, so that I set a preference once and override it for a single run.
 
 **Subtasks:**
 
-- [ ] Add `SettingsError(Exception)` to `src/gitstat/settings.py`
-- [ ] Implement `load_settings(config_path, overrides)` in `src/gitstat/settings.py`: resolve the file as `config_path`, else `GITSTAT_CONFIG`, else `~/.config/gitstat/config.json`; read it with `json.load`; a missing default file means defaults, a missing file named by `config_path` or `GITSTAT_CONFIG` raises `SettingsError`; apply its `fetch`, `stats` and `report` objects; then merge `overrides`, which has the same nested shape (`{'fetch': {'workers': 8}}`), section by section
+- [ ] Add `SettingsError(Exception)` to `src/wambatic/settings.py`
+- [ ] Implement `load_settings(config_path, overrides)` in `src/wambatic/settings.py`: resolve the file as `config_path`, else `WAMBATIC_CONFIG`, else `~/.config/wambatic/config.json`; read it with `json.load`; a missing default file means defaults, a missing file named by `config_path` or `WAMBATIC_CONFIG` raises `SettingsError`; apply its `fetch`, `stats` and `report` objects; then merge `overrides`, which has the same nested shape (`{'fetch': {'workers': 8}}`), section by section
 - [ ] Add `parse_duration(text: str) -> datetime.timedelta` accepting a non-negative integer and one unit from `s`, `m`, `h`, `d`, `w` (`'30d'`, `'1h'`, `'0s'`), raising `SettingsError` otherwise; it is public so the CLI flags reuse it
 - [ ] Convert values to field types: durations with `parse_duration`, JSON arrays of strings to tuples, `Path` with `expanduser()` only (no `$VAR` expansion, relative paths left relative), and `Literal` values checked against their allowed set; any wrong type raises `SettingsError` naming the key, never echoing the value
-- [ ] Write tests in `src/tests/test_settings.py`: a known-good JSON fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; a missing named file raises `SettingsError`; `GITSTAT_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value, a wrong type and a malformed duration (`'30'`, `'1.5h'`, `'-1d'`, `'3y'`) each raise `SettingsError`; `'~/x'` becomes `Path.home() / 'x'` and `'$HOME/x'` stays literal
+- [ ] Write tests in `src/tests/test_settings.py`: a known-good JSON fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; a missing named file raises `SettingsError`; `WAMBATIC_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value, a wrong type and a malformed duration (`'30'`, `'1.5h'`, `'-1d'`, `'3y'`) each raise `SettingsError`; `'~/x'` becomes `Path.home() / 'x'` and `'$HOME/x'` stays literal
 - [ ] Write a hypothesis test (`@settings(max_examples=20, deadline=10000)`) that for any generated `fetch.workers` values in file and override, the override wins, and with no override the file wins
 - [ ] Write a hypothesis test (`@settings(max_examples=20, deadline=10000)`) that `parse_duration(f'{n}{unit}')` equals the expected `timedelta` for any non-negative `n` and unit
 
 **Acceptance Criteria:**
 
 - [ ] Defaults, then file, then overrides; later wins, for every section
-- [ ] `GITSTAT_CONFIG` selects the file when `config_path` is `None`
+- [ ] `WAMBATIC_CONFIG` selects the file when `config_path` is `None`
 - [ ] A value outside a `Literal` set raises `SettingsError` naming the key and the allowed values
 - [ ] A missing named config file raises `SettingsError`; a missing default file does not
 
@@ -227,7 +227,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Depends on Task 4
 - `SettingsError` lives in `settings.py`, not with `UsageError` in `reports`, because `fetch` imports `settings`; `cli.main` maps it to exit status 2 (reports lists).
-- Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`, `src/tests/fixtures/settings.py`, `src/tests/conftest.py`
+- Key files: `src/wambatic/settings.py`, `src/tests/test_settings.py`, `src/tests/fixtures/settings.py`, `src/tests/conftest.py`
 
 ---
 
@@ -264,7 +264,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Depends on Task 5
 - `resolve_token` (reading `GITHUB_TOKEN`, else `gh auth token`) belongs to the fetch-and-cache lists.
-- Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`
+- Key files: `src/wambatic/settings.py`, `src/tests/test_settings.py`
 
 ---
 
@@ -275,18 +275,18 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Complexity:** small
 **Spec Reference:** Module location; API; Architecture ("Three layers with one-way dependencies")
 
-**Technical Goal:** Re-export the system-level names from `gitstat`, and make the one-way layering a test so a later task cannot quietly break it.
+**Technical Goal:** Re-export the system-level names from `wambatic`, and make the one-way layering a test so a later task cannot quietly break it.
 
 **Subtasks:**
 
-- [ ] In `src/gitstat/__init__.py`, re-export `Settings` and `load_settings` from `.settings` and list them in `__all__`, alphabetically
-- [ ] Write `src/tests/test_layering.py` that parses every module under `src/gitstat/` with `ast` and collects its `gitstat.*` imports, then asserts: `fetch` imports only `gitstat.fetch`, `gitstat.settings` and `gitstat.version`; `stats` imports nothing from `gitstat.reports`; `settings` and `version` import nothing from gitstat
-- [ ] Add to `src/tests/test_package.py` a check that `gitstat.__all__` contains `Settings` and `load_settings` and that each name resolves
+- [ ] In `src/wambatic/__init__.py`, re-export `Settings` and `load_settings` from `.settings` and list them in `__all__`, alphabetically
+- [ ] Write `src/tests/test_layering.py` that parses every module under `src/wambatic/` with `ast` and collects its `wambatic.*` imports, then asserts: `fetch` imports only `wambatic.fetch`, `wambatic.settings` and `wambatic.version`; `stats` imports nothing from `wambatic.reports`; `settings` and `version` import nothing from wambatic
+- [ ] Add to `src/tests/test_package.py` a check that `wambatic.__all__` contains `Settings` and `load_settings` and that each name resolves
 
 **Acceptance Criteria:**
 
-- [ ] `import gitstat; gitstat.Settings; gitstat.load_settings` works
-- [ ] Adding `import gitstat.reports` to a module under `src/gitstat/fetch/` makes `src/tests/test_layering.py` fail (check once by hand, then revert)
+- [ ] `import wambatic; wambatic.Settings; wambatic.load_settings` works
+- [ ] Adding `import wambatic.reports` to a module under `src/wambatic/fetch/` makes `src/tests/test_layering.py` fail (check once by hand, then revert)
 
 **Definition of Done:**
 
@@ -301,7 +301,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - Depends on Task 2, Task 5
 - `Subject`, `Fetcher`, `StatsRequest`, `StatsResult` and `compute` are re-exported by the component task lists that define them; each of those lists extends the `__all__` check in `src/tests/test_package.py`.
-- Key files: `src/gitstat/__init__.py`, `src/tests/test_layering.py`, `src/tests/test_package.py`
+- Key files: `src/wambatic/__init__.py`, `src/tests/test_layering.py`, `src/tests/test_package.py`
 
 ---
 

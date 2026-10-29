@@ -4,10 +4,10 @@ import dataclasses
 import datetime
 import typing
 
-import gitstat.fetch.base
-import gitstat.settings
-import gitstat.stats.base
-import gitstat.stats.buckets
+import wambatic.fetch.base
+import wambatic.settings
+import wambatic.stats.base
+import wambatic.stats.buckets
 
 UNATTRIBUTED = 'unattributed'
 TOTAL_METRICS = (
@@ -32,7 +32,7 @@ class Tally:
     logins: set[str] = dataclasses.field(default_factory=set)
     days: set[datetime.date] = dataclasses.field(default_factory=set)
 
-    def add(self, commit: gitstat.fetch.base.Commit, day: datetime.date, lines: bool) -> None:
+    def add(self, commit: wambatic.fetch.base.Commit, day: datetime.date, lines: bool) -> None:
         self.commits += 1
         self.days.add(day)
         if lines:
@@ -65,32 +65,32 @@ def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date |
 def series_of(
     metric: str,
     unit: str,
-    buckets: list[gitstat.stats.base.Bucket],
+    buckets: list[wambatic.stats.base.Bucket],
     tallies: collections.abc.Sequence[Tally],
     by: str | None = None,
     by_kind: typing.Literal['author', 'repo'] | None = None,
-) -> gitstat.stats.base.Series:
+) -> wambatic.stats.base.Series:
     points = {bucket: tally.value(metric) for bucket, tally in zip(buckets, tallies, strict=True)}
-    return gitstat.stats.base.Series(metric, unit, points, by, by_kind)
+    return wambatic.stats.base.Series(metric, unit, points, by, by_kind)
 
 
 def aggregate(
-    commits: collections.abc.Iterable[gitstat.fetch.base.Commit],
-    buckets: list[gitstat.stats.base.Bucket],
+    commits: collections.abc.Iterable[wambatic.fetch.base.Commit],
+    buckets: list[wambatic.stats.base.Bucket],
     tz: datetime.tzinfo,
-    settings: gitstat.settings.StatsSettings,
+    settings: wambatic.settings.StatsSettings,
     *,
     by_author: bool,
     by_repo: bool,
-) -> tuple[list[gitstat.stats.base.Series], Tables]:
+) -> tuple[list[wambatic.stats.base.Series], Tables]:
     """The activity series and tables for `commits`, which the caller has already restricted to
     the range `buckets` covers; a commit outside it raises ValueError."""
     bots = {login.casefold() for login in settings.bot_logins}
     starts = [bucket.start for bucket in buckets]
     end = None
     if buckets and buckets[0].label != 'total':
-        granularity = gitstat.stats.buckets.bucket_granularity(buckets[-1])
-        end = gitstat.stats.buckets.next_start(buckets[-1].start, granularity)
+        granularity = wambatic.stats.buckets.bucket_granularity(buckets[-1])
+        end = wambatic.stats.buckets.next_start(buckets[-1].start, granularity)
     totals = [Tally() for _ in buckets]
     authors: dict[str | None, list[Tally]] = {}
     spellings: dict[str | None, str] = {}

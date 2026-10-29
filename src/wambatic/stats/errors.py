@@ -1,5 +1,5 @@
 class StatsError(Exception):
-    """Base class of every error `gitstat.stats` raises itself."""
+    """Base class of every error `wambatic.stats` raises itself."""
 
 
 class EmptySubjectError(StatsError):

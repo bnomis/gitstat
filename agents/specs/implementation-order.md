@@ -4,7 +4,7 @@
 **Status:** proposed
 **Date:** 2026-10-29
 
-The order in which gitstat is built, with what each step delivers, what it depends on and how to tell it is done. It sequences the components in the [system spec](system/spec.md) into steps that [taskdev](../../.agents/claude/skills/taskdev/SKILL.md) can break into tasks. Component detail stays in the component specs; this document only sequences them.
+The order in which wambatic is built, with what each step delivers, what it depends on and how to tell it is done. It sequences the components in the [system spec](system/spec.md) into steps that [taskdev](../../.agents/claude/skills/taskdev/SKILL.md) can break into tasks. Component detail stays in the component specs; this document only sequences them.
 
 ## Principles
 
@@ -34,7 +34,7 @@ Steps 6 and 7 are independent and may be built in either order or in parallel on
 
 ### 1. Skeleton and settings
 
-Deliver: `pyproject.toml` (Python 3.14, ruff, mypy, pytest, hypothesis, pre-commit config, `uv.lock`), `src/gitstat/` with `settings.py` (`load_settings` layering defaults, JSON file, flag overrides), loguru setup, `src/tests/` layout, and a CI workflow running ruff, mypy and pytest.
+Deliver: `pyproject.toml` (Python 3.14, ruff, mypy, pytest, hypothesis, pre-commit config, `uv.lock`), `src/wambatic/` with `settings.py` (`load_settings` layering defaults, JSON file, flag overrides), loguru setup, `src/tests/` layout, and a CI workflow running ruff, mypy and pytest.
 Done when: `pytest` passes with settings-layering tests, CI is green on an empty-feature PR, and the token is shown to be read only from the environment.
 
 ### 2. Fetch core
@@ -55,8 +55,8 @@ Done when: hypothesis tests show buckets partition any date range with no gaps o
 
 ### 5. Terminal report and CLI
 
-Deliver: the `rich` and `cappa` dependencies, `cli.main` with `report` and `cache` commands, `<target>` parsing (bare `NAME` through `Fetcher.owner_kind`), `--by`, `--since`, `--until`, `--groups`, `--by-author`, `--tz`, `--format terminal|json`, `--full-refresh`, `--no-fetch`, `--max-age`, `--ignore-cache-version`, `-v`/`-q`, the terminal renderer and JSON output, `BUILT_RESOURCES`, `inspect_cache` and `clear_cache`, the `gitstat` console script, a README user guide, and the single error-to-exit-status conversion. `--format html` and `--out` wait for step 7 and `serve` for step 9.
-Done when: `gitstat report repo:OWNER/NAME --by month --no-fetch` (or with a `--max-age` the cache is younger than) prints a correct report from a warm cache with no network and no `GITHUB_TOKEN`, and every typed error maps to its documented exit status. Without either flag the report syncs first, since `fetch.max_age` defaults to zero.
+Deliver: the `rich` and `cappa` dependencies, `cli.main` with `report` and `cache` commands, `<target>` parsing (bare `NAME` through `Fetcher.owner_kind`), `--by`, `--since`, `--until`, `--groups`, `--by-author`, `--tz`, `--format terminal|json`, `--full-refresh`, `--no-fetch`, `--max-age`, `--ignore-cache-version`, `-v`/`-q`, the terminal renderer and JSON output, `BUILT_RESOURCES`, `inspect_cache` and `clear_cache`, the `wambatic` console script, a README user guide, and the single error-to-exit-status conversion. `--format html` and `--out` wait for step 7 and `serve` for step 9.
+Done when: `wambatic report repo:OWNER/NAME --by month --no-fetch` (or with a `--max-age` the cache is younger than) prints a correct report from a warm cache with no network and no `GITHUB_TOKEN`, and every typed error maps to its documented exit status. Without either flag the report syncs first, since `fetch.max_age` defaults to zero.
 
 ### 6. Flow data and stats
 

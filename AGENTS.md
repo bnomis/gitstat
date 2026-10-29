@@ -1,4 +1,4 @@
-# gitstat
+# wambatic
 
 Visualisation and report of statistics from github.com for a user, a repo or an organisation.
 

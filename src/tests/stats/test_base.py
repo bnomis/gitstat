@@ -3,19 +3,19 @@ import datetime
 
 import pytest
 
-import gitstat.settings
-import gitstat.stats.base
+import wambatic.settings
+import wambatic.stats.base
 
-Bucket = gitstat.stats.base.Bucket
-Series = gitstat.stats.base.Series
+Bucket = wambatic.stats.base.Bucket
+Series = wambatic.stats.base.Series
 
 
 def test_groups_are_the_three_metric_groups() -> None:
-    assert gitstat.stats.base.GROUPS == {'activity', 'delivery', 'flow'}
+    assert wambatic.stats.base.GROUPS == {'activity', 'delivery', 'flow'}
 
 
 def test_granularity_has_the_five_values() -> None:
-    assert {g.value for g in gitstat.stats.base.Granularity} == {
+    assert {g.value for g in wambatic.stats.base.Granularity} == {
         'day',
         'month',
         'total',
@@ -25,18 +25,18 @@ def test_granularity_has_the_five_values() -> None:
 
 
 def test_a_default_request_is_monthly_activity_and_flow_in_utc() -> None:
-    request = gitstat.stats.base.StatsRequest()
-    assert request.granularity is gitstat.stats.base.Granularity.MONTH
+    request = wambatic.stats.base.StatsRequest()
+    assert request.granularity is wambatic.stats.base.Granularity.MONTH
     assert request.groups == {'activity', 'flow'}
     assert request.since is None
     assert request.until is None
     assert request.by_author is False
     assert request.tz is datetime.UTC
-    assert request.settings == gitstat.settings.StatsSettings()
+    assert request.settings == wambatic.settings.StatsSettings()
 
 
 def test_a_request_is_hashable() -> None:
-    assert hash(gitstat.stats.base.StatsRequest()) == hash(gitstat.stats.base.StatsRequest())
+    assert hash(wambatic.stats.base.StatsRequest()) == hash(wambatic.stats.base.StatsRequest())
 
 
 def test_buckets_sort_by_start() -> None:
@@ -52,7 +52,7 @@ def test_records_are_immutable() -> None:
     series = Series('commits', 'count', {bucket: 1})
     with pytest.raises(dataclasses.FrozenInstanceError):
         series.metric = 'x'  # type: ignore[misc]
-    request = gitstat.stats.base.StatsRequest()
+    request = wambatic.stats.base.StatsRequest()
     with pytest.raises(dataclasses.FrozenInstanceError):
         request.by_author = True  # type: ignore[misc]
 

@@ -1,5 +1,5 @@
 [project]
-name = 'gitstat'
+name = 'wambatic'
 version = '0.1.0'
 description = 'Visualisation and report of statistics from github.com for a user, a repo or an organisation.'
 readme = 'AGENTS.md'
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gitstat = 'gitstat.cli:run'
+wambatic = 'wambatic.cli:run'
 
 [dependency-groups]
 dev = [
@@ -48,7 +48,7 @@ environments = [
 
 
 [tool.uv.build-backend]
-module-name = 'gitstat'
+module-name = 'wambatic'
 module-root = 'src'
 
 [tool.ruff]
@@ -64,7 +64,7 @@ select = ['ANN', 'B', 'E', 'F', 'I', 'UP']
 
 [tool.ruff.lint.isort]
 force-single-line = false
-known-first-party = ['gitstat']
+known-first-party = ['wambatic']
 
 [tool.mypy]
 strict = true

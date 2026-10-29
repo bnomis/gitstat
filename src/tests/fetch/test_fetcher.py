@@ -9,14 +9,14 @@ import aiohttp
 import loguru
 import pytest
 
-import gitstat.fetch.base
-import gitstat.fetch.cache
-import gitstat.fetch.errors
-import gitstat.settings
 import tests.conftest
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 import tests.fixtures.fetch.upstream
+import wambatic.fetch.base
+import wambatic.fetch.cache
+import wambatic.fetch.errors
+import wambatic.settings
 
 Canned = tests.fixtures.fetch.server.Canned
 FakeCommit = tests.fixtures.fetch.upstream.FakeCommit
@@ -25,7 +25,7 @@ Upstream = tests.fixtures.fetch.upstream.Upstream
 
 HELLO = 'octocat/Hello-World'
 SPOON = 'octocat/Spoon-Knife'
-OWNER = gitstat.fetch.base.Subject('user', 'octocat')
+OWNER = wambatic.fetch.base.Subject('user', 'octocat')
 COMMITS = frozenset({'commits'})
 T0 = datetime.datetime(2026, 10, 1, 9, 0, tzinfo=datetime.UTC)
 REST_PATH = '/repos/octocat/Hello-World'
@@ -53,20 +53,20 @@ def spoon(count: int = 2, **changes: object) -> FakeRepo:
 
 @dataclasses.dataclass
 class Run:
-    report: gitstat.fetch.base.SyncReport
+    report: wambatic.fetch.base.SyncReport
     kinds: list[str]
     max_in_flight: int
-    fetcher: gitstat.fetch.base.Fetcher
+    fetcher: wambatic.fetch.base.Fetcher
 
     @property
-    def cache(self) -> gitstat.fetch.cache.Cache:
+    def cache(self) -> wambatic.fetch.cache.Cache:
         return self.fetcher.cache
 
 
 def sync_once(
     make_fetcher: tests.conftest.MakeFetcher,
     upstream: Upstream,
-    subject: gitstat.fetch.base.Subject = OWNER,
+    subject: wambatic.fetch.base.Subject = OWNER,
     *,
     resources: frozenset[str] = COMMITS,
     full_refresh: bool = False,
@@ -82,18 +82,18 @@ def sync_once(
     return asyncio.run(scenario())
 
 
-def stored(cache: gitstat.fetch.cache.Cache, name: str = HELLO) -> list[str]:
+def stored(cache: wambatic.fetch.cache.Cache, name: str = HELLO) -> list[str]:
     return [commit.oid for commit in cache.read_commits(name, None, None)]
 
 
 def settings_with(
-    base: gitstat.settings.FetchSettings, **changes: object
-) -> gitstat.settings.FetchSettings:
+    base: wambatic.settings.FetchSettings, **changes: object
+) -> wambatic.settings.FetchSettings:
     return dataclasses.replace(base, **changes)  # type: ignore[arg-type]
 
 
-def listed(upstream: Upstream, name: str = HELLO) -> gitstat.fetch.base.Repo:
-    return gitstat.fetch.base.parse_repo(upstream.repos[name].node())
+def listed(upstream: Upstream, name: str = HELLO) -> wambatic.fetch.base.Repo:
+    return wambatic.fetch.base.parse_repo(upstream.repos[name].node())
 
 
 # The shell and cached REST
@@ -117,9 +117,11 @@ def test_entering_and_leaving_opens_and_closes_the_client_session(
 
 
 def test_the_fetcher_builds_a_client_when_given_none(tmp_path: pathlib.Path) -> None:
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'cache.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'cache.sqlite3')
     try:
-        fetcher = gitstat.fetch.base.Fetcher('test-token', cache, gitstat.settings.FetchSettings())
+        fetcher = wambatic.fetch.base.Fetcher(
+            'test-token', cache, wambatic.settings.FetchSettings()
+        )
         assert fetcher.client.token == 'test-token'
     finally:
         cache.close()
@@ -245,7 +247,7 @@ def test_forks_and_archived_repos_are_dropped_by_default(
 
 
 def test_forks_and_archived_repos_are_kept_when_the_settings_say_so(
-    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: gitstat.settings.FetchSettings
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
 ) -> None:
     upstream = Upstream(
         [
@@ -261,13 +263,13 @@ def test_forks_and_archived_repos_are_kept_when_the_settings_say_so(
 
 
 def test_repos_applies_the_current_settings_to_the_cache(
-    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: gitstat.settings.FetchSettings
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
 ) -> None:
     upstream = Upstream([hello(), FakeRepo('octocat/Forked', history('f', 1), is_fork=True)])
     wide = settings_with(fetch_settings, include_forks=True)
     run = sync_once(make_fetcher, upstream, settings=wide)
 
-    async def names(settings: gitstat.settings.FetchSettings) -> list[str]:
+    async def names(settings: wambatic.settings.FetchSettings) -> list[str]:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
             fetcher = make_fetcher(server, settings, run.cache)
             return [repo.name_with_owner for repo in await fetcher.repos(OWNER)]
@@ -294,7 +296,9 @@ def test_a_repo_that_leaves_the_listing_is_missing_but_keeps_its_commits(
     assert second.report.repos_listed == 1
     assert asyncio.run(names()) == [HELLO]
     assert stored(first.cache, SPOON) == ['s1', 's2']
-    spoon_row = first.cache.read_repos(gitstat.fetch.base.Subject('repo', 'octocat', 'Spoon-Knife'))
+    spoon_row = first.cache.read_repos(
+        wambatic.fetch.base.Subject('repo', 'octocat', 'Spoon-Knife')
+    )
     assert [row.missing for row in spoon_row] == [True]
 
 
@@ -372,11 +376,11 @@ def test_unchanged_needs_every_requested_resource_synced(
 def test_a_repo_subject_that_does_not_exist_raises_not_found(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
-    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError):
         sync_once(
             make_fetcher,
             Upstream([hello()]),
-            gitstat.fetch.base.Subject('repo', 'octocat', 'nope'),
+            wambatic.fetch.base.Subject('repo', 'octocat', 'nope'),
         )
 
 
@@ -388,9 +392,9 @@ def test_an_owner_that_does_not_exist_raises_not_found(
     async def scenario() -> None:
         async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
             async with make_fetcher(server) as fetcher:
-                await fetcher.sync(gitstat.fetch.base.Subject('user', 'nobody'), COMMITS)
+                await fetcher.sync(wambatic.fetch.base.Subject('user', 'nobody'), COMMITS)
 
-    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError):
         asyncio.run(scenario())
 
 
@@ -398,7 +402,7 @@ def test_a_repo_subject_syncs_its_repo_and_keeps_forks(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
     upstream = Upstream([hello(is_fork=True), spoon()])
-    subject = gitstat.fetch.base.Subject('repo', 'octocat', 'Hello-World')
+    subject = wambatic.fetch.base.Subject('repo', 'octocat', 'Hello-World')
     run = sync_once(make_fetcher, upstream, subject)
 
     async def repos() -> list[str]:
@@ -421,7 +425,7 @@ def test_a_repo_subject_sync_does_not_mark_the_owners_other_repos_missing(
     sync_once(
         make_fetcher,
         upstream,
-        gitstat.fetch.base.Subject('repo', 'octocat', 'Hello-World'),
+        wambatic.fetch.base.Subject('repo', 'octocat', 'Hello-World'),
         cache=first.cache,
     )
     assert [row.missing for row in first.cache.read_repos(OWNER)] == [False, False]
@@ -468,13 +472,13 @@ def test_the_stored_state_records_the_listed_head_and_times(
 
 
 def store_synced(
-    cache: gitstat.fetch.cache.Cache, name: str, hours: int | None, owner: str = 'octocat'
+    cache: wambatic.fetch.cache.Cache, name: str, hours: int | None, owner: str = 'octocat'
 ) -> None:
     """List `name`; unless `hours` is None, store a commits state `hours` after T0."""
-    repo = gitstat.fetch.base.parse_repo(FakeRepo(name, history('c', 1)).node())
+    repo = wambatic.fetch.base.parse_repo(FakeRepo(name, history('c', 1)).node())
     cache.upsert_repos(owner, [repo], complete=False)
     if hours is not None:
-        state = gitstat.fetch.base.SyncState(
+        state = wambatic.fetch.base.SyncState(
             repo=name,
             resource='commits',
             watermark=None,
@@ -489,9 +493,9 @@ def store_synced(
 
 def provenance_of(
     make_fetcher: tests.conftest.MakeFetcher,
-    cache: gitstat.fetch.cache.Cache,
+    cache: wambatic.fetch.cache.Cache,
     resources: frozenset[str] = COMMITS,
-    subject: gitstat.fetch.base.Subject = OWNER,
+    subject: wambatic.fetch.base.Subject = OWNER,
 ) -> tuple[dict[str, str], int]:
     async def scenario() -> tuple[dict[str, str], int]:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
@@ -505,7 +509,7 @@ def provenance_of(
 def test_provenance_fetched_at_is_the_earliest_sync_and_sends_no_request(
     make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
 ) -> None:
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
     try:
         store_synced(cache, HELLO, 5)
         store_synced(cache, SPOON, 2)
@@ -519,7 +523,7 @@ def test_provenance_fetched_at_is_the_earliest_sync_and_sends_no_request(
 def test_provenance_is_never_for_a_listed_repo_that_was_not_synced(
     make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
 ) -> None:
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
     try:
         store_synced(cache, HELLO, 5)
         store_synced(cache, SPOON, None)
@@ -536,22 +540,22 @@ def test_provenance_holds_the_identity_and_the_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / 'prov.sqlite3'
-    gitstat.fetch.cache.Cache.open(path).close()
-    monkeypatch.setattr(gitstat.fetch.cache, 'SCHEMA_VERSION', 2)
-    cache = gitstat.fetch.cache.Cache.open(path, ignore_version=True)
+    wambatic.fetch.cache.Cache.open(path).close()
+    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    cache = wambatic.fetch.cache.Cache.open(path, ignore_version=True)
     try:
         result, _ = provenance_of(make_fetcher, cache)
         override = cache.version_override_at()
     finally:
         cache.close()
-    assert {'schema_version', 'gitstat_version', 'query:COMMIT_HISTORY'} <= result.keys()
+    assert {'schema_version', 'wambatic_version', 'query:COMMIT_HISTORY'} <= result.keys()
     assert result['version_override_at'] == override
 
 
 def test_provenance_has_no_override_key_for_a_matching_cache(
     make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
 ) -> None:
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
     try:
         result, _ = provenance_of(make_fetcher, cache)
     finally:
@@ -562,7 +566,7 @@ def test_provenance_has_no_override_key_for_a_matching_cache(
 def test_provenance_rejects_an_unknown_resource(
     make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
 ) -> None:
-    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
     try:
         with pytest.raises(ValueError, match='bogus'):
             provenance_of(make_fetcher, cache, frozenset({'bogus'}))
@@ -608,7 +612,7 @@ def test_an_error_on_page_two_leaves_no_rows_and_no_state(
             *[Canned(500, responses.SERVER_ERROR)] * 3,
         ]
     }
-    cache_holder: list[gitstat.fetch.cache.Cache] = []
+    cache_holder: list[wambatic.fetch.cache.Cache] = []
 
     async def scenario() -> None:
         async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
@@ -665,7 +669,7 @@ def test_a_second_run_with_nothing_new_sends_only_the_listing(
     first = sync_once(make_fetcher, upstream)
     second = sync_once(make_fetcher, upstream, cache=first.cache)
     assert second.kinds == ['listing']
-    assert second.report == gitstat.fetch.base.SyncReport(1, 1, {'commits': 0}, ())
+    assert second.report == wambatic.fetch.base.SyncReport(1, 1, {'commits': 0}, ())
 
 
 def test_a_changed_listing_with_the_same_head_sends_no_request_and_advances_the_state(
@@ -826,7 +830,7 @@ def test_a_commit_with_no_line_counts_stores_nothing_and_names_its_oid(
     before = first.cache.sync_state(HELLO, 'commits')
     upstream.repos[HELLO].push(*history('n', 2, 10))
     upstream.dropped_nodes = {'C_n11'}
-    with pytest.raises(gitstat.fetch.errors.GraphQLError, match='n11'):
+    with pytest.raises(wambatic.fetch.errors.GraphQLError, match='n11'):
         sync_once(make_fetcher, upstream, cache=first.cache)
     assert stored(first.cache) == ['h1', 'h2', 'h3']
     assert first.cache.sync_state(HELLO, 'commits') == before
@@ -874,17 +878,17 @@ def test_full_refresh_re_reads_a_repo_whose_head_is_unchanged(
     upstream = Upstream([hello()])
     first = sync_once(make_fetcher, upstream)
     calls: list[str] = []
-    original = gitstat.fetch.base.Fetcher.update_commits
+    original = wambatic.fetch.base.Fetcher.update_commits
 
     async def counting(
-        self: gitstat.fetch.base.Fetcher,
-        repo: gitstat.fetch.base.Repo,
-        state: gitstat.fetch.base.SyncState,
+        self: wambatic.fetch.base.Fetcher,
+        repo: wambatic.fetch.base.Repo,
+        state: wambatic.fetch.base.SyncState,
     ) -> int | None:
         calls.append(repo.name_with_owner)
         return await original(self, repo, state)
 
-    monkeypatch.setattr(gitstat.fetch.base.Fetcher, 'update_commits', counting)
+    monkeypatch.setattr(wambatic.fetch.base.Fetcher, 'update_commits', counting)
     second = sync_once(make_fetcher, upstream, cache=first.cache, full_refresh=True)
     assert second.kinds == ['listing', 'history']
     assert second.report.repos_skipped == 0
@@ -901,17 +905,17 @@ def test_a_rewrite_runs_update_commits_once(
     upstream.repos[HELLO].history = history('x', 2)
     upstream.repos[HELLO].push()
     calls: list[str] = []
-    original = gitstat.fetch.base.Fetcher.update_commits
+    original = wambatic.fetch.base.Fetcher.update_commits
 
     async def counting(
-        self: gitstat.fetch.base.Fetcher,
-        repo: gitstat.fetch.base.Repo,
-        state: gitstat.fetch.base.SyncState,
+        self: wambatic.fetch.base.Fetcher,
+        repo: wambatic.fetch.base.Repo,
+        state: wambatic.fetch.base.SyncState,
     ) -> int | None:
         calls.append(repo.name_with_owner)
         return await original(self, repo, state)
 
-    monkeypatch.setattr(gitstat.fetch.base.Fetcher, 'update_commits', counting)
+    monkeypatch.setattr(wambatic.fetch.base.Fetcher, 'update_commits', counting)
     sync_once(make_fetcher, upstream, cache=first.cache)
     assert calls == [HELLO]
 
@@ -945,7 +949,7 @@ def test_the_first_report_counts_every_repo_and_row(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
     run = sync_once(make_fetcher, Upstream([spoon(), hello()]))
-    assert run.report == gitstat.fetch.base.SyncReport(2, 0, {'commits': 5}, (HELLO, SPOON))
+    assert run.report == wambatic.fetch.base.SyncReport(2, 0, {'commits': 5}, (HELLO, SPOON))
 
 
 def test_a_second_run_fetches_only_the_listing(make_fetcher: tests.conftest.MakeFetcher) -> None:
@@ -953,16 +957,16 @@ def test_a_second_run_fetches_only_the_listing(make_fetcher: tests.conftest.Make
     first = sync_once(make_fetcher, upstream)
     second = sync_once(make_fetcher, upstream, cache=first.cache)
     assert second.kinds == ['listing']
-    assert second.report == gitstat.fetch.base.SyncReport(2, 2, {'commits': 0}, ())
+    assert second.report == wambatic.fetch.base.SyncReport(2, 2, {'commits': 0}, ())
 
 
 def test_an_interrupted_run_resumes_with_only_the_repo_that_failed(
-    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: gitstat.settings.FetchSettings
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
 ) -> None:
     upstream = Upstream([hello(), spoon()])
     upstream.failing_history = {SPOON}
     one_at_a_time = settings_with(fetch_settings, workers=1)
-    caches: list[gitstat.fetch.cache.Cache] = []
+    caches: list[wambatic.fetch.cache.Cache] = []
 
     async def failing() -> None:
         async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
@@ -979,12 +983,12 @@ def test_an_interrupted_run_resumes_with_only_the_repo_that_failed(
     upstream.failing_history = set()
     second = sync_once(make_fetcher, upstream, cache=cache, settings=one_at_a_time)
     assert second.kinds == ['listing', 'history']
-    assert second.report == gitstat.fetch.base.SyncReport(2, 1, {'commits': 2}, (SPOON,))
+    assert second.report == wambatic.fetch.base.SyncReport(2, 1, {'commits': 2}, (SPOON,))
     assert stored(cache, SPOON) == ['s1', 's2']
 
 
 def test_no_more_than_workers_repos_are_synced_at_once(
-    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: gitstat.settings.FetchSettings
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
 ) -> None:
     upstream = Upstream([FakeRepo(f'octocat/r{n}', history(f'r{n}-', 2)) for n in range(4)])
     upstream.history_delay = 0.05
@@ -994,7 +998,7 @@ def test_no_more_than_workers_repos_are_synced_at_once(
 
 
 def test_one_worker_syncs_one_repo_at_a_time(
-    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: gitstat.settings.FetchSettings
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
 ) -> None:
     upstream = Upstream([FakeRepo(f'octocat/r{n}', history(f'r{n}-', 2)) for n in range(3)])
     upstream.history_delay = 0.02
@@ -1070,7 +1074,7 @@ def test_no_value_in_the_cache_file_holds_the_token(
         assert b'test-token' not in candidate.read_bytes(), candidate.name
 
 
-def cache_rows(fetcher: gitstat.fetch.base.Fetcher) -> list[tuple[str, int]]:
+def cache_rows(fetcher: wambatic.fetch.base.Fetcher) -> list[tuple[str, int]]:
     tables = [
         row[0]
         for row in fetcher.cache.connection.execute(
@@ -1126,7 +1130,7 @@ def test_owner_kind_raises_not_found_for_anything_that_is_not_a_user_or_an_organ
             async with make_fetcher(server) as fetcher:
                 await fetcher.owner_kind('nobody')
 
-    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError):
         asyncio.run(scenario())
 
 
@@ -1139,5 +1143,5 @@ def test_owner_kind_names_the_login_and_type_in_its_error(
             async with make_fetcher(server) as fetcher:
                 await fetcher.owner_kind('robot')
 
-    with pytest.raises(gitstat.fetch.errors.NotFoundError, match="robot.*'Bot'"):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError, match="robot.*'Bot'"):
         asyncio.run(scenario())

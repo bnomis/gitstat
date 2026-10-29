@@ -7,14 +7,14 @@ import aiohttp
 import loguru
 import pytest
 
-import gitstat.fetch.client
-import gitstat.fetch.errors
-import gitstat.fetch.queries
-import gitstat.fetch.ratelimit
-import gitstat.settings
 import tests.conftest
 import tests.fixtures.fetch.responses as responses
 import tests.fixtures.fetch.server as server_module
+import wambatic.fetch.client
+import wambatic.fetch.errors
+import wambatic.fetch.queries
+import wambatic.fetch.ratelimit
+import wambatic.settings
 
 Canned = server_module.Canned
 GRAPHQL = ('POST', '/graphql')
@@ -30,12 +30,12 @@ def graphql_ok() -> Canned:
 def run_graphql(
     routes: dict[tuple[str, str], list[Canned]],
     make_client: tests.conftest.MakeClient,
-    settings: gitstat.settings.FetchSettings | None = None,
+    settings: wambatic.settings.FetchSettings | None = None,
 ) -> dict[str, object]:
     async def scenario() -> dict[str, object]:
         async with server_module.ReplayServer(routes) as server:
             async with make_client(server, *([settings] if settings else [])) as client:
-                return await client.graphql(gitstat.fetch.queries.OWNER_REPOSITORIES, VARIABLES)
+                return await client.graphql(wambatic.fetch.queries.OWNER_REPOSITORIES, VARIABLES)
 
     return asyncio.run(scenario())
 
@@ -44,10 +44,10 @@ def run_rest(
     routes: dict[tuple[str, str], list[Canned]],
     make_client: tests.conftest.MakeClient,
     path: str = REPO[1],
-    settings: gitstat.settings.FetchSettings | None = None,
+    settings: wambatic.settings.FetchSettings | None = None,
     **kwargs: object,
-) -> gitstat.fetch.client.RestResponse:
-    async def scenario() -> gitstat.fetch.client.RestResponse:
+) -> wambatic.fetch.client.RestResponse:
+    async def scenario() -> wambatic.fetch.client.RestResponse:
         async with server_module.ReplayServer(routes) as server:
             async with make_client(server, *([settings] if settings else [])) as client:
                 return await client.rest_get(path, **kwargs)  # type: ignore[arg-type]
@@ -55,8 +55,8 @@ def run_rest(
     return asyncio.run(scenario())
 
 
-def with_settings(**changes: object) -> gitstat.settings.FetchSettings:
-    return dataclasses.replace(gitstat.settings.FetchSettings(), max_retries=2, **changes)  # type: ignore[arg-type]
+def with_settings(**changes: object) -> wambatic.settings.FetchSettings:
+    return dataclasses.replace(wambatic.settings.FetchSettings(), max_retries=2, **changes)  # type: ignore[arg-type]
 
 
 # Lifecycle
@@ -73,7 +73,7 @@ def test_requests_carry_required_headers(make_client: tests.conftest.MakeClient)
     assert headers['Authorization'] == 'Bearer test-token'
     assert headers['Accept'] == 'application/vnd.github+json'
     assert headers['X-GitHub-Api-Version'] == '2022-11-28'
-    assert headers['User-Agent'].startswith('gitstat/')
+    assert headers['User-Agent'].startswith('wambatic/')
 
 
 def test_session_closes_on_exit(make_client: tests.conftest.MakeClient) -> None:
@@ -126,14 +126,14 @@ def test_logs_never_contain_token(make_client: tests.conftest.MakeClient) -> Non
 @pytest.mark.parametrize(
     ('status', 'body', 'headers', 'error'),
     [
-        (401, responses.BAD_CREDENTIALS, {}, gitstat.fetch.errors.AuthError),
+        (401, responses.BAD_CREDENTIALS, {}, wambatic.fetch.errors.AuthError),
         (
             403,
             responses.FORBIDDEN,
             {'x-accepted-oauth-scopes': 'repo'},
-            gitstat.fetch.errors.AuthError,
+            wambatic.fetch.errors.AuthError,
         ),
-        (404, responses.NOT_FOUND, {}, gitstat.fetch.errors.NotFoundError),
+        (404, responses.NOT_FOUND, {}, wambatic.fetch.errors.NotFoundError),
     ],
 )
 def test_status_maps_to_error(
@@ -161,13 +161,13 @@ def test_transient_status_then_success(
     )
     assert result.data == responses.REPO
     assert len(sleeps) == 1
-    assert 0 <= sleeps[0] <= gitstat.fetch.ratelimit.BACKOFF_BASE
+    assert 0 <= sleeps[0] <= wambatic.fetch.ratelimit.BACKOFF_BASE
 
 
 def test_transient_status_exhausts_retries(
     make_client: tests.conftest.MakeClient,
     sleeps: tests.conftest.Sleeps,
-    fetch_settings: gitstat.settings.FetchSettings,
+    fetch_settings: wambatic.settings.FetchSettings,
 ) -> None:
     canned = [Canned(502, responses.SERVER_ERROR)] * (fetch_settings.max_retries + 1)
     with pytest.raises(aiohttp.ClientResponseError) as info:
@@ -181,13 +181,13 @@ def test_transient_status_exhausts_retries(
 def test_connection_error_then_success(
     make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps
 ) -> None:
-    async def scenario() -> gitstat.fetch.client.RestResponse:
+    async def scenario() -> wambatic.fetch.client.RestResponse:
         async with server_module.ReplayServer({REPO: [Canned(200, responses.REPO)]}) as server:
             async with make_client(server) as client:
                 real = client.send
                 calls = 0
 
-                async def flaky(*args: object, **kwargs: object) -> gitstat.fetch.client.Response:
+                async def flaky(*args: object, **kwargs: object) -> wambatic.fetch.client.Response:
                     nonlocal calls
                     calls += 1
                     if calls == 1:
@@ -215,32 +215,32 @@ def test_other_status_raises_without_retry(
 
 def test_graphql_returns_data_and_tracks_limit(make_client: tests.conftest.MakeClient) -> None:
     async def scenario() -> tuple[
-        dict[str, object], gitstat.fetch.ratelimit.RateLimitState, object
+        dict[str, object], wambatic.fetch.ratelimit.RateLimitState, object
     ]:
         async with server_module.ReplayServer({GRAPHQL: [graphql_ok()]}) as server:
             async with make_client(server) as client:
-                data = await client.graphql(gitstat.fetch.queries.OWNER_REPOSITORIES, VARIABLES)
+                data = await client.graphql(wambatic.fetch.queries.OWNER_REPOSITORIES, VARIABLES)
                 return data, client.graphql_limit, server.received[0].json
 
     data, limit, sent = asyncio.run(scenario())
     assert data == responses.OWNER_REPOSITORIES_OK['data']
-    assert limit == gitstat.fetch.ratelimit.RateLimitState(4999, responses.RESET)
-    assert sent == {'query': gitstat.fetch.queries.OWNER_REPOSITORIES, 'variables': VARIABLES}
+    assert limit == wambatic.fetch.ratelimit.RateLimitState(4999, responses.RESET)
+    assert sent == {'query': wambatic.fetch.queries.OWNER_REPOSITORIES, 'variables': VARIABLES}
 
 
 def test_graphql_not_found(make_client: tests.conftest.MakeClient) -> None:
-    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError):
         run_graphql({GRAPHQL: [Canned(200, responses.GRAPHQL_NOT_FOUND)]}, make_client)
 
 
 def test_graphql_other_error_discards_data(make_client: tests.conftest.MakeClient) -> None:
-    with pytest.raises(gitstat.fetch.errors.GraphQLError) as info:
+    with pytest.raises(wambatic.fetch.errors.GraphQLError) as info:
         run_graphql({GRAPHQL: [Canned(200, responses.GRAPHQL_INTERNAL)]}, make_client)
     assert info.value.errors == [('INTERNAL', 'Something went wrong')]
 
 
 def test_graphql_requires_rate_limit(make_client: tests.conftest.MakeClient) -> None:
-    with pytest.raises(gitstat.fetch.errors.GraphQLError):
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
         run_graphql({GRAPHQL: [Canned(200, responses.GRAPHQL_NO_RATE_LIMIT)]}, make_client)
 
 
@@ -250,7 +250,7 @@ def test_graphql_requires_rate_limit(make_client: tests.conftest.MakeClient) -> 
 def test_rest_200_returns_data_and_etag(make_client: tests.conftest.MakeClient) -> None:
     headers = {**responses.RATE_HEADERS, 'ETag': responses.REPO_ETAG}
     result = run_rest({REPO: [Canned(200, responses.REPO, headers)]}, make_client)
-    assert result == gitstat.fetch.client.RestResponse(
+    assert result == wambatic.fetch.client.RestResponse(
         200, responses.REPO, responses.REPO_ETAG, None
     )
 
@@ -258,31 +258,31 @@ def test_rest_200_returns_data_and_etag(make_client: tests.conftest.MakeClient) 
 def test_rest_304_sends_if_none_match(
     make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps
 ) -> None:
-    async def scenario() -> tuple[gitstat.fetch.client.RestResponse, server_module.Received]:
+    async def scenario() -> tuple[wambatic.fetch.client.RestResponse, server_module.Received]:
         async with server_module.ReplayServer({REPO: [Canned(304)]}) as server:
             async with make_client(server) as client:
                 result = await client.rest_get(REPO[1], etag=responses.REPO_ETAG)
                 return result, server.received[0]
 
     result, received = asyncio.run(scenario())
-    assert result == gitstat.fetch.client.RestResponse(304, None, responses.REPO_ETAG, None)
+    assert result == wambatic.fetch.client.RestResponse(304, None, responses.REPO_ETAG, None)
     assert received.headers['If-None-Match'] == responses.REPO_ETAG
     assert sleeps == []
 
 
 def test_rest_limit_tracks_headers(make_client: tests.conftest.MakeClient) -> None:
-    async def scenario() -> gitstat.fetch.ratelimit.RateLimitState:
+    async def scenario() -> wambatic.fetch.ratelimit.RateLimitState:
         routes = {REPO: [Canned(200, responses.REPO, responses.RATE_HEADERS)]}
         async with server_module.ReplayServer(routes) as server:
             async with make_client(server) as client:
                 await client.rest_get(REPO[1])
                 return client.rest_limit
 
-    assert asyncio.run(scenario()) == gitstat.fetch.ratelimit.RateLimitState(4990, responses.RESET)
+    assert asyncio.run(scenario()) == wambatic.fetch.ratelimit.RateLimitState(4990, responses.RESET)
 
 
 def test_rest_404(make_client: tests.conftest.MakeClient) -> None:
-    with pytest.raises(gitstat.fetch.errors.NotFoundError):
+    with pytest.raises(wambatic.fetch.errors.NotFoundError):
         run_rest({REPO: [Canned(404, responses.NOT_FOUND)]}, make_client)
 
 
@@ -300,9 +300,9 @@ def test_next_link() -> None:
         '<https://a/?page=1>; rel="prev", <https://a/?page=3>; rel="next", '
         '<https://a/?page=9>; rel="last"'
     )
-    assert gitstat.fetch.client.next_link(link) == 'https://a/?page=3'
-    assert gitstat.fetch.client.next_link('<https://a/?page=9>; rel="last"') is None
-    assert gitstat.fetch.client.next_link(None) is None
+    assert wambatic.fetch.client.next_link(link) == 'https://a/?page=3'
+    assert wambatic.fetch.client.next_link('<https://a/?page=9>; rel="last"') is None
+    assert wambatic.fetch.client.next_link(None) is None
 
 
 # Primary rate limit
@@ -321,7 +321,7 @@ def test_primary_limit_fail(
     make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps, route: str
 ) -> None:
     settings = with_settings(on_rate_limit='fail')
-    with pytest.raises(gitstat.fetch.errors.RateLimitError) as info:
+    with pytest.raises(wambatic.fetch.errors.RateLimitError) as info:
         if route == 'rest':
             run_rest({REPO: [primary_rest()]}, make_client, settings=settings)
         else:
@@ -359,7 +359,7 @@ def test_exhausted_state_fails_before_request(make_client: tests.conftest.MakeCl
             client = make_client(server, with_settings(on_rate_limit='fail'))
             async with client:
                 await client.rest_get(REPO[1])
-                with pytest.raises(gitstat.fetch.errors.RateLimitError):
+                with pytest.raises(wambatic.fetch.errors.RateLimitError):
                     await client.rest_get(REPO[1])
             return len(server.received)
 
@@ -372,7 +372,7 @@ def test_primary_limit_without_reset_is_secondary(
     limited = Canned(403, responses.PRIMARY_LIMIT, {'x-ratelimit-remaining': '0'})
     run_rest({REPO: [limited, Canned(200, responses.REPO)]}, make_client)
     assert len(sleeps) == 1
-    assert sleeps[0] >= gitstat.fetch.ratelimit.SECONDARY_WAIT
+    assert sleeps[0] >= wambatic.fetch.ratelimit.SECONDARY_WAIT
 
 
 # Secondary rate limits
@@ -399,11 +399,11 @@ def test_secondary_message_waits_a_minute(
 def test_secondary_limit_runs_out_of_retries(
     make_client: tests.conftest.MakeClient,
     sleeps: tests.conftest.Sleeps,
-    fetch_settings: gitstat.settings.FetchSettings,
+    fetch_settings: wambatic.settings.FetchSettings,
 ) -> None:
     limited = Canned(429, responses.PRIMARY_LIMIT, {'retry-after': '3'})
     settings = dataclasses.replace(fetch_settings, on_rate_limit='wait')
-    with pytest.raises(gitstat.fetch.errors.RateLimitError) as info:
+    with pytest.raises(wambatic.fetch.errors.RateLimitError) as info:
         run_rest({REPO: [limited] * (settings.max_retries + 1)}, make_client, settings=settings)
     assert len(sleeps) == settings.max_retries
     assert info.value.reset_at >= responses.NOW + datetime.timedelta(seconds=3)
@@ -412,7 +412,7 @@ def test_secondary_limit_runs_out_of_retries(
 def test_forbidden_without_limit_signal_is_auth_error(
     make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps
 ) -> None:
-    with pytest.raises(gitstat.fetch.errors.AuthError):
+    with pytest.raises(wambatic.fetch.errors.AuthError):
         run_rest({REPO: [Canned(403, responses.FORBIDDEN)]}, make_client)
     assert sleeps == []
 
@@ -432,15 +432,15 @@ def test_202_then_200(
 def test_202_exhausts_stats_retries(
     make_client: tests.conftest.MakeClient,
     sleeps: tests.conftest.Sleeps,
-    fetch_settings: gitstat.settings.FetchSettings,
+    fetch_settings: wambatic.settings.FetchSettings,
 ) -> None:
     pending = [responses.STATS_PENDING] * (fetch_settings.stats_retries + 1)
-    with pytest.raises(gitstat.fetch.errors.StatsPendingError) as info:
+    with pytest.raises(wambatic.fetch.errors.StatsPendingError) as info:
         run_rest({STATS: pending}, make_client, STATS[1])
     assert STATS[1] in str(info.value)
     assert len(sleeps) == fetch_settings.stats_retries
 
 
 def test_default_rng_is_independent() -> None:
-    client = gitstat.fetch.client.GitHubClient('t', gitstat.settings.FetchSettings())
+    client = wambatic.fetch.client.GitHubClient('t', wambatic.settings.FetchSettings())
     assert isinstance(client.rng, random.Random)

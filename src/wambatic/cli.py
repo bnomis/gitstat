@@ -15,18 +15,18 @@ import rich.box
 import rich.console
 import rich.table
 
-import gitstat.fetch.auth
-import gitstat.fetch.base
-import gitstat.fetch.cache
-import gitstat.fetch.errors
-import gitstat.fetch.ratelimit
-import gitstat.logs
-import gitstat.reports.base
-import gitstat.reports.errors
-import gitstat.reports.terminal
-import gitstat.settings
-import gitstat.stats
-import gitstat.stats.base
+import wambatic.fetch.auth
+import wambatic.fetch.base
+import wambatic.fetch.cache
+import wambatic.fetch.errors
+import wambatic.fetch.ratelimit
+import wambatic.logs
+import wambatic.reports.base
+import wambatic.reports.errors
+import wambatic.reports.terminal
+import wambatic.settings
+import wambatic.stats
+import wambatic.stats.base
 
 LOGIN = re.compile(r'[A-Za-z0-9-]{1,39}')
 REPO_NAME = re.compile(r'[A-Za-z0-9._-]{1,100}')
@@ -94,9 +94,9 @@ class CacheCommand:
     ]
 
 
-@cappa.command(name='gitstat', help='Statistics from github.com for a user, an org or a repo.')
+@cappa.command(name='wambatic', help='Statistics from github.com for a user, an org or a repo.')
 @dataclasses.dataclass
-class Gitstat:
+class Wambatic:
     command: cappa.Subcommands[Report | CacheCommand]
     verbose: typing.Annotated[
         bool, cappa.Arg(short='-v', long=True, help='Log debugging detail')
@@ -106,10 +106,10 @@ class Gitstat:
     ] = False
 
 
-def parse_target(text: str) -> gitstat.fetch.base.Subject | str:
+def parse_target(text: str) -> wambatic.fetch.base.Subject | str:
     """A `Subject` for `user:NAME`, `org:NAME`, `repo:OWNER/NAME` or `OWNER/NAME`; a bare `NAME`
     comes back as the login string, for the caller to resolve."""
-    invalid = gitstat.reports.errors.UsageError(
+    invalid = wambatic.reports.errors.UsageError(
         f'the target must be one of {TARGET_FORMS} (a NAME is 1 to 39 letters, digits and "-"; '
         'a repo NAME is 1 to 100 letters, digits, ".", "_" and "-")'
     )
@@ -127,14 +127,14 @@ def parse_target(text: str) -> gitstat.fetch.base.Subject | str:
     if kind == 'org' or kind == 'user':
         if slash:
             raise invalid
-        return gitstat.fetch.base.Subject(kind, owner)
+        return wambatic.fetch.base.Subject(kind, owner)
     if not slash:
         if kind == 'repo':
             raise invalid
         return owner
     if not REPO_NAME.fullmatch(name):
         raise invalid
-    return gitstat.fetch.base.Subject('repo', owner, name)
+    return wambatic.fetch.base.Subject('repo', owner, name)
 
 
 def parse_date(text: str, flag: str = 'a date') -> datetime.date:
@@ -144,7 +144,7 @@ def parse_date(text: str, flag: str = 'a date') -> datetime.date:
             return datetime.date.fromisoformat(text)
     except ValueError:
         pass
-    raise gitstat.reports.errors.UsageError(f'{flag} must be a date written YYYY-MM-DD')
+    raise wambatic.reports.errors.UsageError(f'{flag} must be a date written YYYY-MM-DD')
 
 
 def overrides(report: Report) -> dict[str, object]:
@@ -159,53 +159,53 @@ def overrides(report: Report) -> dict[str, object]:
     return typing.cast(dict[str, object], result)
 
 
-def check_verbosity(root: Gitstat) -> None:
+def check_verbosity(root: Wambatic) -> None:
     if root.verbose and root.quiet:
-        raise gitstat.reports.errors.UsageError('-v and -q cannot be used together')
+        raise wambatic.reports.errors.UsageError('-v and -q cannot be used together')
 
 
-def check_report(report: Report, settings: gitstat.settings.Settings) -> None:
+def check_report(report: Report, settings: wambatic.settings.Settings) -> None:
     """The flag combinations that can be rejected before the cache or the network is touched."""
     if report.full_refresh and report.no_fetch:
-        raise gitstat.reports.errors.UsageError('--full-refresh and --no-fetch cannot be combined')
+        raise wambatic.reports.errors.UsageError('--full-refresh and --no-fetch cannot be combined')
     if settings.report.format == 'html':
-        raise gitstat.reports.errors.UsageError(
+        raise wambatic.reports.errors.UsageError(
             'the html format is built in implementation step 7; use --format terminal or json'
         )
     target = parse_target(report.target)
     if report.no_fetch and isinstance(target, str):
-        raise gitstat.reports.errors.UsageError(
+        raise wambatic.reports.errors.UsageError(
             '--no-fetch needs user:NAME or org:NAME: a bare NAME is resolved with the network'
         )
     if report.by_author and not isinstance(target, str):
         check_by_author(target)
 
 
-def check_by_author(subject: gitstat.fetch.base.Subject) -> None:
+def check_by_author(subject: wambatic.fetch.base.Subject) -> None:
     if subject.kind == 'user':
-        raise gitstat.reports.errors.UsageError(
+        raise wambatic.reports.errors.UsageError(
             '--by-author is for an organisation or a repository; a user is already one author'
         )
 
 
-def resolve_tz(settings: gitstat.settings.Settings) -> zoneinfo.ZoneInfo:
+def resolve_tz(settings: wambatic.settings.Settings) -> zoneinfo.ZoneInfo:
     try:
         return zoneinfo.ZoneInfo(settings.stats.timezone)
     except zoneinfo.ZoneInfoNotFoundError, ValueError:
-        raise gitstat.settings.SettingsError('stats.timezone is not a known time zone') from None
+        raise wambatic.settings.SettingsError('stats.timezone is not a known time zone') from None
 
 
 def build_request(
-    report: Report, settings: gitstat.settings.Settings, tz: zoneinfo.ZoneInfo
-) -> gitstat.stats.base.StatsRequest:
+    report: Report, settings: wambatic.settings.Settings, tz: zoneinfo.ZoneInfo
+) -> wambatic.stats.base.StatsRequest:
     fields: dict[str, object] = {}
     if report.groups is not None:
         groups = frozenset(name.strip() for name in report.groups.split(',') if name.strip())
         if not groups:
-            raise gitstat.reports.errors.UsageError('--groups needs at least one group name')
+            raise wambatic.reports.errors.UsageError('--groups needs at least one group name')
         fields['groups'] = groups
-    return gitstat.stats.base.StatsRequest(
-        granularity=gitstat.stats.base.Granularity(report.by),
+    return wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity(report.by),
         since=None if report.since is None else parse_date(report.since, '--since'),
         until=None if report.until is None else parse_date(report.until, '--until'),
         by_author=report.by_author,
@@ -216,17 +216,17 @@ def build_request(
 
 
 def make_fetcher(
-    token: str, cache: gitstat.fetch.cache.Cache, settings: gitstat.settings.FetchSettings
-) -> gitstat.fetch.base.Fetcher:
+    token: str, cache: wambatic.fetch.cache.Cache, settings: wambatic.settings.FetchSettings
+) -> wambatic.fetch.base.Fetcher:
     """The one place a `Fetcher` is built, so tests can swap in one that talks to a replay
     server. An empty token is for a fetcher that is only read from and never entered."""
-    return gitstat.fetch.base.Fetcher(token, cache, settings)
+    return wambatic.fetch.base.Fetcher(token, cache, settings)
 
 
 def needs_sync(
     provenance: dict[str, str],
     resources: frozenset[str],
-    settings: gitstat.settings.FetchSettings,
+    settings: wambatic.settings.FetchSettings,
     full_refresh: bool,
     no_fetch: bool,
     now: datetime.datetime,
@@ -248,7 +248,7 @@ def needs_sync(
     return False
 
 
-def log_sync(report: gitstat.fetch.base.SyncReport) -> None:
+def log_sync(report: wambatic.fetch.base.SyncReport) -> None:
     written = sum(report.rows_written.values())
     message = (
         f'Synced {report.repos_listed} repositories ({report.repos_skipped} unchanged), '
@@ -261,40 +261,42 @@ def log_sync(report: gitstat.fetch.base.SyncReport) -> None:
 
 async def build_result(
     report: Report,
-    settings: gitstat.settings.Settings,
-    cache: gitstat.fetch.cache.Cache,
-    target: gitstat.fetch.base.Subject | str,
-    request: gitstat.stats.base.StatsRequest,
+    settings: wambatic.settings.Settings,
+    cache: wambatic.fetch.cache.Cache,
+    target: wambatic.fetch.base.Subject | str,
+    request: wambatic.stats.base.StatsRequest,
     clock: collections.abc.Callable[[], datetime.datetime],
-) -> gitstat.stats.base.StatsResult:
+) -> wambatic.stats.base.StatsResult:
     """Resolve the subject, sync when needed and compute; the network is used (and a token
     resolved) only for a bare NAME or a sync."""
     reader = make_fetcher('', cache, settings.fetch)
     async with contextlib.AsyncExitStack() as stack:
-        online: gitstat.fetch.base.Fetcher | None = None
+        online: wambatic.fetch.base.Fetcher | None = None
         if isinstance(target, str):
-            token = gitstat.fetch.auth.resolve_token()
+            token = wambatic.fetch.auth.resolve_token()
             online = await stack.enter_async_context(make_fetcher(token, cache, settings.fetch))
-            subject = gitstat.fetch.base.Subject(await online.owner_kind(target), target)
+            subject = wambatic.fetch.base.Subject(await online.owner_kind(target), target)
             if report.by_author:
                 check_by_author(subject)
         else:
             subject = target
-        resources = gitstat.stats.resources_for(request.groups) & gitstat.fetch.base.BUILT_RESOURCES
+        resources = (
+            wambatic.stats.resources_for(request.groups) & wambatic.fetch.base.BUILT_RESOURCES
+        )
         provenance = await reader.provenance(subject, resources)
         synced = needs_sync(
             provenance, resources, settings.fetch, report.full_refresh, report.no_fetch, clock()
         )
         if synced:
             if online is None:
-                token = gitstat.fetch.auth.resolve_token()
+                token = wambatic.fetch.auth.resolve_token()
                 online = await stack.enter_async_context(make_fetcher(token, cache, settings.fetch))
             log_sync(await online.sync(subject, resources, full_refresh=report.full_refresh))
     try:
-        return await gitstat.stats.compute(subject, reader, request, clock=clock)
-    except gitstat.stats.EmptySubjectError as e:
+        return await wambatic.stats.compute(subject, reader, request, clock=clock)
+    except wambatic.stats.EmptySubjectError as e:
         if report.no_fetch:
-            raise gitstat.stats.EmptySubjectError(
+            raise wambatic.stats.EmptySubjectError(
                 f'{e}; the cache may only need a sync, so try again without --no-fetch'
             ) from None
         raise
@@ -302,18 +304,18 @@ async def build_result(
 
 async def run_report(
     report: Report,
-    settings: gitstat.settings.Settings,
+    settings: wambatic.settings.Settings,
     console: rich.console.Console,
     stdout: typing.TextIO,
     *,
-    clock: collections.abc.Callable[[], datetime.datetime] = gitstat.fetch.ratelimit.utc_now,
+    clock: collections.abc.Callable[[], datetime.datetime] = wambatic.fetch.ratelimit.utc_now,
 ) -> None:
     """Check the flags, bring the cache up to date if needed, compute and print the report."""
     target = parse_target(report.target)
     check_report(report, settings)
     request = build_request(report, settings, resolve_tz(settings))
-    gitstat.stats.resources_for(request.groups)
-    cache = gitstat.fetch.cache.Cache.open(
+    wambatic.stats.resources_for(request.groups)
+    cache = wambatic.fetch.cache.Cache.open(
         settings.fetch.cache_path, ignore_version=report.ignore_cache_version
     )
     try:
@@ -321,18 +323,18 @@ async def run_report(
     finally:
         cache.close()
     if settings.report.format == 'json':
-        gitstat.reports.base.render_json(result, stdout)
+        wambatic.reports.base.render_json(result, stdout)
     else:
-        gitstat.reports.terminal.render_terminal(result, console)
+        wambatic.reports.terminal.render_terminal(result, console)
 
 
-def cache_info_table(info: gitstat.fetch.cache.CacheInfo) -> rich.table.Table:
+def cache_info_table(info: wambatic.fetch.cache.CacheInfo) -> rich.table.Table:
     table = rich.table.Table(show_header=False, box=rich.box.SIMPLE, title='Cache')
     table.add_column(justify='left', no_wrap=True)
     table.add_column(justify='left', overflow='fold')
     rows: list[tuple[str, str]] = [
         ('path', str(info.path)),
-        ('size', f'{gitstat.reports.terminal.format_number(info.size_bytes)} bytes'),
+        ('size', f'{wambatic.reports.terminal.format_number(info.size_bytes)} bytes'),
         *sorted(info.identity.items()),
     ]
     for key, (recorded, running) in info.differences.items():
@@ -342,8 +344,8 @@ def cache_info_table(info: gitstat.fetch.cache.CacheInfo) -> rich.table.Table:
     if info.version_override_at is not None:
         rows.append(('version_override_at', info.version_override_at))
     rows += [
-        ('repositories', gitstat.reports.terminal.format_number(info.repos)),
-        ('commits', gitstat.reports.terminal.format_number(info.commits)),
+        ('repositories', wambatic.reports.terminal.format_number(info.repos)),
+        ('commits', wambatic.reports.terminal.format_number(info.commits)),
         (
             'last synced',
             'never' if info.last_synced_at is None else info.last_synced_at.isoformat(),
@@ -351,31 +353,31 @@ def cache_info_table(info: gitstat.fetch.cache.CacheInfo) -> rich.table.Table:
     ]
     for name, value in rows:
         table.add_row(
-            gitstat.reports.terminal.text_cell(name), gitstat.reports.terminal.text_cell(value)
+            wambatic.reports.terminal.text_cell(name), wambatic.reports.terminal.text_cell(value)
         )
     return table
 
 
 def run_cache(
-    command: CacheCommand, settings: gitstat.settings.Settings, console: rich.console.Console
+    command: CacheCommand, settings: wambatic.settings.Settings, console: rich.console.Console
 ) -> None:
     """`cache info` describes the cache, `cache clear` removes it; neither uses the network."""
     path = settings.fetch.cache_path
     if command.action == 'info':
-        info = gitstat.fetch.cache.inspect_cache(path)
+        info = wambatic.fetch.cache.inspect_cache(path)
         if info is None:
-            console.print(gitstat.reports.terminal.text_cell(f'no cache at {path}'))
+            console.print(wambatic.reports.terminal.text_cell(f'no cache at {path}'))
         else:
             console.print(cache_info_table(info))
         return
-    removed = gitstat.fetch.cache.clear_cache(path)
+    removed = wambatic.fetch.cache.clear_cache(path)
     for deleted in removed:
         loguru.logger.info(f'Removed {deleted}')
     if not removed:
         loguru.logger.info(f'no cache at {path}')
 
 
-def log_level(root: Gitstat) -> str:
+def log_level(root: Wambatic) -> str:
     if root.quiet and not root.verbose:
         return 'WARNING'
     if root.verbose and not root.quiet:
@@ -384,7 +386,7 @@ def log_level(root: Gitstat) -> str:
 
 
 def redact_environment_token(text: str) -> str:
-    return gitstat.fetch.auth.redact(text, os.environ.get('GITHUB_TOKEN', '').strip())
+    return wambatic.fetch.auth.redact(text, os.environ.get('GITHUB_TOKEN', '').strip())
 
 
 def redact_exception(error: BaseException | None) -> None:
@@ -399,15 +401,15 @@ def redact_exception(error: BaseException | None) -> None:
         error = error.__cause__ or error.__context__
 
 
-def execute(root: Gitstat) -> None:
+def execute(root: Wambatic) -> None:
     check_verbosity(root)
     command = root.command
     console = rich.console.Console()
     if isinstance(command, Report):
-        settings = gitstat.settings.load_settings(None, overrides(command))
+        settings = wambatic.settings.load_settings(None, overrides(command))
         asyncio.run(run_report(command, settings, console, sys.stdout))
     else:
-        run_cache(command, gitstat.settings.load_settings(None, {}), console)
+        run_cache(command, wambatic.settings.load_settings(None, {}), console)
 
 
 def exit_status(code: str | int | None) -> int:
@@ -418,22 +420,22 @@ def main(argv: list[str] | None = None) -> int:
     """Parse `argv` (default `sys.argv[1:]`), run the command and return the exit status; every
     error is turned into a logged line and a status here and nowhere else."""
     try:
-        root = cappa.parse(Gitstat, argv=sys.argv[1:] if argv is None else argv)
+        root = cappa.parse(Wambatic, argv=sys.argv[1:] if argv is None else argv)
     except cappa.Exit as e:
         return exit_status(e.code)
-    gitstat.logs.configure_logging(log_level(root))
+    wambatic.logs.configure_logging(log_level(root))
     try:
         execute(root)
-    except (gitstat.reports.errors.UsageError, gitstat.settings.SettingsError) as e:
+    except (wambatic.reports.errors.UsageError, wambatic.settings.SettingsError) as e:
         loguru.logger.error(redact_environment_token(str(e)))
         return 2
-    except (gitstat.fetch.errors.FetchError, gitstat.stats.StatsError) as e:
+    except (wambatic.fetch.errors.FetchError, wambatic.stats.StatsError) as e:
         loguru.logger.error(redact_environment_token(str(e)))
         return 1
     except KeyboardInterrupt:
         return 130
     except BrokenPipeError:
-        # The reader of stdout went away (`gitstat report ... | head`). Rich ends the same way
+        # The reader of stdout went away (`wambatic report ... | head`). Rich ends the same way
         # for the terminal format; point stdout at the null device so exit does not flush again.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 1
@@ -445,5 +447,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
-    """The `gitstat` console script and `python -m gitstat`."""
+    """The `wambatic` console script and `python -m wambatic`."""
     sys.exit(main())

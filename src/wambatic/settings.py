@@ -8,7 +8,7 @@ import typing
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class FetchSettings:
-    cache_path: pathlib.Path = pathlib.Path('~/.cache/gitstat/cache.sqlite3').expanduser()
+    cache_path: pathlib.Path = pathlib.Path('~/.cache/wambatic/cache.sqlite3').expanduser()
     full_refresh_after: datetime.timedelta = datetime.timedelta(days=30)
     include_archived: bool = False
     include_forks: bool = False
@@ -35,7 +35,7 @@ class ReportSettings:
     allow_remote: bool = False
     format: typing.Literal['html', 'json', 'terminal'] = 'terminal'
     html_theme: typing.Literal['auto', 'dark', 'light'] = 'auto'
-    out_dir: pathlib.Path = pathlib.Path('./gitstat-reports')
+    out_dir: pathlib.Path = pathlib.Path('./wambatic-reports')
     web_host: str = '127.0.0.1'
     web_port: int = 8000
 
@@ -51,7 +51,7 @@ class SettingsError(Exception):
     """A config file or override that cannot be turned into `Settings`."""
 
 
-DEFAULT_CONFIG_PATH = pathlib.Path('~/.config/gitstat/config.json')
+DEFAULT_CONFIG_PATH = pathlib.Path('~/.config/wambatic/config.json')
 DURATION_UNITS = {
     's': datetime.timedelta(seconds=1),
     'm': datetime.timedelta(minutes=1),
@@ -140,8 +140,8 @@ def apply_layer(settings: Settings, layer: object, source: str) -> Settings:
 
 def read_config(config_path: pathlib.Path | None) -> object:
     named = config_path
-    if named is None and 'GITSTAT_CONFIG' in os.environ:
-        named = pathlib.Path(os.environ['GITSTAT_CONFIG'])
+    if named is None and 'WAMBATIC_CONFIG' in os.environ:
+        named = pathlib.Path(os.environ['WAMBATIC_CONFIG'])
     path = (named or DEFAULT_CONFIG_PATH).expanduser()
     try:
         text = path.read_text()

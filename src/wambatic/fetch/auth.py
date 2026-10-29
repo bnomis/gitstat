@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-import gitstat.fetch.errors
+import wambatic.fetch.errors
 
 
 def resolve_token() -> str:
@@ -18,11 +18,11 @@ def resolve_token() -> str:
             check=False,
         )
     except FileNotFoundError, subprocess.TimeoutExpired:
-        raise gitstat.fetch.errors.AuthError(gitstat.fetch.errors.NO_TOKEN_MESSAGE) from None
+        raise wambatic.fetch.errors.AuthError(wambatic.fetch.errors.NO_TOKEN_MESSAGE) from None
     token = result.stdout.strip()
     if result.returncode == 0 and token:
         return token
-    raise gitstat.fetch.errors.AuthError(gitstat.fetch.errors.NO_TOKEN_MESSAGE)
+    raise wambatic.fetch.errors.AuthError(wambatic.fetch.errors.NO_TOKEN_MESSAGE)
 
 
 def redact(text: str, token: str) -> str:

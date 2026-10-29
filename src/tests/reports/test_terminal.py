@@ -8,23 +8,23 @@ import hypothesis.strategies as st
 import pytest
 import rich.console
 
-import gitstat.fetch.base
-import gitstat.reports.terminal
-import gitstat.stats.base
 import tests.conftest
 import tests.fixtures.reports
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
+import wambatic.reports.terminal
+import wambatic.stats.base
 
 METRICS = ('commits', 'contributors', 'active_days', 'lines_added', 'lines_deleted', 'lines_net')
-Granularity = gitstat.stats.base.Granularity
+Granularity = wambatic.stats.base.Granularity
 
 
-def render(result: gitstat.stats.base.StatsResult, width: int = 120) -> str:
+def render(result: wambatic.stats.base.StatsResult, width: int = 120) -> str:
     stream = io.StringIO()
     console = rich.console.Console(
         file=stream, width=width, color_system=None, legacy_windows=False
     )
-    gitstat.reports.terminal.render_terminal(result, console)
+    wambatic.reports.terminal.render_terminal(result, console)
     return stream.getvalue()
 
 
@@ -46,16 +46,16 @@ def period_rows(output: str) -> dict[str, dict[str, int]]:
 
 
 def recompute(
-    fetcher: gitstat.fetch.base.Fetcher, **changes: object
-) -> gitstat.stats.base.StatsResult:
+    fetcher: wambatic.fetch.base.Fetcher, **changes: object
+) -> wambatic.stats.base.StatsResult:
     fields: dict[str, object] = {'since': fixture.SINCE, 'until': fixture.UNTIL}
     fields.update(changes)
-    request = gitstat.stats.base.StatsRequest(**fields)  # type: ignore[arg-type]
+    request = wambatic.stats.base.StatsRequest(**fields)  # type: ignore[arg-type]
     return tests.conftest.compute_stats(fetcher, fixture.ORG, request)
 
 
 def test_sparkline_known_cases() -> None:
-    sparkline = gitstat.reports.terminal.sparkline
+    sparkline = wambatic.reports.terminal.sparkline
     assert sparkline([0, 7]) == '▁█'
     assert sparkline([3, 3, 3]) == '▁▁▁'
     assert sparkline([]) == ''
@@ -66,7 +66,7 @@ def test_sparkline_known_cases() -> None:
 @hypothesis.settings(max_examples=20, deadline=10000)
 @hypothesis.given(st.lists(st.floats(min_value=-1e6, max_value=1e6), max_size=40))
 def test_sparkline_has_one_block_per_value(values: list[float]) -> None:
-    line = gitstat.reports.terminal.sparkline(values)
+    line = wambatic.reports.terminal.sparkline(values)
     assert len(line) == len(values)
     assert all('▁' <= char <= '█' for char in line)
     if values and max(values) > min(values):
@@ -87,12 +87,12 @@ def test_sparkline_has_one_block_per_value(values: list[float]) -> None:
     ],
 )
 def test_format_number(value: float, signed: bool, expected: str) -> None:
-    assert gitstat.reports.terminal.format_number(value, signed=signed) == expected
+    assert wambatic.reports.terminal.format_number(value, signed=signed) == expected
 
 
 def test_the_title_names_the_subject_range_granularity_and_zone(
-    org_result: gitstat.stats.base.StatsResult,
-    repo_total_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
+    repo_total_result: wambatic.stats.base.StatsResult,
 ) -> None:
     assert render(org_result).splitlines()[0] == (
         'org octo-org, 2026-10-01 to 2027-01-31, by month, UTC'
@@ -103,7 +103,7 @@ def test_the_title_names_the_subject_range_granularity_and_zone(
 
 
 def test_the_period_table_and_total_row_equal_the_hand_checked_monthly_totals(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     rows = period_rows(render(org_result))
     for label, expected in fixture.ORG_BY_MONTH_UTC.items():
@@ -112,7 +112,7 @@ def test_the_period_table_and_total_row_equal_the_hand_checked_monthly_totals(
 
 
 def test_partial_periods_are_marked_and_the_caption_says_so(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = recompute(
         stats_fetcher, since=datetime.date(2026, 10, 5), until=datetime.date(2027, 1, 20)
@@ -126,7 +126,7 @@ def test_partial_periods_are_marked_and_the_caption_says_so(
 
 
 def test_a_whole_range_has_no_partial_mark_or_caption(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(org_result)
     assert ' *' not in output
@@ -134,7 +134,7 @@ def test_a_whole_range_has_no_partial_mark_or_caption(
 
 
 def test_one_bucket_prints_one_row_and_no_total_row_or_trends(
-    repo_total_result: gitstat.stats.base.StatsResult,
+    repo_total_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(repo_total_result)
     rows = period_rows(output)
@@ -144,7 +144,7 @@ def test_one_bucket_prints_one_row_and_no_total_row_or_trends(
 
 
 def test_trends_show_one_line_per_metric_with_its_range(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     lines = render(org_result).splitlines()
     start = lines.index('Trends')
@@ -154,7 +154,7 @@ def test_trends_show_one_line_per_metric_with_its_range(
 
 
 def test_narrow_trends_keep_the_latest_periods_and_fit_the_width(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = recompute(stats_fetcher, granularity=Granularity.DAY)
     lines = render(result, width=40).splitlines()
@@ -168,12 +168,12 @@ def test_narrow_trends_keep_the_latest_periods_and_fit_the_width(
     assert all('last' in line and len(line) <= 100 for line in wide_trends)
 
 
-def test_trends_that_fit_are_not_cropped(org_result: gitstat.stats.base.StatsResult) -> None:
+def test_trends_that_fit_are_not_cropped(org_result: wambatic.stats.base.StatsResult) -> None:
     assert 'last' not in render(org_result)
 
 
 def test_a_cache_version_override_prints_a_warning_naming_the_flag(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     provenance = {**org_result.provenance, 'version_override_at': '2027-02-02T09:00:00+00:00'}
     output = render(dataclasses.replace(org_result, provenance=provenance))
@@ -184,14 +184,14 @@ def test_a_cache_version_override_prints_a_warning_naming_the_flag(
 
 
 def test_the_provenance_footer_lists_the_run_and_the_versions(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     lines = render(org_result).splitlines()
     footer = lines[lines.index('Provenance') + 1 :]
     assert footer == [
         'computed_at: 2027-01-20T12:00:00+00:00',
         'fetched_at:commits: 2027-02-01T10:00:00+00:00',
-        f'gitstat_version: {org_result.provenance["gitstat_version"]}',
+        f'wambatic_version: {org_result.provenance["wambatic_version"]}',
         'schema_version: 1',
     ]
 
@@ -201,10 +201,10 @@ def without_trailing_spaces(text: str) -> str:
 
 
 def test_the_org_by_month_rendering_matches_the_known_good_text(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     expected = tests.fixtures.reports.ORG_MONTH_TERMINAL.format(
-        gitstat_version=org_result.provenance['gitstat_version']
+        wambatic_version=org_result.provenance['wambatic_version']
     )
     assert without_trailing_spaces(render(org_result)) == expected
 
@@ -223,7 +223,7 @@ def table_rows(output: str, title: str) -> dict[str, list[int]]:
 
 
 def test_the_repository_rows_add_up_to_the_total_row(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(org_result)
     rows = table_rows(output, 'By repository')
@@ -239,7 +239,7 @@ def test_the_repository_rows_add_up_to_the_total_row(
 
 
 def test_the_author_rows_add_up_to_the_total_row_and_are_ordered_by_commits_then_name(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(org_result)
     rows = table_rows(output, 'By author')
@@ -255,7 +255,7 @@ def test_the_author_rows_add_up_to_the_total_row_and_are_ordered_by_commits_then
 
 
 def test_by_author_appears_only_when_requested(
-    stats_fetcher: gitstat.fetch.base.Fetcher,
+    stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     output = render(recompute(stats_fetcher))
     assert 'By repository' in output
@@ -263,15 +263,15 @@ def test_by_author_appears_only_when_requested(
 
 
 def test_a_repo_has_no_repository_breakdown(
-    repo_total_result: gitstat.stats.base.StatsResult,
+    repo_total_result: wambatic.stats.base.StatsResult,
 ) -> None:
     assert 'By repository' not in render(repo_total_result)
 
 
 def test_breakdown_rows_that_are_all_zero_are_left_out(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
-    zero = gitstat.stats.base.Series(
+    zero = wambatic.stats.base.Series(
         'commits', 'count', dict.fromkeys(org_result.series[0].points, 0), 'ghost', 'author'
     )
     padded = dataclasses.replace(org_result, series=[*org_result.series, zero])
@@ -279,7 +279,7 @@ def test_breakdown_rows_that_are_all_zero_are_left_out(
 
 
 def test_top_contributors_follow_the_table_order(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     rows = table_rows(render(org_result), 'Top contributors')
     assert list(rows) == [row['login'] for row in fixture.ORG_TOP_CONTRIBUTORS]
@@ -287,20 +287,20 @@ def test_top_contributors_follow_the_table_order(
 
 
 def test_at_most_twenty_top_contributors_are_shown_then_a_count_of_the_rest(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     many = [{**fixture.ORG_TOP_CONTRIBUTORS[0], 'login': f'person{n:02d}'} for n in range(25)]
     output = render(
         dataclasses.replace(org_result, tables={**org_result.tables, 'top_contributors': many})
     )
     shown = [line for line in output.splitlines() if line.strip().startswith('person')]
-    assert len(shown) == gitstat.reports.terminal.TOP_CONTRIBUTORS_SHOWN == 20
+    assert len(shown) == wambatic.reports.terminal.TOP_CONTRIBUTORS_SHOWN == 20
     assert shown[-1].split()[0] == 'person19'
     assert 'and 5 more' in output
 
 
 def test_exactly_twenty_top_contributors_have_no_more_line(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     twenty = [{**fixture.ORG_TOP_CONTRIBUTORS[0], 'login': f'person{n:02d}'} for n in range(20)]
     output = render(
@@ -310,7 +310,7 @@ def test_exactly_twenty_top_contributors_have_no_more_line(
 
 
 def test_unavailable_lists_flow_and_the_unbuilt_activity_metrics(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(org_result)
     assert 'Unavailable' in output
@@ -319,7 +319,7 @@ def test_unavailable_lists_flow_and_the_unbuilt_activity_metrics(
 
 
 def test_unavailable_is_absent_when_the_table_is_empty(
-    org_result: gitstat.stats.base.StatsResult,
+    org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(
         dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': []})

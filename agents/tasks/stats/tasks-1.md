@@ -29,7 +29,7 @@ This list builds step 4 of the [implementation order](../../specs/implementation
 | Provenance | Tasks 3 and 7 |
 | Settings (`bot_logins`, `exclude_merge_commits`; `timezone` is step 5's CLI) | Tasks 5 and 6 |
 | Settings (`deploy_workflow`, `failure_window`, `hotfix_labels`) | step 8 |
-| System spec API (`StatsRequest`, `StatsResult`, `compute` re-exported from `gitstat`) | Task 8 |
+| System spec API (`StatsRequest`, `StatsResult`, `compute` re-exported from `wambatic`) | Task 8 |
 | Implementation order step 4 "Done when" | Tasks 2 and 4 to 7; checked in Task 8 |
 
 The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` groups are built by the step 6 and step 8 lists, and the last of them sets it to `implemented`.
@@ -41,7 +41,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 - Every cache in a test lives under pytest's `tmp_path`; no test touches `~/.cache`, and no stats test reaches the network.
 - Times passed between modules are timezone-aware; `datetime.UTC` and `zoneinfo.ZoneInfo` zones only, never naive datetimes.
 - Logins are compared with `str.casefold()` wherever the spec says case-insensitively (the subject login of a `user` subject and `stats.bot_logins`); the login stored in a result is the one GitHub reported.
-- `gitstat.stats` modules import nothing from gitstat outside `gitstat.stats`, `gitstat.fetch`, `gitstat.settings` and `gitstat.version`; Task 8 makes `src/tests/test_layering.py` enforce it.
+- `wambatic.stats` modules import nothing from wambatic outside `wambatic.stats`, `wambatic.fetch`, `wambatic.settings` and `wambatic.version`; Task 8 makes `src/tests/test_layering.py` enforce it.
 - No dependency is added: `bisect`, `datetime` and `zoneinfo` are stdlib.
 
 ---
@@ -57,10 +57,10 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 
 **Subtasks:**
 
-- [x] Add `src/gitstat/stats/errors.py` with `StatsError(Exception)` and its subclasses `EmptySubjectError`, `InvalidRangeError`, `InvalidRequestError` and `UnknownGroupError`, each taking a message
-- [x] Add `src/gitstat/stats/base.py` with `GROUPS`, `Granularity`, `Bucket` (`order=True`), `Series` (with `by_kind`), `StatsRequest` (with `settings`) and `StatsResult` (with `since` and `until`) exactly as the spec's API: frozen, slotted dataclasses; field names, types and defaults as written
+- [x] Add `src/wambatic/stats/errors.py` with `StatsError(Exception)` and its subclasses `EmptySubjectError`, `InvalidRangeError`, `InvalidRequestError` and `UnknownGroupError`, each taking a message
+- [x] Add `src/wambatic/stats/base.py` with `GROUPS`, `Granularity`, `Bucket` (`order=True`), `Series` (with `by_kind`), `StatsRequest` (with `settings`) and `StatsResult` (with `since` and `until`) exactly as the spec's API: frozen, slotted dataclasses; field names, types and defaults as written
 - [x] `Series.__post_init__` raises `ValueError` when exactly one of `by` and `by_kind` is `None`
-- [x] Import `Subject` for `StatsResult` from `gitstat.fetch` at run time (it is a dataclass field type, so mypy and `dataclasses` need it); import `Fetcher` nowhere in this module
+- [x] Import `Subject` for `StatsResult` from `wambatic.fetch` at run time (it is a dataclass field type, so mypy and `dataclasses` need it); import `Fetcher` nowhere in this module
 - [x] Write `src/tests/stats/__init__.py` and `src/tests/stats/test_base.py`: `GROUPS` is exactly `{'activity', 'delivery', 'flow'}`; `Granularity` has the five values in the spec; `StatsRequest()` has the spec's defaults, including `StatsSettings()`; buckets sort by `start`; records are immutable (`dataclasses.FrozenInstanceError`); `Series` with `by` and no `by_kind`, or the reverse, raises `ValueError`
 - [x] Write `src/tests/stats/test_errors.py`: every error is a `StatsError`, and `StatsError` is not a `FetchError` (front ends catch them separately)
 
@@ -81,9 +81,9 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Notes:**
 
 - Depends on fetch-and-cache/tasks-2.md Task 12 (step 3), done
-- `src/gitstat/stats/__init__.py` exists and is empty; exports are added in Task 8.
+- `src/wambatic/stats/__init__.py` exists and is empty; exports are added in Task 8.
 - Built 2026-10-29 as written.
-- Key files: `src/gitstat/stats/base.py`, `src/gitstat/stats/errors.py`, `src/tests/stats/test_base.py`, `src/tests/stats/test_errors.py`
+- Key files: `src/wambatic/stats/base.py`, `src/wambatic/stats/errors.py`, `src/tests/stats/test_base.py`, `src/tests/stats/test_errors.py`
 
 ---
 
@@ -94,11 +94,11 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Complexity:** medium
 **Spec Reference:** API (`bucket_for`, `bucket_range`, `partial_buckets`); Implementation (local dates, ISO weeks, labels, half-open buckets; Range; Partial buckets); implementation order step 4 "Done when" (buckets partition any date range with no gaps or overlaps)
 
-**User Story:** As a gitstat user, I want every commit counted in exactly one period of my chosen size in my own timezone, with ISO weeks labelled by their ISO year, so that totals per period add up to the whole and line up with my calendar.
+**User Story:** As a wambatic user, I want every commit counted in exactly one period of my chosen size in my own timezone, with ISO weeks labelled by their ISO year, so that totals per period add up to the whole and line up with my calendar.
 
 **Subtasks:**
 
-- [x] Add `src/gitstat/stats/buckets.py` with an internal `bucket_start(day, granularity) -> datetime.date`: the year's 1 January, the month's 1st, the ISO week's Monday (`date.fromisocalendar(y, w, 1)`), or the day itself; `ValueError` for `TOTAL`
+- [x] Add `src/wambatic/stats/buckets.py` with an internal `bucket_start(day, granularity) -> datetime.date`: the year's 1 January, the month's 1st, the ISO week's Monday (`date.fromisocalendar(y, w, 1)`), or the day itself; `ValueError` for `TOTAL`
 - [x] An internal `next_start(start, granularity) -> datetime.date`: the start of the following bucket (next 1 January, next month's 1st, `start + 7 days`, `start + 1 day`)
 - [x] An internal `label(start, granularity) -> str`: `'2026'`, `'2026-10'`, `f'{iso_year}-W{iso_week:02d}'` from `start.isocalendar()`, `'2026-10-29'`
 - [x] `bucket_for(when, granularity, tz)`: `ValueError` for a naive `when` and for `TOTAL`; otherwise the bucket of `when.astimezone(tz).date()`
@@ -129,7 +129,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 - Python's `datetime.date.fromisocalendar` and `isocalendar` implement ISO 8601 weeks ([datetime docs](https://docs.python.org/3.14/library/datetime.html#datetime.date.isocalendar)).
 - `hypothesis.strategies.timezones()` needs the system tz database (present on the Linux CI runner and on macOS); if it is absent, the test must fail rather than skip, so the gap is seen.
 - Built 2026-10-29. `buckets.py` also holds `bucket_granularity(bucket)`, which reads the granularity back from a label (`'2026'`, `'2026-10'`, `'2026-W44'`, `'2026-10-29'`): `partial_buckets` and `aggregate` take buckets without a granularity argument, as the spec's signatures do, and need it to find the end of the last bucket.
-- Key files: `src/gitstat/stats/buckets.py`, `src/tests/stats/test_buckets.py`
+- Key files: `src/wambatic/stats/buckets.py`, `src/tests/stats/test_buckets.py`
 
 ---
 
@@ -144,8 +144,8 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 
 **Subtasks:**
 
-- [x] Add `Cache.version_override_at() -> str | None` to `src/gitstat/fetch/cache.py`, reading the `meta` row under the cache lock
-- [x] Add `Fetcher.provenance(subject, resources) -> dict[str, str]` to `src/gitstat/fetch/base.py`: `identity()`, then `version_override_at` when recorded, then for each resource in sorted order `fetched_at:<resource>` = the earliest `synced_at` (ISO UTC) over `repos(subject)`, or `'never'` when one of those repos has no `sync_state` row for it; cache calls go through `self.db`
+- [x] Add `Cache.version_override_at() -> str | None` to `src/wambatic/fetch/cache.py`, reading the `meta` row under the cache lock
+- [x] Add `Fetcher.provenance(subject, resources) -> dict[str, str]` to `src/wambatic/fetch/base.py`: `identity()`, then `version_override_at` when recorded, then for each resource in sorted order `fetched_at:<resource>` = the earliest `synced_at` (ISO UTC) over `repos(subject)`, or `'never'` when one of those repos has no `sync_state` row for it; cache calls go through `self.db`
 - [x] A resource name outside `RESOURCES` raises `ValueError` naming it, as `sync` does; an unbuilt resource is allowed (it reads `'never'`)
 - [x] Write tests in `src/tests/fetch/test_cache.py`: `version_override_at()` is `None` for a matching cache and the recorded time after opening with `ignore_version=True` over a difference
 - [x] Write tests in `src/tests/fetch/test_fetcher.py`: after syncing two repos at different clock times, `fetched_at:commits` is the earlier time; a repo listed but never synced gives `'never'`; the identity keys are present; the call sends no request (the replay server records none)
@@ -169,7 +169,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 - Depends on fetch-and-cache/tasks-2.md Task 12, done. Independent of Tasks 1 and 2.
 - A repo listed but never synced has a `repos` row and no `sync_state` row; `Cache.upsert_repos` then no `write_commits` produces it.
 - Built 2026-10-29. The two-repo test writes the sync states into the cache at known times instead of syncing at two clock times, because the fixed client clock gives every sync the same `synced_at`; `sync` itself is covered by the step 3 tests. A subject with no listed repos reads `'never'` for every resource.
-- Key files: `src/gitstat/fetch/cache.py`, `src/gitstat/fetch/base.py`, `src/tests/fetch/test_cache.py`, `src/tests/fetch/test_fetcher.py`
+- Key files: `src/wambatic/fetch/cache.py`, `src/wambatic/fetch/base.py`, `src/tests/fetch/test_cache.py`, `src/tests/fetch/test_fetcher.py`
 
 ---
 
@@ -219,11 +219,11 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Complexity:** medium
 **Spec Reference:** Metric groups (activity: `commits`, `contributors`, `active_days`, `lines_added`, `lines_deleted`, `lines_net`); Aggregation (zero fill; ordering); Settings (`bot_logins`, `exclude_merge_commits`)
 
-**User Story:** As a gitstat user, I want commits, contributors, active days and lines added, deleted and net per period, with merge commits left out of line counts, so that I can see how much work landed and how much code changed without double counting merges.
+**User Story:** As a wambatic user, I want commits, contributors, active days and lines added, deleted and net per period, with merge commits left out of line counts, so that I can see how much work landed and how much code changed without double counting merges.
 
 **Subtasks:**
 
-- [x] Add `src/gitstat/stats/activity.py` with a pure `aggregate(commits, buckets, tz, settings, *, by_author, by_repo) -> tuple[list[Series], dict[str, list[dict[str, typing.Any]]]]`; this task builds the total series, Task 6 the breakdowns and table
+- [x] Add `src/wambatic/stats/activity.py` with a pure `aggregate(commits, buckets, tz, settings, *, by_author, by_repo) -> tuple[list[Series], dict[str, list[dict[str, typing.Any]]]]`; this task builds the total series, Task 6 the breakdowns and table
 - [x] Place each commit in its bucket by `bisect.bisect_right` over the bucket starts with the commit's local date; a commit outside the buckets raises `ValueError` (the caller filters by range first)
 - [x] `commits` counts every commit; `lines_added` and `lines_deleted` sum non-merge commits when `settings.exclude_merge_commits`, all commits otherwise; `lines_net` is their difference
 - [x] `contributors` counts distinct `author_login.casefold()` per bucket, leaving out `None` and every login in `settings.bot_logins` (casefolded)
@@ -251,7 +251,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 - Depends on Task 2, Task 4
 - Filtering by a `user` subject's login is `compute`'s job (Task 7), before `aggregate`; `aggregate` counts what it is given.
 - Built 2026-10-29. `Bucket`s with the label `total` have no end, so `aggregate` accepts any local date on or after the start for `TOTAL`; for every other granularity the end is the last bucket's `next_start`.
-- Key files: `src/gitstat/stats/activity.py`, `src/tests/stats/test_activity.py`
+- Key files: `src/wambatic/stats/activity.py`, `src/tests/stats/test_activity.py`
 
 ---
 
@@ -262,7 +262,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Complexity:** medium
 **Spec Reference:** Aggregation (breakdown series by author and by repo; ordering; sums); Metric groups (activity: `top_contributors`); Error handling (`unattributed`)
 
-**User Story:** As a gitstat user reporting on a repository or organisation, I want the same line and commit series per author and per repository, and a table of top contributors, so that I can see who and which repos the change came from.
+**User Story:** As a wambatic user reporting on a repository or organisation, I want the same line and commit series per author and per repository, and a table of top contributors, so that I can see who and which repos the change came from.
 
 **Subtasks:**
 
@@ -292,7 +292,7 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 - Depends on Task 5
 - The spec's sum property holds for `commits` and the three line metrics; `contributors` and `active_days` have no breakdown.
 - Built 2026-10-29. The spec does not say how logins compare when ordering: series and `top_contributors` order by plain string comparison of the login (`'Octocat'` sorts before `'hubot'`), so the order is the same on every platform and locale. The spelling of a login is the first seen in the order the commits are given, so reversing the commits can rename a series from `Octocat` to `octocat`; `compute` gives repos in name order and commits oldest first.
-- Key files: `src/gitstat/stats/activity.py`, `src/tests/stats/test_activity.py`, `src/tests/fixtures/stats.py`
+- Key files: `src/wambatic/stats/activity.py`, `src/tests/stats/test_activity.py`, `src/tests/fixtures/stats.py`
 
 ---
 
@@ -303,11 +303,11 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Complexity:** medium
 **Spec Reference:** API (`compute`, `resources_for`); Error handling (all, and the validation order); Implementation (Range; Reading the cache; Partial buckets; Groups not built yet); Aggregation (user, repo and org subjects); Provenance
 
-**User Story:** As a gitstat front end, I want one call that turns a subject and a request into a complete, traceable result from the cache, so that the terminal report, HTML report and web app all show the same numbers and none of them reaches the network through stats.
+**User Story:** As a wambatic front end, I want one call that turns a subject and a request into a complete, traceable result from the cache, so that the terminal report, HTML report and web app all show the same numbers and none of them reaches the network through stats.
 
 **Subtasks:**
 
-- [x] Add `src/gitstat/stats/compute.py` with `resources_for(groups)` per the spec's mapping; an unknown group raises `UnknownGroupError` naming each, sorted
+- [x] Add `src/wambatic/stats/compute.py` with `resources_for(groups)` per the spec's mapping; an unknown group raises `UnknownGroupError` naming each, sorted
 - [x] `compute` validates in the spec's order before any cache read: unknown groups (`UnknownGroupError`), `by_author` with a `user` subject (`InvalidRequestError`), then `since > until` when both are given (`InvalidRangeError`)
 - [x] Split the requested groups into built (`activity`) and unbuilt (`flow` step 6, `delivery` step 8); with no built group, raise `EmptySubjectError` naming the steps
 - [x] Read `fetcher.repos(subject)`; none raises `EmptySubjectError`
@@ -338,9 +338,9 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 
 - Depends on Task 3, Task 6
 - A naive `datetime.combine(day, datetime.time(), tzinfo=tz)` can name a local time that does not exist in zones that skip midnight; the one-day widening plus the local-date filter makes that harmless, so do not try to compute exact UTC bounds.
-- `compute` is the only async function in `gitstat.stats`; every function it calls after reading the records is pure.
+- `compute` is the only async function in `wambatic.stats`; every function it calls after reading the records is pure.
 - Built 2026-10-29. `tables['unavailable']` is always present, empty when nothing is unavailable. After the open bounds resolve, commits dated after `until` (a commit later than today when `until` is `None`) are dropped, because `aggregate` raises on a commit outside its buckets; a range with no commit left after that is `EmptySubjectError`, and a resolved `since` after `until` is `InvalidRangeError`.
-- Key files: `src/gitstat/stats/compute.py`, `src/tests/stats/test_compute.py`
+- Key files: `src/wambatic/stats/compute.py`, `src/tests/stats/test_compute.py`
 
 ---
 
@@ -349,23 +349,23 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Status:** done
 **Priority:** medium
 **Complexity:** small
-**Spec Reference:** Module location; API; system spec API (`StatsRequest`, `StatsResult`, `compute` re-exported from `gitstat`); system spec Architecture (layering); implementation order step 4 "Done when"
+**Spec Reference:** Module location; API; system spec API (`StatsRequest`, `StatsResult`, `compute` re-exported from `wambatic`); system spec Architecture (layering); implementation order step 4 "Done when"
 
 **Technical Goal:** Expose the step 4 names, enforce the stats layer's imports, run every test this list can affect, and mark the step done.
 
 **Subtasks:**
 
-- [x] In `src/gitstat/stats/__init__.py`, import and list in `__all__`, alphabetically: `Bucket`, `EmptySubjectError`, `GROUPS`, `Granularity`, `InvalidRangeError`, `InvalidRequestError`, `Series`, `StatsError`, `StatsRequest`, `StatsResult`, `UnknownGroupError`, `bucket_for`, `bucket_range`, `compute`, `partial_buckets`, `resources_for`
-- [x] In `src/gitstat/__init__.py`, re-export `StatsRequest`, `StatsResult` and `compute` and add them to `__all__` (system spec, API)
-- [x] Extend `src/tests/test_package.py`: every name in `gitstat.stats.__all__` resolves, and `gitstat.compute is gitstat.stats.compute`
-- [x] Extend `violations` in `src/tests/test_layering.py` so a `gitstat.stats` module importing anything outside `gitstat.stats`, `gitstat.fetch`, `gitstat.settings` and `gitstat.version` is a violation (today only `gitstat.reports` is), with a test like `test_detects_fetch_importing_reports` for it
+- [x] In `src/wambatic/stats/__init__.py`, import and list in `__all__`, alphabetically: `Bucket`, `EmptySubjectError`, `GROUPS`, `Granularity`, `InvalidRangeError`, `InvalidRequestError`, `Series`, `StatsError`, `StatsRequest`, `StatsResult`, `UnknownGroupError`, `bucket_for`, `bucket_range`, `compute`, `partial_buckets`, `resources_for`
+- [x] In `src/wambatic/__init__.py`, re-export `StatsRequest`, `StatsResult` and `compute` and add them to `__all__` (system spec, API)
+- [x] Extend `src/tests/test_package.py`: every name in `wambatic.stats.__all__` resolves, and `wambatic.compute is wambatic.stats.compute`
+- [x] Extend `violations` in `src/tests/test_layering.py` so a `wambatic.stats` module importing anything outside `wambatic.stats`, `wambatic.fetch`, `wambatic.settings` and `wambatic.version` is a violation (today only `wambatic.reports` is), with a test like `test_detects_fetch_importing_reports` for it
 - [x] Check the implementation order's "Done when" for step 4: hypothesis partition tests (Task 2) and hand-checked fixture totals (Tasks 5 to 7)
 - [x] Run every test that imports a changed module directly or transitively: `pytest src/tests/stats src/tests/fetch src/tests/test_package.py src/tests/test_layering.py`
 - [x] In `agents/specs/implementation-order.md`, set step 4's Status to `done: [tasks-1](../tasks/stats/tasks-1.md)`
 
 **Acceptance Criteria:**
 
-- [x] `import gitstat; gitstat.compute; gitstat.StatsRequest; gitstat.StatsResult` works
+- [x] `import wambatic; wambatic.compute; wambatic.StatsRequest; wambatic.StatsResult` works
 - [x] Every step 4 "Done when" item is met, or its gap is recorded in the task that owns it
 
 **Definition of Done:**
@@ -380,9 +380,9 @@ The spec's `**Status:**` is not changed by this list: the `flow` and `delivery` 
 **Notes:**
 
 - Depends on Tasks 1 to 7
-- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (Task 3 changed `gitstat.fetch`, whose tests are under `src/tests/fetch/`; `gitstat` and `gitstat.stats` are imported outside `src/tests/stats/` only by `src/tests/test_package.py` and checked by `src/tests/test_layering.py`).
+- The project has no affected-tests tool; the command above names every test file that reaches a module this list changed (Task 3 changed `wambatic.fetch`, whose tests are under `src/tests/fetch/`; `wambatic` and `wambatic.stats` are imported outside `src/tests/stats/` only by `src/tests/test_package.py` and checked by `src/tests/test_layering.py`).
 - The stats spec's `**Status:**` stays `proposed` (see the header).
-- Built 2026-10-29. `gitstat.stats.compute` is the function, not the submodule, once `__init__` re-exports it, so the tests call `gitstat.stats.compute(...)` and `gitstat.stats.resources_for(...)` and nothing in `gitstat` imports the submodule by attribute. The implementation order's step 4 "Done when" is met by the hypothesis partition tests in `test_buckets.py` and the hand-written fixture totals checked in `test_activity.py` and `test_compute.py`.
-- Key files: `src/gitstat/stats/__init__.py`, `src/gitstat/__init__.py`, `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`
+- Built 2026-10-29. `wambatic.stats.compute` is the function, not the submodule, once `__init__` re-exports it, so the tests call `wambatic.stats.compute(...)` and `wambatic.stats.resources_for(...)` and nothing in `wambatic` imports the submodule by attribute. The implementation order's step 4 "Done when" is met by the hypothesis partition tests in `test_buckets.py` and the hand-written fixture totals checked in `test_activity.py` and `test_compute.py`.
+- Key files: `src/wambatic/stats/__init__.py`, `src/wambatic/__init__.py`, `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`
 
 ---

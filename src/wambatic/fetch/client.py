@@ -8,11 +8,11 @@ import re
 import aiohttp
 import loguru
 
-import gitstat.fetch.auth
-import gitstat.fetch.errors
-import gitstat.fetch.ratelimit
-import gitstat.settings
-import gitstat.version
+import wambatic.fetch.auth
+import wambatic.fetch.errors
+import wambatic.fetch.ratelimit
+import wambatic.settings
+import wambatic.version
 
 REQUEST_TIMEOUT = 60.0
 TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
@@ -64,7 +64,7 @@ class GitHubClient:
     def __init__(
         self,
         token: str,
-        settings: gitstat.settings.FetchSettings,
+        settings: wambatic.settings.FetchSettings,
         *,
         api_url: str = 'https://api.github.com',
         sleep: collections.abc.Callable[[float], collections.abc.Awaitable[None]] = asyncio.sleep,
@@ -75,17 +75,17 @@ class GitHubClient:
         self.settings = settings
         self.api_url = api_url
         self.sleep = sleep
-        self.clock = clock or gitstat.fetch.ratelimit.utc_now
+        self.clock = clock or wambatic.fetch.ratelimit.utc_now
         self.rng = rng or random.Random()
         self.session: aiohttp.ClientSession | None = None
         self.limits = {
-            'graphql': gitstat.fetch.ratelimit.RateLimitState(),
-            'rest': gitstat.fetch.ratelimit.RateLimitState(),
+            'graphql': wambatic.fetch.ratelimit.RateLimitState(),
+            'rest': wambatic.fetch.ratelimit.RateLimitState(),
         }
         self.logger = loguru.logger.patch(self.redact_record)
 
     def redact_record(self, record: loguru.Record) -> None:
-        record['message'] = gitstat.fetch.auth.redact(record['message'], self.token)
+        record['message'] = wambatic.fetch.auth.redact(record['message'], self.token)
 
     async def __aenter__(self) -> GitHubClient:
         self.session = aiohttp.ClientSession(
@@ -94,7 +94,7 @@ class GitHubClient:
                 'Authorization': f'Bearer {self.token}',
                 'Accept': 'application/vnd.github+json',
                 'X-GitHub-Api-Version': '2022-11-28',
-                'User-Agent': f'gitstat/{gitstat.version.VERSION}',
+                'User-Agent': f'wambatic/{wambatic.version.VERSION}',
             },
         )
         return self
@@ -104,11 +104,11 @@ class GitHubClient:
             await self.session.close()
 
     @property
-    def graphql_limit(self) -> gitstat.fetch.ratelimit.RateLimitState:
+    def graphql_limit(self) -> wambatic.fetch.ratelimit.RateLimitState:
         return self.limits['graphql']
 
     @property
-    def rest_limit(self) -> gitstat.fetch.ratelimit.RateLimitState:
+    def rest_limit(self) -> wambatic.fetch.ratelimit.RateLimitState:
         return self.limits['rest']
 
     async def graphql(
@@ -120,12 +120,12 @@ class GitHubClient:
         )
         pairs = error_types(response.data)
         if any(kind == 'NOT_FOUND' for kind, _ in pairs):
-            raise gitstat.fetch.errors.NotFoundError('; '.join(message for _, message in pairs))
+            raise wambatic.fetch.errors.NotFoundError('; '.join(message for _, message in pairs))
         if pairs:
-            raise gitstat.fetch.errors.GraphQLError(pairs)
+            raise wambatic.fetch.errors.GraphQLError(pairs)
         data = response.data.get('data') if isinstance(response.data, dict) else None
         if not isinstance(data, dict) or not isinstance(data.get('rateLimit'), dict):
-            raise gitstat.fetch.errors.GraphQLError(
+            raise wambatic.fetch.errors.GraphQLError(
                 [('MALFORMED', 'response has no data or lacks rateLimit')]
             )
         return data
@@ -144,10 +144,10 @@ class GitHubClient:
             if response.status != 202:
                 break
             if pending >= self.settings.stats_retries:
-                raise gitstat.fetch.errors.StatsPendingError(
+                raise wambatic.fetch.errors.StatsPendingError(
                     f'GitHub is still computing {path}; try again later'
                 )
-            await self.sleep(gitstat.fetch.ratelimit.backoff_delay(pending, self.rng))
+            await self.sleep(wambatic.fetch.ratelimit.backoff_delay(pending, self.rng))
             pending += 1
         if response.status == 304:
             return RestResponse(304, None, etag, None)
@@ -186,13 +186,13 @@ class GitHubClient:
             return Response(raw.status, raw.headers, data, raw.request_info)
 
     def update_limits(self, endpoint: str, response: Response) -> None:
-        state = gitstat.fetch.ratelimit.RateLimitState.from_headers(response.headers)
+        state = wambatic.fetch.ratelimit.RateLimitState.from_headers(response.headers)
         if endpoint == 'graphql' and isinstance(response.data, dict):
             data = response.data.get('data')
             rate_limit = data.get('rateLimit') if isinstance(data, dict) else None
             if isinstance(rate_limit, dict):
-                state = gitstat.fetch.ratelimit.RateLimitState.from_graphql(rate_limit)
-        if state != gitstat.fetch.ratelimit.RateLimitState():
+                state = wambatic.fetch.ratelimit.RateLimitState.from_graphql(rate_limit)
+        if state != wambatic.fetch.ratelimit.RateLimitState():
             self.limits[endpoint] = state
 
     def limit_kind(self, endpoint: str, response: Response) -> str | None:
@@ -215,19 +215,19 @@ class GitHubClient:
     async def wait_for_reset(self, endpoint: str, reset_at: datetime.datetime) -> None:
         """Fail or wait out an exhausted primary limit, per `on_rate_limit`."""
         if self.settings.on_rate_limit == 'fail':
-            raise gitstat.fetch.errors.RateLimitError(reset_at)
+            raise wambatic.fetch.errors.RateLimitError(reset_at)
         wait = (reset_at - self.clock()).total_seconds() + 1
         self.logger.info(
             f'ETA: GitHub rate limit resets in {datetime.timedelta(seconds=round(wait))}'
         )
         await self.sleep(wait)
-        self.limits[endpoint] = gitstat.fetch.ratelimit.RateLimitState()
+        self.limits[endpoint] = wambatic.fetch.ratelimit.RateLimitState()
 
     def retry_after(self, response: Response) -> float:
         try:
             return float(response.headers['retry-after'])
         except KeyError, ValueError:
-            return gitstat.fetch.ratelimit.SECONDARY_WAIT
+            return wambatic.fetch.ratelimit.SECONDARY_WAIT
 
     async def request(
         self,
@@ -251,15 +251,15 @@ class GitHubClient:
             except aiohttp.ClientConnectionError, TimeoutError:
                 if retries >= max_retries:
                     raise
-                await self.sleep(gitstat.fetch.ratelimit.backoff_delay(retries, self.rng))
+                await self.sleep(wambatic.fetch.ratelimit.backoff_delay(retries, self.rng))
                 retries += 1
                 continue
             self.update_limits(endpoint, response)
             status = response.status
             if status == 401:
-                raise gitstat.fetch.errors.AuthError('GitHub rejected the token (401)')
+                raise wambatic.fetch.errors.AuthError('GitHub rejected the token (401)')
             kind = self.limit_kind(endpoint, response)
-            minimum = gitstat.fetch.ratelimit.SECONDARY_WAIT
+            minimum = wambatic.fetch.ratelimit.SECONDARY_WAIT
             if kind == 'primary':
                 state = self.limits[endpoint]
                 if state.reset_at is not None and state.exhausted(self.clock()):
@@ -269,9 +269,9 @@ class GitHubClient:
             elif kind == 'retry-after':
                 minimum = self.retry_after(response)
             if kind is not None:
-                wait = max(minimum, gitstat.fetch.ratelimit.backoff_delay(retries, self.rng))
+                wait = max(minimum, wambatic.fetch.ratelimit.backoff_delay(retries, self.rng))
                 if retries >= max_retries:
-                    raise gitstat.fetch.errors.RateLimitError(
+                    raise wambatic.fetch.errors.RateLimitError(
                         self.clock() + datetime.timedelta(seconds=wait)
                     )
                 await self.sleep(wait)
@@ -279,16 +279,16 @@ class GitHubClient:
                 continue
             if status == 403:
                 scopes = response.headers.get('x-accepted-oauth-scopes')
-                raise gitstat.fetch.errors.AuthError(
+                raise wambatic.fetch.errors.AuthError(
                     'GitHub denied access (403)'
                     + (f'; the endpoint accepts scopes: {scopes}' if scopes else '')
                 )
             if status == 404:
-                raise gitstat.fetch.errors.NotFoundError(f'{path} not found or not visible')
+                raise wambatic.fetch.errors.NotFoundError(f'{path} not found or not visible')
             if status in TRANSIENT_STATUSES:
                 if retries >= max_retries:
                     raise self.status_error(response)
-                await self.sleep(gitstat.fetch.ratelimit.backoff_delay(retries, self.rng))
+                await self.sleep(wambatic.fetch.ratelimit.backoff_delay(retries, self.rng))
                 retries += 1
                 continue
             if 200 <= status < 300 or status == 304:

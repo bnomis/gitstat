@@ -2,11 +2,11 @@ import collections.abc
 import datetime
 import typing
 
-import gitstat.fetch.base
-import gitstat.stats.activity
-import gitstat.stats.base
-import gitstat.stats.buckets
-import gitstat.stats.errors
+import wambatic.fetch.base
+import wambatic.stats.activity
+import wambatic.stats.base
+import wambatic.stats.buckets
+import wambatic.stats.errors
 
 RESOURCES_BY_GROUP = {
     'activity': frozenset({'commits'}),
@@ -26,9 +26,9 @@ ONE_DAY = datetime.timedelta(days=1)
 
 def resources_for(groups: frozenset[str]) -> frozenset[str]:
     """The fetch resources the groups read, for the caller's Fetcher.sync before compute."""
-    unknown = sorted(groups - gitstat.stats.base.GROUPS)
+    unknown = sorted(groups - wambatic.stats.base.GROUPS)
     if unknown:
-        raise gitstat.stats.errors.UnknownGroupError(f'unknown groups: {", ".join(unknown)}')
+        raise wambatic.stats.errors.UnknownGroupError(f'unknown groups: {", ".join(unknown)}')
     return frozenset().union(*(RESOURCES_BY_GROUP[group] for group in groups))
 
 
@@ -53,17 +53,17 @@ def unavailable(groups: frozenset[str]) -> list[dict[str, typing.Any]]:
 
 
 async def read_commits(
-    subject: gitstat.fetch.base.Subject,
-    fetcher: gitstat.fetch.base.Fetcher,
-    repos: list[gitstat.fetch.base.Repo],
-    request: gitstat.stats.base.StatsRequest,
-) -> list[gitstat.fetch.base.Commit]:
+    subject: wambatic.fetch.base.Subject,
+    fetcher: wambatic.fetch.base.Fetcher,
+    repos: list[wambatic.fetch.base.Repo],
+    request: wambatic.stats.base.StatsRequest,
+) -> list[wambatic.fetch.base.Commit]:
     """The cached commits whose local date is inside the requested bounds, from the subject's
     own authors only for a user subject."""
     lo = None if request.since is None else utc_midnight(request.since) - ONE_DAY
     hi = None if request.until is None else utc_midnight(request.until + ONE_DAY) + ONE_DAY
     login = subject.login.casefold()
-    kept: list[gitstat.fetch.base.Commit] = []
+    kept: list[wambatic.fetch.base.Commit] = []
     for repo in repos:
         async for commit in fetcher.commits(repo, lo, hi):
             day = commit.authored_at.astimezone(request.tz).date()
@@ -78,20 +78,20 @@ async def read_commits(
 
 
 async def compute(
-    subject: gitstat.fetch.base.Subject,
-    fetcher: gitstat.fetch.base.Fetcher,
-    request: gitstat.stats.base.StatsRequest,
+    subject: wambatic.fetch.base.Subject,
+    fetcher: wambatic.fetch.base.Fetcher,
+    request: wambatic.stats.base.StatsRequest,
     *,
     clock: collections.abc.Callable[[], datetime.datetime] | None = None,
-) -> gitstat.stats.base.StatsResult:
+) -> wambatic.stats.base.StatsResult:
     """All requested metric groups for the subject, from the cache, bucketed by
     request.granularity. Never syncs: the caller runs Fetcher.sync first, or not at all for
     --no-fetch. `clock` (default: now in UTC) gives today's date when `until` is None."""
     resources_for(request.groups)
     if request.by_author and subject.kind == 'user':
-        raise gitstat.stats.errors.InvalidRequestError('by_author is not meaningful for a user')
+        raise wambatic.stats.errors.InvalidRequestError('by_author is not meaningful for a user')
     if request.since is not None and request.until is not None and request.since > request.until:
-        raise gitstat.stats.errors.InvalidRangeError(
+        raise wambatic.stats.errors.InvalidRangeError(
             f'since {request.since} is after until {request.until}'
         )
     built = request.groups & BUILT_GROUPS
@@ -99,15 +99,15 @@ async def compute(
         steps = ', '.join(
             f'{group} (step {UNBUILT_GROUP_STEPS[group]})' for group in sorted(request.groups)
         )
-        raise gitstat.stats.errors.EmptySubjectError(f'no requested group is built yet: {steps}')
+        raise wambatic.stats.errors.EmptySubjectError(f'no requested group is built yet: {steps}')
     repos = await fetcher.repos(subject)
     if not repos:
-        raise gitstat.stats.errors.EmptySubjectError(
+        raise wambatic.stats.errors.EmptySubjectError(
             f'the cache holds no repositories for {subject.login}'
         )
     commits = await read_commits(subject, fetcher, repos, request)
     if not commits:
-        raise gitstat.stats.errors.EmptySubjectError('no commits in the cache for this range')
+        raise wambatic.stats.errors.EmptySubjectError('no commits in the cache for this range')
     now = (clock or (lambda: datetime.datetime.now(datetime.UTC)))()
     tz = request.tz
     granularity = request.granularity
@@ -116,17 +116,17 @@ async def compute(
         earliest = min(commit.authored_at for commit in commits).astimezone(tz).date()
         since = (
             earliest
-            if granularity is gitstat.stats.base.Granularity.TOTAL
-            else gitstat.stats.buckets.bucket_start(earliest, granularity)
+            if granularity is wambatic.stats.base.Granularity.TOTAL
+            else wambatic.stats.buckets.bucket_start(earliest, granularity)
         )
     until = request.until if request.until is not None else now.astimezone(tz).date()
     if since > until:
-        raise gitstat.stats.errors.InvalidRangeError(f'since {since} is after until {until}')
+        raise wambatic.stats.errors.InvalidRangeError(f'since {since} is after until {until}')
     commits = [c for c in commits if since <= c.authored_at.astimezone(tz).date() <= until]
     if not commits:
-        raise gitstat.stats.errors.EmptySubjectError('no commits in the cache for this range')
-    buckets = gitstat.stats.buckets.bucket_range(since, until, granularity)
-    series, tables = gitstat.stats.activity.aggregate(
+        raise wambatic.stats.errors.EmptySubjectError('no commits in the cache for this range')
+    buckets = wambatic.stats.buckets.bucket_range(since, until, granularity)
+    series, tables = wambatic.stats.activity.aggregate(
         commits,
         buckets,
         tz,
@@ -139,9 +139,9 @@ async def compute(
     provenance['computed_at'] = now.astimezone(datetime.UTC).isoformat()
     provenance['timezone'] = str(tz)
     provenance['partial_buckets'] = ','.join(
-        bucket.label for bucket in gitstat.stats.buckets.partial_buckets(since, until, buckets)
+        bucket.label for bucket in wambatic.stats.buckets.partial_buckets(since, until, buckets)
     )
-    return gitstat.stats.base.StatsResult(
+    return wambatic.stats.base.StatsResult(
         subject=subject,
         request=request,
         since=since,

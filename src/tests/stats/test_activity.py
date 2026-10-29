@@ -6,35 +6,35 @@ import hypothesis
 import hypothesis.strategies as st
 import pytest
 
-import gitstat.fetch.base
-import gitstat.settings
-import gitstat.stats.activity
-import gitstat.stats.base
-import gitstat.stats.buckets
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
+import wambatic.settings
+import wambatic.stats.activity
+import wambatic.stats.base
+import wambatic.stats.buckets
 
-Granularity = gitstat.stats.base.Granularity
-Series = gitstat.stats.base.Series
+Granularity = wambatic.stats.base.Granularity
+Series = wambatic.stats.base.Series
 UTC = datetime.UTC
 BERLIN = zoneinfo.ZoneInfo('Europe/Berlin')
-SETTINGS = gitstat.settings.StatsSettings()
+SETTINGS = wambatic.settings.StatsSettings()
 TOTALS = ('commits', 'contributors', 'active_days', 'lines_added', 'lines_deleted', 'lines_net')
 BREAKDOWN = ('commits', 'lines_added', 'lines_deleted', 'lines_net')
 
 
 def run(
-    commits: list[gitstat.fetch.base.Commit] | None = None,
+    commits: list[wambatic.fetch.base.Commit] | None = None,
     granularity: Granularity = Granularity.MONTH,
     tz: datetime.tzinfo = UTC,
-    settings: gitstat.settings.StatsSettings = SETTINGS,
+    settings: wambatic.settings.StatsSettings = SETTINGS,
     since: datetime.date = fixture.SINCE,
     until: datetime.date = fixture.UNTIL,
     *,
     by_author: bool = False,
     by_repo: bool = False,
 ) -> tuple[list[Series], dict[str, list[dict[str, object]]]]:
-    buckets = gitstat.stats.buckets.bucket_range(since, until, granularity)
-    return gitstat.stats.activity.aggregate(
+    buckets = wambatic.stats.buckets.bucket_range(since, until, granularity)
+    return wambatic.stats.activity.aggregate(
         fixture.ORG_COMMITS if commits is None else commits,
         buckets,
         tz,
@@ -265,7 +265,7 @@ REPO_NAMES = st.sampled_from([fixture.ALPHA, fixture.BETA])
 
 
 @st.composite
-def commit_lists(draw: st.DrawFn) -> list[gitstat.fetch.base.Commit]:
+def commit_lists(draw: st.DrawFn) -> list[wambatic.fetch.base.Commit]:
     commits = []
     for n in range(draw(st.integers(0, 25))):
         when = draw(
@@ -275,7 +275,7 @@ def commit_lists(draw: st.DrawFn) -> list[gitstat.fetch.base.Commit]:
             )
         )
         commits.append(
-            gitstat.fetch.base.Commit(
+            wambatic.fetch.base.Commit(
                 repo=draw(REPO_NAMES),
                 oid=f'c{n}',
                 authored_at=when.replace(tzinfo=UTC),
@@ -294,7 +294,7 @@ YEAR = (datetime.date(2026, 1, 1), datetime.date(2026, 12, 31))
 @hypothesis.settings(max_examples=20, deadline=10000)
 @hypothesis.given(commit_lists(), st.sampled_from(list(Granularity)))
 def test_totals_agree_with_a_direct_sum(
-    commits: list[gitstat.fetch.base.Commit], granularity: Granularity
+    commits: list[wambatic.fetch.base.Commit], granularity: Granularity
 ) -> None:
     series, _ = run(commits, granularity, since=YEAR[0], until=YEAR[1])
     commit_points = pick(series, 'commits')
@@ -316,7 +316,7 @@ def test_totals_agree_with_a_direct_sum(
 @hypothesis.settings(max_examples=20, deadline=10000)
 @hypothesis.given(commit_lists(), st.sampled_from(list(Granularity)))
 def test_breakdowns_sum_to_the_totals(
-    commits: list[gitstat.fetch.base.Commit], granularity: Granularity
+    commits: list[wambatic.fetch.base.Commit], granularity: Granularity
 ) -> None:
     series, _ = run(
         commits, granularity, since=YEAR[0], until=YEAR[1], by_author=True, by_repo=True
@@ -334,6 +334,6 @@ def test_breakdowns_sum_to_the_totals(
             assert summed == total
 
 
-def total_buckets(series: list[Series], metric: str) -> list[gitstat.stats.base.Bucket]:
+def total_buckets(series: list[Series], metric: str) -> list[wambatic.stats.base.Bucket]:
     (found,) = [s for s in series if s.metric == metric and s.by is None]
     return list(found.points)

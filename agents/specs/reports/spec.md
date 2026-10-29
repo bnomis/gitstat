@@ -4,15 +4,15 @@
 **Status:** proposed
 **Date:** 2026-10-29
 
-The three ways a user sees a `StatsResult`: a terminal report, a self-contained static HTML report, and a local web app. All three render the same result object, so they never disagree. It also defines the `gitstat` command line.
+The three ways a user sees a `StatsResult`: a terminal report, a self-contained static HTML report, and a local web app. All three render the same result object, so they never disagree. It also defines the `wambatic` command line.
 
-**Prerequisites:** [Fetch and cache](../fetch-and-cache/spec.md) and [Stats](../stats/spec.md) are implemented (check: `python -c 'import gitstat.stats'`).
+**Prerequisites:** [Fetch and cache](../fetch-and-cache/spec.md) and [Stats](../stats/spec.md) are implemented (check: `python -c 'import wambatic.stats'`).
 
 Version 1.2 settles what step 5 of the [implementation order](../implementation-order.md) (terminal report and CLI) needed; the gaps and the choices made are in [review-1.md](review-1.md).
 
 ## Module location
 
-`src/gitstat/cli.py` (command line), `src/gitstat/__main__.py` (`python -m gitstat`), `src/gitstat/reports/`, with tests in `src/tests/reports/`, `src/tests/test_cli.py` and fixtures in `src/tests/fixtures/reports.py`:
+`src/wambatic/cli.py` (command line), `src/wambatic/__main__.py` (`python -m wambatic`), `src/wambatic/reports/`, with tests in `src/tests/reports/`, `src/tests/test_cli.py` and fixtures in `src/tests/fixtures/reports.py`:
 
 | Module | Holds | Built in implementation step |
 |--------|-------|------------------------------|
@@ -23,7 +23,7 @@ Version 1.2 settles what step 5 of the [implementation order](../implementation-
 | `html.py`, `templates/` | `render_html` | 7 |
 | `web.py` | `serve` | 9 |
 
-`gitstat.cli` is the composition root: it is the one module that imports every layer (settings, logs, fetch, stats, reports). `gitstat.reports` imports `gitstat.stats`, `gitstat.settings` and `gitstat.version` and nothing from `gitstat.fetch` until step 9's web app, which syncs per request; renderers read `result.subject` through `StatsResult` without importing it.
+`wambatic.cli` is the composition root: it is the one module that imports every layer (settings, logs, fetch, stats, reports). `wambatic.reports` imports `wambatic.stats`, `wambatic.settings` and `wambatic.version` and nothing from `wambatic.fetch` until step 9's web app, which syncs per request; renderers read `result.subject` through `StatsResult` without importing it.
 
 ## API
 
@@ -59,22 +59,22 @@ def main(argv: list[str] | None = None) -> int:
     handling) and return the exit status. Never calls `sys.exit`."""
 
 def run() -> None:
-    """The `gitstat` console script and `python -m gitstat`: `sys.exit(main())`."""
+    """The `wambatic` console script and `python -m wambatic`: `sys.exit(main())`."""
 
 class UsageError(Exception):
     """A command line that parses but cannot be run; exit status 2."""
 ```
 
-Command line (`gitstat <command> <target>`):
+Command line (`wambatic <command> <target>`):
 
 ```text
-gitstat [-v | -q] report <target> [--format terminal|html|json] [--out PATH]
+wambatic [-v | -q] report <target> [--format terminal|html|json] [--out PATH]
                          [--by year|month|week|day|total] [--since DATE] [--until DATE]
                          [--groups activity,flow,delivery] [--by-author] [--tz ZONE]
                          [--full-refresh | --no-fetch] [--max-age DURATION]
                          [--ignore-cache-version]
-gitstat [-v | -q] serve  <target> [--host 127.0.0.1] [--port 8000]
-gitstat [-v | -q] cache  clear|info
+wambatic [-v | -q] serve  <target> [--host 127.0.0.1] [--port 8000]
+wambatic [-v | -q] cache  clear|info
 ```
 
 The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as the shared Python rules require: a root command holding `-v`/`--verbose` and `-q`/`--quiet` and a `cappa.Subcommands` field of the `report`, `serve` and `cache` command classes. Step 5 builds `report` (without `--format html` and `--out`) and `cache`; `--format html` and `--out` arrive in step 7 and `serve` in step 9, so until then `--format html` (on the command line or as `report.format` in the config file) is a `UsageError` naming step 7, and `serve` is not a command.
@@ -90,8 +90,8 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 - `--format` overrides `report.format`; `--max-age` overrides `fetch.max_age` in the settings duration syntax (`30m`, `1d`), so a malformed value is a `SettingsError`. Flags reach `Settings` only through `load_settings(None, overrides)`.
 - `--full-refresh` passes `full_refresh=True` to `Fetcher.sync` and ignores `--max-age`. `--no-fetch` skips the network entirely. The two together are a `UsageError`.
 - `--ignore-cache-version` opens the cache with `Cache.open(..., ignore_version=True)`, as `CacheVersionError`'s message tells the user to; provenance then records it.
-- `-v` sets the log level to `DEBUG`, `-q` to `WARNING`; the default is `INFO`. Both together are a `UsageError`. Logs go to stderr, as `{level}: {message}` at `INFO` and `WARNING` and in loguru's default format (time and source location) at `DEBUG`, through `gitstat.logs.configure_logging`; reports go to stdout.
-- The config file is chosen as the system spec says (`GITSTAT_CONFIG`, else the default path); there is no `--config` flag.
+- `-v` sets the log level to `DEBUG`, `-q` to `WARNING`; the default is `INFO`. Both together are a `UsageError`. Logs go to stderr, as `{level}: {message}` at `INFO` and `WARNING` and in loguru's default format (time and source location) at `DEBUG`, through `wambatic.logs.configure_logging`; reports go to stdout.
+- The config file is chosen as the system spec says (`WAMBATIC_CONFIG`, else the default path); there is no `--config` flag.
 
 **Running `report`.** In this order:
 
@@ -120,7 +120,7 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 | `UsageError`, `SettingsError`, and a command line cappa cannot parse (cappa prints its own message) | 2 |
 | `KeyboardInterrupt`: no message | 130 |
 
-- Messages state the fix: `AuthError` says to set `GITHUB_TOKEN`, `RateLimitError` gives the reset time, `CacheVersionError` names `gitstat cache clear` and `--ignore-cache-version`, and `EmptySubjectError` with `--no-fetch` adds that the cache may only need a sync. These texts come from the errors themselves where they already carry them.
+- Messages state the fix: `AuthError` says to set `GITHUB_TOKEN`, `RateLimitError` gives the reset time, `CacheVersionError` names `wambatic cache clear` and `--ignore-cache-version`, and `EmptySubjectError` with `--no-fetch` adds that the cache may only need a sync. These texts come from the errors themselves where they already carry them.
 - No message repeats a token or a config value (system spec, Settings).
 - `--out` (step 7) writes to a temporary file and renames it, so no partial file is left behind.
 - The web app returns HTTP 400 for invalid query parameters and 502 with the upstream message when GitHub fails; it never shows a traceback.
@@ -137,7 +137,7 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 4. **By repository** and **By author**: one table per `by_kind` present, columns Name, Commits, Added, Deleted, Net, each the sum of that breakdown series' points over the range; rows ordered by commits descending then name; rows whose four values are all zero are left out.
 5. **Top contributors**: `tables['top_contributors']` in its own order, columns Login, Commits, Added, Deleted, Net, Active days; the first `TOP_CONTRIBUTORS_SHOWN = 20` rows, then a line `and N more` when there are more (the JSON output has every row).
 6. **Unavailable**: `tables['unavailable']`, columns Metric and Reason, when not empty.
-7. A provenance footer: `computed_at`, each `fetched_at:<resource>`, `gitstat_version` and `schema_version`; when `version_override_at` is present, a warning line that the cache was read with `--ignore-cache-version` at that time.
+7. A provenance footer: `computed_at`, each `fetched_at:<resource>`, `wambatic_version` and `schema_version`; when `version_override_at` is present, a warning line that the cache was read with `--ignore-cache-version` at that time.
 
 **JSON output.** `--format json` writes `render_json(result, sys.stdout)` (the one place output bypasses loguru). `result_to_dict` returns, in this key order:
 
@@ -161,11 +161,11 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 | `report.allow_remote` | `bool` | `False` | Permit the web app on non-loopback hosts |
 | `report.format` | `Literal['html', 'json', 'terminal']` | `'terminal'` | Default report format |
 | `report.html_theme` | `Literal['auto', 'dark', 'light']` | `'auto'` | HTML theme |
-| `report.out_dir` | `Path` | `./gitstat-reports` | Default HTML output directory |
+| `report.out_dir` | `Path` | `./wambatic-reports` | Default HTML output directory |
 | `report.web_host` | `str` | `'127.0.0.1'` | Web app bind address |
 | `report.web_port` | `int` | `8000` | Web app port |
 
-Settings load from a JSON file (`~/.config/gitstat/config.json`) and are overridden by flags. The token is deliberately not a setting.
+Settings load from a JSON file (`~/.config/wambatic/config.json`) and are overridden by flags. The token is deliberately not a setting.
 
 ## External dependencies
 

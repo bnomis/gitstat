@@ -8,7 +8,7 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 
 ## Module location
 
-`src/gitstat/fetch/`, with tests in `src/tests/fetch/` and fixtures in `src/tests/fixtures/fetch/`:
+`src/wambatic/fetch/`, with tests in `src/tests/fetch/` and fixtures in `src/tests/fixtures/fetch/`:
 
 | Module | Holds | Built in implementation step |
 |--------|-------|------------------------------|
@@ -129,7 +129,7 @@ def redact(text: str, token: str) -> str:
     """`text` with every occurrence of `token` replaced by `***`."""
 ```
 
-The cache, used only inside `gitstat.fetch` and by the CLI's `cache` command. Its methods are synchronous; `Fetcher` calls them through `asyncio.to_thread`, and one `threading.Lock` serialises them on the cache's single connection (opened with `check_same_thread=False`):
+The cache, used only inside `wambatic.fetch` and by the CLI's `cache` command. Its methods are synchronous; `Fetcher` calls them through `asyncio.to_thread`, and one `threading.Lock` serialises them on the cache's single connection (opened with `check_same_thread=False`):
 
 ```python
 import pathlib
@@ -193,7 +193,7 @@ def clear_cache(path: pathlib.Path) -> list[pathlib.Path]:
     """Delete `path` and its `-wal` and `-shm` files where present; return those deleted."""
 ```
 
-The transport, used only inside `gitstat.fetch`:
+The transport, used only inside `wambatic.fetch`:
 
 ```python
 import collections.abc
@@ -263,7 +263,7 @@ class GitHubClient:
 - Secondary rate limits (HTTP 403/429, see Requests, retries and rate limits) are always honoured, then retried up to `fetch.max_retries` with exponential backoff and jitter. When the retries run out, `RateLimitError` is raised whatever `fetch.on_rate_limit` says, with `reset_at` set to the time the last wait would have ended.
 - `GraphQLError`: a GraphQL response whose `errors` contain a type other than `NOT_FOUND` and `RATE_LIMITED`. It carries each error's `type` and `message`; partial `data` is discarded.
 - `NotFoundError`: user, org or repo does not exist or is not visible to the token: REST 404, or a GraphQL error of type `NOT_FOUND`.
-- `CacheVersionError`: the cache was written under a different schema or query version (see Cache). It names both versions and tells the user to run `gitstat cache clear` or pass `--ignore-cache-version`. It never warns and carries on, per the shared versions rule.
+- `CacheVersionError`: the cache was written under a different schema or query version (see Cache). It names both versions and tells the user to run `wambatic cache clear` or pass `--ignore-cache-version`. It never warns and carries on, per the shared versions rule.
 - REST `stats/*` returning 202 (still computing) is retried with backoff up to `fetch.stats_retries`, then raised as `StatsPendingError`.
 - Transient failures (HTTP 500, 502, 503 and 504, `aiohttp.ClientConnectionError` and `TimeoutError`) are retried up to `fetch.max_retries` with the same backoff; when the retries run out the last exception propagates unchanged.
 - Any other non-2xx status propagates as `aiohttp.ClientResponseError`.
@@ -273,7 +273,7 @@ class GitHubClient:
 
 **Transport.** One `aiohttp.ClientSession` per `Fetcher`, as the shared Python rules specify: a POST endpoint for GraphQL and conditional GETs for REST. Concurrency is bounded across repositories by an `asyncio.Semaphore` of `fetch.workers`, because GitHub asks clients to avoid concurrent request bursts ([best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)). SQLite calls run through `asyncio.to_thread` so the loop is never blocked. The CLI enters the loop once with `asyncio.run`.
 
-**Requests, retries and rate limits.** Every request carries `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28` and `User-Agent: gitstat/<VERSION>`, with an `aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)` of 60 seconds. GitHub's documented handling ([REST rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit), [best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)) is applied in this order to each response:
+**Requests, retries and rate limits.** Every request carries `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28` and `User-Agent: wambatic/<VERSION>`, with an `aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)` of 60 seconds. GitHub's documented handling ([REST rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit), [best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)) is applied in this order to each response:
 
 1. 401: `AuthError`.
 2. 403 or 429 with a `retry-after` header: secondary limit; wait that many seconds, then retry.
@@ -288,7 +288,7 @@ Every query text in `queries.py` selects `rateLimit { cost remaining resetAt }`;
 
 **GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection, or from `nodes(ids:)` for commits found by a compare; the REST `stats/code_frequency` endpoint is used only by the opt-in live test, as a cross-check of the summed line totals on a repo under 10,000 commits, and never at run time.
 
-**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/gitstat/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `etags(url, etag, body)`, and `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at)`. Each step creates only the tables its resources use; step 3 creates `meta`, `repos`, `commits`, `etags` and `sync_state`, and a later table is a `SCHEMA_VERSION` increase. Timestamps are stored as ISO 8601 UTC text. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304; a 304 returns the stored body.
+**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/wambatic/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `etags(url, etag, body)`, and `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at)`. Each step creates only the tables its resources use; step 3 creates `meta`, `repos`, `commits`, `etags` and `sync_state`, and a later table is a `SCHEMA_VERSION` increase. Timestamps are stored as ISO 8601 UTC text. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304; a 304 returns the stored body.
 
 **Incremental sync.** The first query of a subject backfills everything; later queries fetch only what changed since the last successful sync. State is per repo and per resource, so asking for a new metric group later backfills only that resource.
 
@@ -303,7 +303,7 @@ Every query text in `queries.py` selects `rateLimit { cost remaining resetAt }`;
 5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh` (`sync(..., full_refresh=True)`). Commits are the exception to the interval: the compare above sees every rewrite, so they are fully re-read only on a rewrite or `--full-refresh`.
 6. *Offline and bounded.* `--no-fetch` renders from the cache alone; `--max-age` skips the network for a subject synced more recently than that.
 
-**Cache identity.** `meta` records `schema_version` (`SCHEMA_VERSION` in `cache.py`), the gitstat version (`gitstat.version.VERSION`), and `query:<NAME>` = the SHA-256 hex digest of each query text constant in `queries.py`. A new file has its identity written; opening a file whose recorded identity differs in any key from the running code raises `CacheVersionError` naming each differing key with both values, unless `ignore_version` is passed. Provenance reads the same values from `Cache.identity()`.
+**Cache identity.** `meta` records `schema_version` (`SCHEMA_VERSION` in `cache.py`), the wambatic version (`wambatic.version.VERSION`), and `query:<NAME>` = the SHA-256 hex digest of each query text constant in `queries.py`. A new file has its identity written; opening a file whose recorded identity differs in any key from the running code raises `CacheVersionError` naming each differing key with both values, unless `ignore_version` is passed. Provenance reads the same values from `Cache.identity()`.
 
 **Secrets.** The token is read from the environment only, never written to the cache, logs or reports ([security rules](../../../.agents/claude/rules/security.md)). Requests are logged at `debug` as method, URL and status only, never headers. The client logs through `loguru.logger.patch(...)` with a patcher that applies `redact` to each record's message, so a token that reaches a message by any path is replaced by `***`.
 
@@ -313,7 +313,7 @@ Every query text in `queries.py` selects `rateLimit { cost remaining resetAt }`;
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `fetch.cache_path` | `Path` | `~/.cache/gitstat/cache.sqlite3` | SQLite cache file |
+| `fetch.cache_path` | `Path` | `~/.cache/wambatic/cache.sqlite3` | SQLite cache file |
 | `fetch.include_forks` | `bool` | `False` | Include forked repos for user/org subjects |
 | `fetch.full_refresh_after` | `timedelta` | `30 days` | Age of the last full read after which a resource is fully re-read to catch deletions |
 | `fetch.include_archived` | `bool` | `False` | Include archived repos |

@@ -8,7 +8,7 @@ nothing here is computed by the code under test. Merge commits are left out of l
 import datetime
 import typing
 
-import gitstat.fetch.base
+import wambatic.fetch.base
 
 UTC = datetime.UTC
 NOW = datetime.datetime(2027, 1, 20, 12, 0, tzinfo=UTC)
@@ -16,8 +16,8 @@ ALPHA_SYNCED_AT = datetime.datetime(2027, 2, 1, 10, 0, tzinfo=UTC)
 BETA_SYNCED_AT = datetime.datetime(2027, 2, 1, 12, 0, tzinfo=UTC)
 GAMMA_SYNCED_AT = datetime.datetime(2027, 2, 1, 11, 0, tzinfo=UTC)
 
-ORG = gitstat.fetch.base.Subject('org', 'octo-org')
-USER = gitstat.fetch.base.Subject('user', 'octocat')
+ORG = wambatic.fetch.base.Subject('org', 'octo-org')
+USER = wambatic.fetch.base.Subject('user', 'octocat')
 ALPHA = 'octo-org/alpha'
 BETA = 'octo-org/beta'
 GAMMA = 'octocat/gamma'
@@ -28,9 +28,9 @@ UNTIL = datetime.date(2027, 1, 31)
 LABELS = ('2026-10', '2026-11', '2026-12', '2027-01')
 
 
-def repo(name: str, hours: int) -> gitstat.fetch.base.Repo:
+def repo(name: str, hours: int) -> wambatic.fetch.base.Repo:
     pushed = datetime.datetime(2027, 1, 16, hours, 0, tzinfo=UTC)
-    return gitstat.fetch.base.Repo(
+    return wambatic.fetch.base.Repo(
         name_with_owner=name,
         default_branch='main',
         head_oid=f'{name}-head',
@@ -53,8 +53,8 @@ def commit(
     deletions: int,
     *,
     merge: bool = False,
-) -> gitstat.fetch.base.Commit:
-    return gitstat.fetch.base.Commit(
+) -> wambatic.fetch.base.Commit:
+    return wambatic.fetch.base.Commit(
         repo=repo_name,
         oid=oid,
         authored_at=datetime.datetime.fromisoformat(when).replace(tzinfo=UTC),

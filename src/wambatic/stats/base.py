@@ -3,8 +3,8 @@ import datetime
 import enum
 import typing
 
-import gitstat.fetch
-import gitstat.settings
+import wambatic.fetch
+import wambatic.settings
 
 GROUPS = frozenset({'activity', 'delivery', 'flow'})
 
@@ -44,14 +44,14 @@ class StatsRequest:
     until: datetime.date | None = None
     by_author: bool = False
     tz: datetime.tzinfo = datetime.UTC
-    settings: gitstat.settings.StatsSettings = dataclasses.field(
-        default_factory=gitstat.settings.StatsSettings
+    settings: wambatic.settings.StatsSettings = dataclasses.field(
+        default_factory=wambatic.settings.StatsSettings
     )
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StatsResult:
-    subject: gitstat.fetch.Subject
+    subject: wambatic.fetch.Subject
     request: StatsRequest
     since: datetime.date
     until: datetime.date
