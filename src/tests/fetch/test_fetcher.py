@@ -467,6 +467,109 @@ def test_the_stored_state_records_the_listed_head_and_times(
     assert state.synced_at == state.full_synced_at == tests.fixtures.fetch.responses.NOW
 
 
+def store_synced(
+    cache: gitstat.fetch.cache.Cache, name: str, hours: int | None, owner: str = 'octocat'
+) -> None:
+    """List `name`; unless `hours` is None, store a commits state `hours` after T0."""
+    repo = gitstat.fetch.base.parse_repo(FakeRepo(name, history('c', 1)).node())
+    cache.upsert_repos(owner, [repo], complete=False)
+    if hours is not None:
+        state = gitstat.fetch.base.SyncState(
+            repo=name,
+            resource='commits',
+            watermark=None,
+            head_oid=repo.head_oid,
+            pushed_at=repo.pushed_at,
+            updated_at=repo.updated_at,
+            synced_at=T0 + datetime.timedelta(hours=hours),
+            full_synced_at=T0,
+        )
+        cache.write_commits(name, [], state, replace=False)
+
+
+def provenance_of(
+    make_fetcher: tests.conftest.MakeFetcher,
+    cache: gitstat.fetch.cache.Cache,
+    resources: frozenset[str] = COMMITS,
+    subject: gitstat.fetch.base.Subject = OWNER,
+) -> tuple[dict[str, str], int]:
+    async def scenario() -> tuple[dict[str, str], int]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=cache)
+            result = await fetcher.provenance(subject, resources)
+            return result, len(server.received)
+
+    return asyncio.run(scenario())
+
+
+def test_provenance_fetched_at_is_the_earliest_sync_and_sends_no_request(
+    make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
+) -> None:
+    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    try:
+        store_synced(cache, HELLO, 5)
+        store_synced(cache, SPOON, 2)
+        result, requests = provenance_of(make_fetcher, cache)
+    finally:
+        cache.close()
+    assert result['fetched_at:commits'] == at(0).replace(hour=11).isoformat()
+    assert requests == 0
+
+
+def test_provenance_is_never_for_a_listed_repo_that_was_not_synced(
+    make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
+) -> None:
+    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    try:
+        store_synced(cache, HELLO, 5)
+        store_synced(cache, SPOON, None)
+        result, _ = provenance_of(make_fetcher, cache, COMMITS | {'releases'})
+    finally:
+        cache.close()
+    assert result['fetched_at:commits'] == 'never'
+    assert result['fetched_at:releases'] == 'never'
+
+
+def test_provenance_holds_the_identity_and_the_override(
+    make_fetcher: tests.conftest.MakeFetcher,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / 'prov.sqlite3'
+    gitstat.fetch.cache.Cache.open(path).close()
+    monkeypatch.setattr(gitstat.fetch.cache, 'SCHEMA_VERSION', 2)
+    cache = gitstat.fetch.cache.Cache.open(path, ignore_version=True)
+    try:
+        result, _ = provenance_of(make_fetcher, cache)
+        override = cache.version_override_at()
+    finally:
+        cache.close()
+    assert {'schema_version', 'gitstat_version', 'query:COMMIT_HISTORY'} <= result.keys()
+    assert result['version_override_at'] == override
+
+
+def test_provenance_has_no_override_key_for_a_matching_cache(
+    make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
+) -> None:
+    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    try:
+        result, _ = provenance_of(make_fetcher, cache)
+    finally:
+        cache.close()
+    assert 'version_override_at' not in result
+
+
+def test_provenance_rejects_an_unknown_resource(
+    make_fetcher: tests.conftest.MakeFetcher, tmp_path: pathlib.Path
+) -> None:
+    cache = gitstat.fetch.cache.Cache.open(tmp_path / 'prov.sqlite3')
+    try:
+        with pytest.raises(ValueError, match='bogus'):
+            provenance_of(make_fetcher, cache, frozenset({'bogus'}))
+    finally:
+        cache.close()
+
+
 def test_commits_yields_oldest_first_and_honours_the_bounds(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:

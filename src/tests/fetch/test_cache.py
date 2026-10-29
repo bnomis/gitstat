@@ -220,6 +220,27 @@ def test_ignore_version_on_a_matching_cache_records_nothing(cache_path: pathlib.
     assert 'version_override_at' not in {row[0] for row in table_rows(cache_path, 'meta')}
 
 
+def test_version_override_at_is_none_for_a_matching_cache(
+    cache: gitstat.fetch.cache.Cache,
+) -> None:
+    assert cache.version_override_at() is None
+
+
+def test_version_override_at_is_the_recorded_time_after_an_override(
+    cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gitstat.fetch.cache.Cache.open(cache_path).close()
+    monkeypatch.setattr(gitstat.fetch.cache, 'SCHEMA_VERSION', 2)
+    before = datetime.datetime.now(UTC)
+    opened = gitstat.fetch.cache.Cache.open(cache_path, ignore_version=True)
+    try:
+        recorded = opened.version_override_at()
+    finally:
+        opened.close()
+    assert recorded is not None
+    assert before <= gitstat.fetch.cache.from_text(recorded) <= datetime.datetime.now(UTC)
+
+
 # Repos
 
 

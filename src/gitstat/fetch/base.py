@@ -306,6 +306,30 @@ class Fetcher:
         for commit in await self.db(self.cache.read_commits, repo.name_with_owner, since, until):
             yield commit
 
+    async def provenance(self, subject: Subject, resources: frozenset[str]) -> dict[str, str]:
+        """From the cache: the cache identity, `version_override_at` when recorded, and for each
+        resource `fetched_at:<resource>`, the earliest `synced_at` over the subject's repos, or
+        `never` when one of them has no sync state for it."""
+        unknown = sorted(resources - RESOURCES)
+        if unknown:
+            raise ValueError(f'unknown resources: {", ".join(unknown)}')
+        result = await self.db(self.cache.identity)
+        override = await self.db(self.cache.version_override_at)
+        if override is not None:
+            result['version_override_at'] = override
+        repos = await self.repos(subject)
+        for resource in sorted(resources):
+            synced: list[datetime.datetime] = []
+            for repo in repos:
+                state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
+                if state is not None:
+                    synced.append(state.synced_at)
+            if len(synced) < len(repos) or not synced:
+                result[f'fetched_at:{resource}'] = 'never'
+            else:
+                result[f'fetched_at:{resource}'] = min(synced).astimezone(datetime.UTC).isoformat()
+        return result
+
     def new_state(
         self, repo: Repo, resource: str, full_synced_at: datetime.datetime | None
     ) -> SyncState:

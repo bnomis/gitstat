@@ -175,6 +175,14 @@ class Cache:
         with self.lock:
             return self.recorded_identity()
 
+    def version_override_at(self) -> str | None:
+        """When the cache was opened with `ignore_version` over a difference, if it was."""
+        with self.lock:
+            row = self.connection.execute(
+                'SELECT value FROM meta WHERE key = ?', (OVERRIDE_KEY,)
+            ).fetchone()
+        return None if row is None else str(row[0])
+
     def upsert_repos(
         self, owner: str, repos: list[gitstat.fetch.base.Repo], *, complete: bool
     ) -> None:
