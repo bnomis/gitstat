@@ -6,7 +6,7 @@
 
 This list builds step 1 of the [implementation order](../../specs/implementation-order.md), "Skeleton and settings": the project tooling, the package layout, the version identity, logging, layered settings, the public API entry point, a guard on the one-way layering and CI. The rest of the system spec is delivered by the component task lists, as mapped below.
 
-**Warning: spec unclear.** The Settings section does not say how `timedelta` settings are written in TOML (TOML has no duration type), what shape the `overrides` keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, or whether `~` in a `Path` setting is expanded. The Architecture section says `fetch` imports nothing from gitstat except `settings`, yet fetch must record the gitstat version in the cache identity, which the shared versions rule says is built in one place. Tasks 2, 5 and 6 carry a caveat for these points and stop for the user if they are still open when the task is reached.
+**Warning: spec unclear.** The Settings section does not say how `timedelta` settings are written in the JSON config file (JSON has no duration type), what shape the `overrides` keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, or whether `~` in a `Path` setting is expanded. The Architecture section says `fetch` imports nothing from gitstat except `settings`, yet fetch must record the gitstat version in the cache identity, which the shared versions rule says is built in one place. Tasks 2, 5 and 6 carry a caveat for these points and stop for the user if they are still open when the task is reached.
 
 ## Spec coverage
 
@@ -90,7 +90,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 - [ ] Stop for the user if the spec does not yet say where the version identity lives and whether `fetch` may import it (see the header warning)
 - [ ] Add `src/gitstat/version.py` with `VERSION: str` read from `importlib.metadata.version('gitstat')`; the module imports nothing from gitstat
-- [ ] Write `src/tests/test_version.py`: `VERSION` equals the `[project] version` in `pyproject.toml` (read with `tomllib`) and is a non-empty string
+- [ ] Write `src/tests/test_version.py`: `VERSION` equals the `[project] version` in `pyproject.toml` (read with `tomllib`; this is the packaging file, not the user config) and is a non-empty string
 
 **Acceptance Criteria:**
 
@@ -185,7 +185,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Notes:**
 
 - Depends on Task 1
-- The stats spec types `bot_logins` and `hotfix_labels` as `list[str]`; a tuple is the immutable equivalent in a frozen dataclass and loads from a TOML array unchanged.
+- The stats spec types `bot_logins` and `hotfix_labels` as `list[str]`; a tuple is the immutable equivalent in a frozen dataclass and loads from a JSON array unchanged.
 - `settings.py` imports nothing from gitstat, so `fetch` may import it.
 - Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`
 
@@ -202,10 +202,10 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 **Subtasks:**
 
-- [ ] Stop for the user if the spec does not yet say how durations are written in TOML, what shape override keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, and whether `~` is expanded (see the header warning)
-- [ ] Implement `load_settings(config_path, overrides)` in `src/gitstat/settings.py`: resolve the file as `config_path`, else `GITSTAT_CONFIG`, else `~/.config/gitstat/config.toml`; read it with `tomllib` if present; apply the `[fetch]`, `[stats]` and `[report]` tables; then apply `overrides`
-- [ ] Convert TOML values to field types (`Path`, `timedelta`, tuples, `Literal` members) and validate them, in the form the amended spec names
-- [ ] Write tests in `src/tests/test_settings.py`: a known-good TOML fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; `GITSTAT_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value raises
+- [ ] Stop for the user if the spec does not yet say how durations are written in JSON, what shape override keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, and whether `~` is expanded (see the header warning)
+- [ ] Implement `load_settings(config_path, overrides)` in `src/gitstat/settings.py`: resolve the file as `config_path`, else `GITSTAT_CONFIG`, else `~/.config/gitstat/config.json`; read it with `json.load` if present; apply its `fetch`, `stats` and `report` objects; then apply `overrides`
+- [ ] Convert JSON values to field types (`Path`, `timedelta`, tuples, `Literal` members) and validate them, in the form the amended spec names
+- [ ] Write tests in `src/tests/test_settings.py`: a known-good JSON fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; `GITSTAT_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value raises
 - [ ] Write a hypothesis test (`@settings(max_examples=20, deadline=10000)`) that for any generated `fetch.workers` values in file and override, the override wins, and with no override the file wins
 
 **Acceptance Criteria:**
@@ -243,9 +243,9 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Subtasks:**
 
 - [ ] Stop for the user if the spec does not yet say what an unknown key raises (see Task 5)
-- [ ] Make `load_settings` reject any key not defined on the section dataclasses, so `token` or `github_token` in the TOML file or in `overrides` raises
+- [ ] Make `load_settings` reject any key not defined on the section dataclasses, so `token` or `github_token` in the JSON file or in `overrides` raises
 - [ ] Ensure the rejection message names the key but never echoes its value
-- [ ] Write tests in `src/tests/test_settings.py`: a TOML fixture with `[fetch] token = '...'` raises; an override `{'fetch.token': '...'}` raises; the raised message does not contain the value; `GITHUB_TOKEN` set in the environment changes nothing in the loaded `Settings`
+- [ ] Write tests in `src/tests/test_settings.py`: a JSON fixture with `{"fetch": {"token": "..."}}` raises; an override `{'fetch.token': '...'}` raises; the raised message does not contain the value; `GITHUB_TOKEN` set in the environment changes nothing in the loaded `Settings`
 
 **Acceptance Criteria:**
 

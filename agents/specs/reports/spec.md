@@ -1,6 +1,6 @@
 # Reports
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -79,7 +79,7 @@ gitstat cache   clear|info
 | `report.web_host` | `str` | `'127.0.0.1'` | Web app bind address |
 | `report.web_port` | `int` | `8000` | Web app port |
 
-Settings load from a TOML file (`~/.config/gitstat/config.toml`) and are overridden by flags. The token is deliberately not a setting.
+Settings load from a JSON file (`~/.config/gitstat/config.json`) and are overridden by flags. The token is deliberately not a setting.
 
 ## External dependencies
 

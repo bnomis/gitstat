@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -39,7 +39,7 @@ class Settings:
     stats: StatsSettings
 
 def load_settings(config_path: pathlib.Path | None, overrides: dict[str, object]) -> Settings:
-    """Defaults, then the TOML file, then command-line overrides; later wins."""
+    """Defaults, then the JSON file, then command-line overrides; later wins."""
 ```
 
 ## Architecture
@@ -83,7 +83,7 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 ## Implementation
 
-**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `tomllib`.
+**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `json`.
 
 **Build order.** The sequence of steps, with deliverables, dependencies and done criteria, is in [Implementation order](../implementation-order.md).
 
@@ -93,12 +93,12 @@ Errors are typed in the layer that detects them and presented only at the edge:
 
 ## Settings
 
-Layered, later wins: built-in defaults, `~/.config/gitstat/config.toml`, command-line flags. Component settings are defined in the component specs under the `fetch.`, `stats.` and `report.` prefixes. The token is never a setting: it is read from the environment only. The two environment variables the system reads are:
+Layered, later wins: built-in defaults, `~/.config/gitstat/config.json`, command-line flags. Component settings are defined in the component specs under the `fetch.`, `stats.` and `report.` prefixes. The token is never a setting: it is read from the environment only. The two environment variables the system reads are:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | none | API token |
-| `GITSTAT_CONFIG` | `~/.config/gitstat/config.toml` | Config file path |
+| `GITSTAT_CONFIG` | `~/.config/gitstat/config.json` | Config file path |
 
 ## External dependencies
 
