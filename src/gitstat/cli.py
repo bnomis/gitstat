@@ -1,3 +1,5 @@
+import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import re
@@ -5,10 +7,17 @@ import typing
 import zoneinfo
 
 import cappa
+import loguru
+import rich.console
 
+import gitstat.fetch.auth
 import gitstat.fetch.base
+import gitstat.fetch.cache
+import gitstat.reports.base
 import gitstat.reports.errors
+import gitstat.reports.terminal
 import gitstat.settings
+import gitstat.stats
 import gitstat.stats.base
 
 LOGIN = re.compile(r'[A-Za-z0-9-]{1,39}')
@@ -154,9 +163,19 @@ def check_report(report: Report, settings: gitstat.settings.Settings) -> None:
         raise gitstat.reports.errors.UsageError(
             'the html format is built in implementation step 7; use --format terminal or json'
         )
-    if report.no_fetch and isinstance(parse_target(report.target), str):
+    target = parse_target(report.target)
+    if report.no_fetch and isinstance(target, str):
         raise gitstat.reports.errors.UsageError(
             '--no-fetch needs user:NAME or org:NAME: a bare NAME is resolved with the network'
+        )
+    if report.by_author and not isinstance(target, str):
+        check_by_author(target)
+
+
+def check_by_author(subject: gitstat.fetch.base.Subject) -> None:
+    if subject.kind == 'user':
+        raise gitstat.reports.errors.UsageError(
+            '--by-author is for an organisation or a repository; a user is already one author'
         )
 
 
@@ -185,3 +204,118 @@ def build_request(
         settings=settings.stats,
         **fields,  # type: ignore[arg-type]
     )
+
+
+def make_fetcher(
+    token: str, cache: gitstat.fetch.cache.Cache, settings: gitstat.settings.FetchSettings
+) -> gitstat.fetch.base.Fetcher:
+    """The one place a `Fetcher` is built, so tests can swap in one that talks to a replay
+    server. An empty token is for a fetcher that is only read from and never entered."""
+    return gitstat.fetch.base.Fetcher(token, cache, settings)
+
+
+def needs_sync(
+    provenance: dict[str, str],
+    resources: frozenset[str],
+    settings: gitstat.settings.FetchSettings,
+    full_refresh: bool,
+    no_fetch: bool,
+    now: datetime.datetime,
+) -> bool:
+    """Whether the cache must be brought up to date before the report is computed."""
+    if no_fetch or not resources:
+        return False
+    if full_refresh:
+        return True
+    if settings.max_age <= datetime.timedelta(0):
+        return True
+    for resource in resources:
+        try:
+            fetched_at = datetime.datetime.fromisoformat(provenance[f'fetched_at:{resource}'])
+        except ValueError, KeyError:
+            return True
+        if now - fetched_at >= settings.max_age:
+            return True
+    return False
+
+
+def log_sync(report: gitstat.fetch.base.SyncReport) -> None:
+    written = sum(report.rows_written.values())
+    message = (
+        f'Synced {report.repos_listed} repositories ({report.repos_skipped} unchanged), '
+        f'{written} commits written'
+    )
+    if report.full_refetches:
+        message += f'; read in full again: {", ".join(report.full_refetches)}'
+    loguru.logger.info(message)
+
+
+async def build_result(
+    report: Report,
+    settings: gitstat.settings.Settings,
+    cache: gitstat.fetch.cache.Cache,
+    target: gitstat.fetch.base.Subject | str,
+    request: gitstat.stats.base.StatsRequest,
+    clock: collections.abc.Callable[[], datetime.datetime],
+) -> gitstat.stats.base.StatsResult:
+    """Resolve the subject, sync when needed and compute; the network is used (and a token
+    resolved) only for a bare NAME or a sync."""
+    reader = make_fetcher('', cache, settings.fetch)
+    async with contextlib.AsyncExitStack() as stack:
+        online: gitstat.fetch.base.Fetcher | None = None
+        if isinstance(target, str):
+            token = gitstat.fetch.auth.resolve_token()
+            online = await stack.enter_async_context(make_fetcher(token, cache, settings.fetch))
+            subject = gitstat.fetch.base.Subject(await online.owner_kind(target), target)
+            if report.by_author:
+                check_by_author(subject)
+        else:
+            subject = target
+        resources = gitstat.stats.resources_for(request.groups) & gitstat.fetch.base.BUILT_RESOURCES
+        provenance = await reader.provenance(subject, resources)
+        synced = needs_sync(
+            provenance, resources, settings.fetch, report.full_refresh, report.no_fetch, clock()
+        )
+        if synced:
+            if online is None:
+                token = gitstat.fetch.auth.resolve_token()
+                online = await stack.enter_async_context(make_fetcher(token, cache, settings.fetch))
+            log_sync(await online.sync(subject, resources, full_refresh=report.full_refresh))
+    try:
+        return await gitstat.stats.compute(subject, reader, request, clock=clock)
+    except gitstat.stats.EmptySubjectError as e:
+        if report.no_fetch:
+            raise gitstat.stats.EmptySubjectError(
+                f'{e}; the cache may only need a sync, so try again without --no-fetch'
+            ) from None
+        raise
+
+
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+async def run_report(
+    report: Report,
+    settings: gitstat.settings.Settings,
+    console: rich.console.Console,
+    stdout: typing.TextIO,
+    *,
+    clock: collections.abc.Callable[[], datetime.datetime] = utc_now,
+) -> None:
+    """Check the flags, bring the cache up to date if needed, compute and print the report."""
+    target = parse_target(report.target)
+    check_report(report, settings)
+    request = build_request(report, settings, resolve_tz(settings))
+    gitstat.stats.resources_for(request.groups)
+    cache = gitstat.fetch.cache.Cache.open(
+        settings.fetch.cache_path, ignore_version=report.ignore_cache_version
+    )
+    try:
+        result = await build_result(report, settings, cache, target, request, clock)
+    finally:
+        cache.close()
+    if settings.report.format == 'json':
+        gitstat.reports.base.render_json(result, stdout)
+    else:
+        gitstat.reports.terminal.render_terminal(result, console)

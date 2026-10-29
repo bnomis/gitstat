@@ -1,21 +1,41 @@
+import asyncio
 import dataclasses
 import datetime
+import io
+import json
+import os
+import pathlib
+import re
+import sqlite3
+import subprocess
+import typing
 import zoneinfo
 
 import cappa
 import hypothesis
 import hypothesis.strategies as st
 import pytest
+import rich.console
 
 import gitstat.cli
 import gitstat.fetch.base
+import gitstat.fetch.cache
+import gitstat.fetch.client
+import gitstat.fetch.errors
 import gitstat.reports.errors
 import gitstat.settings
+import gitstat.stats
 import gitstat.stats.base
+import tests.conftest
+import tests.fixtures.fetch.responses
+import tests.fixtures.fetch.server
+import tests.fixtures.fetch.upstream
+import tests.fixtures.stats
 
 Subject = gitstat.fetch.base.Subject
 UsageError = gitstat.reports.errors.UsageError
 SettingsError = gitstat.settings.SettingsError
+COMMITS = frozenset({'commits'})
 LOGINS = st.from_regex(r'[A-Za-z0-9-]{1,39}', fullmatch=True)
 REPO_NAMES = st.from_regex(r'[A-Za-z0-9._-]{1,100}', fullmatch=True)
 
@@ -242,10 +262,17 @@ def test_a_bare_name_with_no_fetch_asks_for_a_prefix() -> None:
         gitstat.cli.check_report(flags, settings_for(flags))
 
 
+def test_by_author_with_an_explicit_user_is_a_usage_error() -> None:
+    flags = gitstat.cli.Report(target='user:octocat', by_author=True)
+    with pytest.raises(UsageError, match='--by-author'):
+        gitstat.cli.check_report(flags, settings_for(flags))
+
+
 @pytest.mark.parametrize(
     'flags',
     [
         report(),
+        report(by_author=True),
         report(no_fetch=True),
         report(full_refresh=True),
         report(format='json'),
@@ -323,3 +350,489 @@ def test_cappa_rejects_what_it_cannot_parse_with_exit_status_2(argv: list[str]) 
     with pytest.raises(cappa.Exit) as caught:
         cappa.parse(gitstat.cli.Gitstat, argv=argv)
     assert caught.value.code == 2
+
+
+UTC = datetime.UTC
+SYNCED = tests.fixtures.stats.ALPHA_SYNCED_AT
+ALPHA_FLAGS = ['--since', '2026-10-01', '--until', '2027-01-31']
+
+
+class SessionOpened(AssertionError):
+    pass
+
+
+class NoSessionClient(gitstat.fetch.client.GitHubClient):
+    """A client that fails the test if anything opens its aiohttp session."""
+
+    async def __aenter__(self) -> typing.Self:
+        raise SessionOpened('the report opened a network session')
+
+
+@dataclasses.dataclass
+class Ran:
+    console: str
+    stdout: str
+    paths: list[str]
+    syncs: list[tuple[gitstat.fetch.base.Subject, frozenset[str], bool]]
+
+
+def alpha_upstream() -> tests.fixtures.fetch.upstream.Upstream:
+    """A fake GitHub whose repositories match the stats fixture's, so a sync finds them
+    unchanged."""
+    alpha, _, gamma = tests.fixtures.stats.REPOS
+    repos = [
+        tests.fixtures.fetch.upstream.FakeRepo(
+            repo.name_with_owner,
+            [
+                tests.fixtures.fetch.upstream.FakeCommit(
+                    str(repo.head_oid), datetime.datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
+                )
+            ],
+            pushed_at=repo.pushed_at or tests.fixtures.stats.NOW,
+            updated_at=repo.updated_at,
+        )
+        for repo in (alpha, gamma)
+    ]
+    return tests.fixtures.fetch.upstream.Upstream(repos)
+
+
+def cli_settings(flags: gitstat.cli.Report, cache_path: pathlib.Path) -> gitstat.settings.Settings:
+    base = settings_for(flags)
+    return dataclasses.replace(base, fetch=dataclasses.replace(base.fetch, cache_path=cache_path))
+
+
+def parse_report(*argv: str) -> gitstat.cli.Report:
+    parsed = cappa.parse(gitstat.cli.Gitstat, argv=['report', *argv])
+    assert isinstance(parsed.command, gitstat.cli.Report)
+    return parsed.command
+
+
+def run_report(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    cache_path: pathlib.Path,
+    argv: list[str],
+    *,
+    clock: datetime.datetime = SYNCED + datetime.timedelta(days=1),
+    routes: dict[tuple[str, str], list[tests.fixtures.fetch.server.Canned]] | None = None,
+    upstream: tests.fixtures.fetch.upstream.Upstream | None = None,
+    online: bool = True,
+) -> Ran:
+    """Run `gitstat report` with `argv`. With `online` False the fetcher's client fails on any
+    use of a session; otherwise requests go to a replay server over `upstream`."""
+    flags = parse_report(*argv)
+    settings = cli_settings(flags, cache_path)
+    syncs: list[tuple[gitstat.fetch.base.Subject, frozenset[str], bool]] = []
+    original = gitstat.fetch.base.Fetcher.sync
+
+    async def spy(
+        self: gitstat.fetch.base.Fetcher,
+        subject: gitstat.fetch.base.Subject,
+        resources: frozenset[str],
+        full_refresh: bool = False,
+    ) -> gitstat.fetch.base.SyncReport:
+        syncs.append((subject, resources, full_refresh))
+        return await original(self, subject, resources, full_refresh)
+
+    monkeypatch.setattr(gitstat.fetch.base.Fetcher, 'sync', spy)
+    console = io.StringIO()
+    stdout = io.StringIO()
+
+    async def scenario() -> list[str]:
+        server = tests.fixtures.fetch.server.ReplayServer(
+            routes or {}, (upstream or alpha_upstream()).respond
+        )
+        async with server:
+
+            def factory(
+                token: str,
+                cache: gitstat.fetch.cache.Cache,
+                fetch_settings: gitstat.settings.FetchSettings,
+            ) -> gitstat.fetch.base.Fetcher:
+                client = (
+                    make_client(server, fetch_settings)
+                    if online
+                    else NoSessionClient('', fetch_settings)
+                )
+                return gitstat.fetch.base.Fetcher(token, cache, fetch_settings, client=client)
+
+            monkeypatch.setattr(gitstat.cli, 'make_fetcher', factory)
+            await gitstat.cli.run_report(
+                flags,
+                settings,
+                rich.console.Console(
+                    file=console, width=120, color_system=None, legacy_windows=False
+                ),
+                stdout,
+                clock=lambda: clock,
+            )
+            return [received.path for received in server.received]
+
+    paths = asyncio.run(scenario())
+    return Ran(console.getvalue(), stdout.getvalue(), paths, syncs)
+
+
+def test_a_warm_cache_with_no_fetch_reports_without_a_token_or_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    assert 'GITHUB_TOKEN' not in os.environ
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--by', 'month', '--no-fetch', *ALPHA_FLAGS],
+        online=False,
+    )
+    assert 'Activity by period' in ran.console
+    assert 'repo octo-org/alpha, 2026-10-01 to 2027-01-31, by month, UTC' in ran.console
+    assert ran.syncs == []
+    assert ran.paths == []
+    assert ran.stdout == ''
+
+
+def test_a_cache_younger_than_max_age_is_reported_without_a_token_or_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--max-age', '30d', *ALPHA_FLAGS],
+        online=False,
+    )
+    assert 'Activity by period' in ran.console
+    assert ran.syncs == []
+
+
+def test_a_cache_older_than_max_age_syncs_through_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    upstream = alpha_upstream()
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--max-age', '30d', *ALPHA_FLAGS],
+        clock=SYNCED + datetime.timedelta(days=31),
+        upstream=upstream,
+    )
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, False)]
+    assert ran.paths == ['/graphql']
+    assert 'Activity by period' in ran.console
+
+
+def test_a_sync_with_no_token_fails_with_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    def no_gh(*args: object, **kwargs: object) -> typing.NoReturn:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(subprocess, 'run', no_gh)
+    with pytest.raises(gitstat.fetch.errors.AuthError, match='GITHUB_TOKEN'):
+        run_report(
+            monkeypatch,
+            make_client,
+            stats_cache_path,
+            ['repo:octo-org/alpha', *ALPHA_FLAGS],
+            online=False,
+        )
+
+
+def test_full_refresh_syncs_a_fresh_cache_and_reads_the_history_again(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    upstream = alpha_upstream()
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--max-age', '30d', '--full-refresh', *ALPHA_FLAGS],
+        upstream=upstream,
+    )
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, True)]
+    assert 'Activity by period' in ran.console
+
+
+def test_the_default_groups_sync_only_commits_and_list_flow_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    ran = run_report(
+        monkeypatch, make_client, stats_cache_path, ['repo:octo-org/alpha', *ALPHA_FLAGS]
+    )
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, False)]
+    assert gitstat.stats.base.StatsRequest().groups == frozenset({'activity', 'flow'})
+    assert 'Unavailable' in ran.console
+    assert re.search(r'^\s+flow\s+the flow group', ran.console, re.MULTILINE)
+
+
+def test_only_built_resources_are_ever_synced(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--groups', 'activity,flow,delivery', *ALPHA_FLAGS],
+    )
+    for _, resources, _ in ran.syncs:
+        assert resources <= gitstat.fetch.base.BUILT_RESOURCES
+
+
+def test_a_bare_name_is_resolved_through_the_users_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    routes = {
+        ('GET', '/users/octocat'): [
+            tests.fixtures.fetch.server.Canned(200, tests.fixtures.fetch.responses.USER_OK)
+        ]
+    }
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['octocat', '--by', 'total', *ALPHA_FLAGS],
+        routes=routes,
+    )
+    assert ran.paths[0] == '/users/octocat'
+    assert ran.syncs == [(Subject('user', 'octocat'), COMMITS, False)]
+    assert ran.console.startswith('user octocat, 2026-10-01 to 2027-01-31, total, UTC')
+
+
+def test_a_bare_name_that_is_an_organisation_reports_the_organisation(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    routes = {
+        ('GET', '/users/octo-org'): [
+            tests.fixtures.fetch.server.Canned(200, {'login': 'octo-org', 'type': 'Organization'})
+        ]
+    }
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['octo-org', '--max-age', '30d', *ALPHA_FLAGS],
+        routes=routes,
+    )
+    assert ran.console.startswith('org octo-org, ')
+
+
+def test_by_author_with_a_name_that_resolves_to_a_user_is_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    routes = {
+        ('GET', '/users/octocat'): [
+            tests.fixtures.fetch.server.Canned(200, tests.fixtures.fetch.responses.USER_OK)
+        ]
+    }
+    with pytest.raises(UsageError, match='--by-author'):
+        run_report(
+            monkeypatch,
+            make_client,
+            stats_cache_path,
+            ['octocat', '--by-author', *ALPHA_FLAGS],
+            routes=routes,
+        )
+
+
+def test_by_author_with_an_explicit_user_is_rejected_before_the_cache_is_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    path = tmp_path / 'never' / 'cache.sqlite3'
+    with pytest.raises(UsageError, match='--by-author'):
+        run_report(
+            monkeypatch,
+            make_client,
+            path,
+            ['user:octocat', '--by-author'],
+            online=False,
+        )
+    assert not path.parent.exists()
+
+
+def test_json_goes_to_stdout_and_nothing_else_does(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--no-fetch', '--format', 'json', *ALPHA_FLAGS],
+        online=False,
+    )
+    data = json.loads(ran.stdout)
+    assert data['format_version'] == 1
+    assert data['subject'] == {'kind': 'repo', 'login': 'octo-org', 'name': 'alpha'}
+    assert ran.console == ''
+
+
+def set_schema_version(path: pathlib.Path, value: str) -> None:
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (value,))
+    connection.close()
+
+
+def test_ignore_cache_version_reports_a_refused_cache_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    set_schema_version(stats_cache_path, '0')
+    argv = ['repo:octo-org/alpha', '--no-fetch', *ALPHA_FLAGS]
+    with pytest.raises(gitstat.fetch.errors.CacheVersionError, match='--ignore-cache-version'):
+        run_report(monkeypatch, make_client, stats_cache_path, argv, online=False)
+    ran = run_report(
+        monkeypatch, make_client, stats_cache_path, [*argv, '--ignore-cache-version'], online=False
+    )
+    (warning,) = [line for line in ran.console.splitlines() if line.startswith('Warning')]
+    assert '--ignore-cache-version' in warning
+
+
+def test_a_group_that_needs_no_resource_syncs_nothing_and_finds_nothing_to_report(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    with pytest.raises(gitstat.stats.EmptySubjectError, match='no requested group is built'):
+        run_report(
+            monkeypatch,
+            make_client,
+            stats_cache_path,
+            ['repo:octo-org/alpha', '--groups', 'flow'],
+            online=False,
+        )
+
+
+def test_an_unknown_group_is_rejected_before_the_cache_is_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    path = tmp_path / 'never' / 'cache.sqlite3'
+    with pytest.raises(gitstat.stats.UnknownGroupError, match='bogus'):
+        run_report(monkeypatch, make_client, path, ['repo:a/b', '--groups', 'bogus'], online=False)
+    assert not path.parent.exists()
+
+
+def test_an_empty_cache_with_no_fetch_says_it_may_only_need_a_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    with pytest.raises(gitstat.stats.EmptySubjectError, match='try again without --no-fetch'):
+        run_report(
+            monkeypatch,
+            make_client,
+            tmp_path / 'empty' / 'cache.sqlite3',
+            ['user:octocat', '--no-fetch'],
+            online=False,
+        )
+
+
+def test_an_empty_cache_without_no_fetch_gives_no_such_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    with pytest.raises(gitstat.stats.EmptySubjectError) as caught:
+        run_report(
+            monkeypatch,
+            make_client,
+            tmp_path / 'empty' / 'cache.sqlite3',
+            ['user:nobody', '--groups', 'activity'],
+            upstream=tests.fixtures.fetch.upstream.Upstream([]),
+        )
+    assert '--no-fetch' not in str(caught.value)
+
+
+def fetch_settings(max_age: str) -> gitstat.settings.FetchSettings:
+    return settings_for(report(max_age=max_age)).fetch
+
+
+NOW = datetime.datetime(2027, 3, 1, 12, 0, tzinfo=UTC)
+FRESH = (NOW - datetime.timedelta(hours=1)).isoformat()
+STALE = (NOW - datetime.timedelta(days=2)).isoformat()
+
+
+@pytest.mark.parametrize(
+    ('provenance', 'resources', 'max_age', 'full_refresh', 'no_fetch', 'expected'),
+    [
+        ({'fetched_at:commits': FRESH}, {'commits'}, '1d', False, True, False),
+        ({'fetched_at:commits': STALE}, {'commits'}, '1d', True, True, False),
+        ({}, set(), '0s', False, False, False),
+        ({}, set(), '0s', True, False, False),
+        ({'fetched_at:commits': FRESH}, {'commits'}, '1d', True, False, True),
+        ({'fetched_at:commits': FRESH}, {'commits'}, '0s', False, False, True),
+        ({'fetched_at:commits': FRESH}, {'commits'}, '1d', False, False, False),
+        ({'fetched_at:commits': STALE}, {'commits'}, '1d', False, False, True),
+        ({'fetched_at:commits': 'never'}, {'commits'}, '1d', False, False, True),
+        ({}, {'commits'}, '1d', False, False, True),
+        (
+            {'fetched_at:commits': FRESH, 'fetched_at:issues': STALE},
+            {'commits', 'issues'},
+            '1d',
+            False,
+            False,
+            True,
+        ),
+        (
+            {'fetched_at:commits': FRESH, 'fetched_at:issues': FRESH},
+            {'commits', 'issues'},
+            '1d',
+            False,
+            False,
+            False,
+        ),
+    ],
+)
+def test_needs_sync(
+    provenance: dict[str, str],
+    resources: set[str],
+    max_age: str,
+    full_refresh: bool,
+    no_fetch: bool,
+    expected: bool,
+) -> None:
+    assert (
+        gitstat.cli.needs_sync(
+            provenance, frozenset(resources), fetch_settings(max_age), full_refresh, no_fetch, NOW
+        )
+        is expected
+    )
+
+
+def test_a_cache_exactly_max_age_old_is_stale() -> None:
+    provenance = {'fetched_at:commits': (NOW - datetime.timedelta(days=1)).isoformat()}
+    assert gitstat.cli.needs_sync(provenance, COMMITS, fetch_settings('1d'), False, False, NOW)

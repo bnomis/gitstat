@@ -129,6 +129,11 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[gitstat.fetch.cache.C
 
 
 @pytest.fixture
+def stats_cache_path(stats_cache: gitstat.fetch.cache.Cache) -> pathlib.Path:
+    return pathlib.Path(stats_cache.connection.execute('PRAGMA database_list').fetchone()[2])
+
+
+@pytest.fixture
 def stats_fetcher(stats_cache: gitstat.fetch.cache.Cache) -> gitstat.fetch.base.Fetcher:
     """A fetcher over `stats_cache`, never entered, so any request fails."""
     return gitstat.fetch.base.Fetcher('test-token', stats_cache, gitstat.settings.FetchSettings())

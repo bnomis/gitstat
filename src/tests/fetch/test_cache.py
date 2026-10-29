@@ -453,9 +453,9 @@ def test_inspect_cache_of_a_missing_path_is_none_and_creates_nothing(
 
 
 def test_inspect_cache_reports_counts_identity_and_latest_sync(
-    stats_cache: gitstat.fetch.cache.Cache,
+    stats_cache_path: pathlib.Path,
 ) -> None:
-    path = pathlib.Path(stats_cache.connection.execute('PRAGMA database_list').fetchone()[2])
+    path = stats_cache_path
     info = gitstat.fetch.cache.inspect_cache(path)
     assert info is not None
     assert info.path == path
