@@ -6,8 +6,6 @@
 
 This list builds step 1 of the [implementation order](../../specs/implementation-order.md), "Skeleton and settings": the project tooling, the package layout, the version identity, logging, layered settings, the public API entry point, a guard on the one-way layering and CI. The rest of the system spec is delivered by the component task lists, as mapped below.
 
-**Warning: spec unclear.** The Settings section does not say how `timedelta` settings are written in the JSON config file (JSON has no duration type), what shape the `overrides` keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, or whether `~` in a `Path` setting is expanded. The Architecture section says `fetch` imports nothing from gitstat except `settings`, yet fetch must record the gitstat version in the cache identity, which the shared versions rule says is built in one place. Tasks 2, 5 and 6 carry a caveat for these points and stop for the user if they are still open when the task is reached.
-
 ## Spec coverage
 
 | Spec section | Covered by |
@@ -19,11 +17,11 @@ This list builds step 1 of the [implementation order](../../specs/implementation
 | Architecture: provenance | Task 2 (version identity); recording and checking in the fetch-and-cache and stats lists |
 | Architecture: secrets stay in the environment | Task 6 (no token setting); `resolve_token` and log redaction in the fetch-and-cache lists |
 | Data flow | fetch-and-cache, stats and reports lists |
-| Error handling | Task 3 (logging set-up); the typed errors in each component list; conversion at the edge in the reports lists |
+| Error handling | Task 3 (logging set-up), Task 5 (`SettingsError`); the typed errors in each component list; conversion at the edge in the reports lists |
 | Implementation: stack | Task 1 (tooling), Task 3 (loguru); runtime libraries are added by the component lists that first use them |
 | Implementation: build order | this list is step 1 |
 | Implementation: testing | Task 1 (pytest, hypothesis, `slow` marker, fixtures layout); the opt-in integration test in the fetch-and-cache lists |
-| Settings | Tasks 4, 5 and 6 |
+| Settings (config file, overrides, values, errors, version identity) | Tasks 2, 4, 5 and 6 |
 | External dependencies | Task 1, Task 8 |
 
 The spec's `**Status:**` is not changed by this list: the API section is complete only when the component lists have re-exported their names, so the last of those lists sets it to `implemented`.
@@ -82,13 +80,12 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Status:** todo
 **Priority:** high
 **Complexity:** small
-**Spec Reference:** Architecture ("Provenance travels with the data")
+**Spec Reference:** Architecture ("Provenance travels with the data"); Settings (Version identity)
 
 **Technical Goal:** Give the cache identity and `StatsResult.provenance` one place to read the gitstat version from, so both record the same value, as the shared versions rule requires.
 
 **Subtasks:**
 
-- [ ] Stop for the user if the spec does not yet say where the version identity lives and whether `fetch` may import it (see the header warning)
 - [ ] Add `src/gitstat/version.py` with `VERSION: str` read from `importlib.metadata.version('gitstat')`; the module imports nothing from gitstat
 - [ ] Write `src/tests/test_version.py`: `VERSION` equals the `[project] version` in `pyproject.toml` (read with `tomllib`; this is the packaging file, not the user config) and is a non-empty string
 
@@ -109,7 +106,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Notes:**
 
 - Depends on Task 1
-- **Caveat:** spec unclear. The Architecture section allows `fetch` to import only `settings`; the version module is a second leaf it needs. The spec should name the leaf modules every layer may import.
+- The spec makes `settings` and `version` leaves that any layer may import (Architecture; Settings, Version identity).
 - Key files: `src/gitstat/version.py`, `src/tests/test_version.py`
 
 ---
@@ -196,23 +193,26 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Status:** todo
 **Priority:** high
 **Complexity:** medium
-**Spec Reference:** API (`load_settings`); Settings
+**Spec Reference:** API (`load_settings`); Settings (Config file, Overrides, Values, Errors)
 
 **User Story:** As a gitstat user, I want defaults, my config file and my command-line flags layered with the later one winning, so that I set a preference once and override it for a single run.
 
 **Subtasks:**
 
-- [ ] Stop for the user if the spec does not yet say how durations are written in JSON, what shape override keys take, what is raised for an unknown key, a wrong type or a missing explicit config file, and whether `~` is expanded (see the header warning)
-- [ ] Implement `load_settings(config_path, overrides)` in `src/gitstat/settings.py`: resolve the file as `config_path`, else `GITSTAT_CONFIG`, else `~/.config/gitstat/config.json`; read it with `json.load` if present; apply its `fetch`, `stats` and `report` objects; then apply `overrides`
-- [ ] Convert JSON values to field types (`Path`, `timedelta`, tuples, `Literal` members) and validate them, in the form the amended spec names
-- [ ] Write tests in `src/tests/test_settings.py`: a known-good JSON fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; `GITSTAT_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value raises
+- [ ] Add `SettingsError(Exception)` to `src/gitstat/settings.py`
+- [ ] Implement `load_settings(config_path, overrides)` in `src/gitstat/settings.py`: resolve the file as `config_path`, else `GITSTAT_CONFIG`, else `~/.config/gitstat/config.json`; read it with `json.load`; a missing default file means defaults, a missing file named by `config_path` or `GITSTAT_CONFIG` raises `SettingsError`; apply its `fetch`, `stats` and `report` objects; then merge `overrides`, which has the same nested shape (`{'fetch': {'workers': 8}}`), section by section
+- [ ] Add `parse_duration(text: str) -> datetime.timedelta` accepting a non-negative integer and one unit from `s`, `m`, `h`, `d`, `w` (`'30d'`, `'1h'`, `'0s'`), raising `SettingsError` otherwise; it is public so the CLI flags reuse it
+- [ ] Convert values to field types: durations with `parse_duration`, JSON arrays of strings to tuples, `Path` with `expanduser()` only (no `$VAR` expansion, relative paths left relative), and `Literal` values checked against their allowed set; any wrong type raises `SettingsError` naming the key, never echoing the value
+- [ ] Write tests in `src/tests/test_settings.py`: a known-good JSON fixture in `src/tests/fixtures/settings.py` loads to the expected `Settings`; a missing default file yields defaults; a missing named file raises `SettingsError`; `GITSTAT_CONFIG` is honoured (via `monkeypatch.setenv`); an invalid `Literal` value, a wrong type and a malformed duration (`'30'`, `'1.5h'`, `'-1d'`, `'3y'`) each raise `SettingsError`; `'~/x'` becomes `Path.home() / 'x'` and `'$HOME/x'` stays literal
 - [ ] Write a hypothesis test (`@settings(max_examples=20, deadline=10000)`) that for any generated `fetch.workers` values in file and override, the override wins, and with no override the file wins
+- [ ] Write a hypothesis test (`@settings(max_examples=20, deadline=10000)`) that `parse_duration(f'{n}{unit}')` equals the expected `timedelta` for any non-negative `n` and unit
 
 **Acceptance Criteria:**
 
 - [ ] Defaults, then file, then overrides; later wins, for every section
 - [ ] `GITSTAT_CONFIG` selects the file when `config_path` is `None`
-- [ ] A value outside a `Literal` set is rejected with an error naming the key and the allowed values
+- [ ] A value outside a `Literal` set raises `SettingsError` naming the key and the allowed values
+- [ ] A missing named config file raises `SettingsError`; a missing default file does not
 
 **Definition of Done:**
 
@@ -226,7 +226,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Notes:**
 
 - Depends on Task 4
-- **Caveat:** spec unclear. Duration format, override key shape, error type and missing-file behaviour are not specified. The error type cannot be `UsageError`, which lives in `reports`, because `fetch` imports `settings`.
+- `SettingsError` lives in `settings.py`, not with `UsageError` in `reports`, because `fetch` imports `settings`; `cli.main` maps it to exit status 2 (reports lists).
 - Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`, `src/tests/fixtures/settings.py`, `src/tests/conftest.py`
 
 ---
@@ -242,10 +242,9 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 
 **Subtasks:**
 
-- [ ] Stop for the user if the spec does not yet say what an unknown key raises (see Task 5)
-- [ ] Make `load_settings` reject any key not defined on the section dataclasses, so `token` or `github_token` in the JSON file or in `overrides` raises
+- [ ] Make `load_settings` raise `SettingsError` for any section or key not defined on the section dataclasses, so `token` or `github_token` in the JSON file or in `overrides` is refused
 - [ ] Ensure the rejection message names the key but never echoes its value
-- [ ] Write tests in `src/tests/test_settings.py`: a JSON fixture with `{"fetch": {"token": "..."}}` raises; an override `{'fetch.token': '...'}` raises; the raised message does not contain the value; `GITHUB_TOKEN` set in the environment changes nothing in the loaded `Settings`
+- [ ] Write tests in `src/tests/test_settings.py`: a JSON fixture with `{"fetch": {"token": "..."}}` raises; an override `{'fetch': {'token': '...'}}` raises; the raised message does not contain the value; `GITHUB_TOKEN` set in the environment changes nothing in the loaded `Settings`
 
 **Acceptance Criteria:**
 
@@ -264,7 +263,6 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Notes:**
 
 - Depends on Task 5
-- **Caveat:** spec unclear. Rejecting unknown keys is how this task proves the token is never a setting; the spec should say that unknown keys are an error.
 - `resolve_token` (reading `GITHUB_TOKEN`, else `gh auth token`) belongs to the fetch-and-cache lists.
 - Key files: `src/gitstat/settings.py`, `src/tests/test_settings.py`
 
@@ -282,7 +280,7 @@ The spec's `**Status:**` is not changed by this list: the API section is complet
 **Subtasks:**
 
 - [ ] In `src/gitstat/__init__.py`, re-export `Settings` and `load_settings` from `.settings` and list them in `__all__`, alphabetically
-- [ ] Write `src/tests/test_layering.py` that parses every module under `src/gitstat/` with `ast` and collects its `gitstat.*` imports, then asserts: `fetch` imports only `gitstat.fetch` and `gitstat.settings` (plus `gitstat.version` if the amended spec allows it); `stats` imports nothing from `gitstat.reports`; `settings` and `version` import nothing from gitstat
+- [ ] Write `src/tests/test_layering.py` that parses every module under `src/gitstat/` with `ast` and collects its `gitstat.*` imports, then asserts: `fetch` imports only `gitstat.fetch`, `gitstat.settings` and `gitstat.version`; `stats` imports nothing from `gitstat.reports`; `settings` and `version` import nothing from gitstat
 - [ ] Add to `src/tests/test_package.py` a check that `gitstat.__all__` contains `Settings` and `load_settings` and that each name resolves
 
 **Acceptance Criteria:**

@@ -16,6 +16,7 @@ gitstat reports statistics from github.com for a user, a repository or an organi
 | Stats | `src/gitstat/stats/` | [stats](../stats/spec.md) |
 | Reports and CLI | `src/gitstat/reports/`, `src/gitstat/cli.py` | [reports](../reports/spec.md) |
 | Settings | `src/gitstat/settings.py` | this spec |
+| Version identity | `src/gitstat/version.py` | this spec |
 
 ## API
 
@@ -44,7 +45,7 @@ def load_settings(config_path: pathlib.Path | None, overrides: dict[str, object]
 
 ## Architecture
 
-Three layers with one-way dependencies: `reports` imports `stats`, `stats` imports `fetch`, and `fetch` imports nothing from gitstat except `settings`. No layer reaches around the one beneath it.
+Three layers with one-way dependencies: `reports` imports `stats`, `stats` imports `fetch`, and `fetch` imports nothing from gitstat except `settings` and `version`. `settings` and `version` are leaves: they import nothing from gitstat, and any layer may import them. No layer reaches around the one beneath it.
 
 ```text
 GitHub GraphQL / REST
@@ -76,9 +77,10 @@ Rules that hold across the system:
 
 Errors are typed in the layer that detects them and presented only at the edge:
 
+- `settings` raises `SettingsError`.
 - `fetch` raises `AuthError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `CacheVersionError`.
 - `stats` raises `InvalidRangeError`, `UnknownGroupError`, `EmptySubjectError`.
-- `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for usage) and in the web app's exception handlers (HTTP 400 or 502).
+- `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for `UsageError` and `SettingsError`) and in the web app's exception handlers (HTTP 400 or 502).
 - Unexpected exceptions propagate and are logged with `loguru.logger.exception`.
 
 ## Implementation
@@ -99,6 +101,16 @@ Layered, later wins: built-in defaults, `~/.config/gitstat/config.json`, command
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | none | API token |
 | `GITSTAT_CONFIG` | `~/.config/gitstat/config.json` | Config file path |
+
+**Config file.** A JSON object with optional `fetch`, `stats` and `report` objects whose keys are the setting names without their prefix, for example `{"fetch": {"workers": 8}}`. The file is chosen as `config_path`, else `GITSTAT_CONFIG`, else the default path. A missing default file means built-in defaults; a missing file named by `config_path` or `GITSTAT_CONFIG` raises `SettingsError`.
+
+**Overrides.** `overrides` has the same nested shape as the file, for example `{"fetch": {"workers": 8}}`, and is merged section by section over it.
+
+**Values.** A `timedelta` setting is written as a string of a non-negative integer and one unit, `s`, `m`, `h`, `d` or `w` (`"30d"`, `"1h"`, `"0s"`); command-line flags take the same syntax. A list setting is a JSON array of strings. A `Path` setting has a leading `~` expanded with `Path.expanduser()`; environment variables are not expanded, and relative paths stay relative to the working directory.
+
+**Errors.** An unknown section or key, a token-like key among them, a value of the wrong type, a malformed duration or a value outside a `Literal` set raises `SettingsError`. The message names the key and, for a `Literal`, the allowed values; it never echoes the value, so a token put in the wrong place is not repeated in logs.
+
+**Version identity.** `src/gitstat/version.py` defines `VERSION`, read once from the installed package metadata. The cache identity and `StatsResult.provenance` both take the version from it.
 
 ## External dependencies
 
