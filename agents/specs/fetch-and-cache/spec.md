@@ -51,6 +51,9 @@ class Fetcher:
     async def __aexit__(self, *exc_info: object) -> None:
         """Closes the aiohttp session."""
 
+    async def sync(self, subject: Subject, resources: frozenset[str], full_refresh: bool = False) -> SyncReport:
+        """Bring the cache up to date for the subject: backfill on first use, otherwise only the delta since each watermark."""
+
     async def repos(self, subject: Subject) -> list[Repo]:
         """Repositories owned by a user or org (forks and archived per settings); a repo subject yields itself."""
 
@@ -83,7 +86,20 @@ def resolve_token() -> str:
 
 **GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection; the REST `stats/code_frequency` and `stats/contributors` endpoints are used only as a cheap cross-check on repos under 10,000 commits.
 
-**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/gitstat/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `sync_state(repo, resource, cursor, synced_at)`. Immutable rows (commits) are never refetched; mutable resources are refetched when `now - synced_at > fetch.ttl_*` and only from the stored `since` cursor onwards. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304.
+**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/gitstat/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, and `sync_state(repo, resource, watermark, head_oid, synced_at, full_synced_at)`. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304.
+
+**Incremental sync.** The first query of a subject backfills everything; later queries fetch only what changed since the last successful sync. State is per repo and per resource, so asking for a new metric group later backfills only that resource.
+
+1. *Subject level.* The repo list is always re-read (one cheap query per 100 repos, ordered by `pushedAt`). A repo whose `pushedAt` and `updatedAt` are not newer than its stored `synced_at` is skipped entirely, with no per-repo requests. A repo not yet in the cache is backfilled; a repo gone from the list is marked `missing`, its rows kept.
+2. *Per resource.* Each resource has an incremental strategy that pages newest-first and stops at the watermark:
+   - `commits`: immutable, so never refetched. History is read with `since = watermark - fetch.overlap` and rows are de-duplicated by `oid`. `head_oid` is stored; if the stored head is not an ancestor of the new head (force-push or rewritten history), that repo's commits are fully refetched.
+   - `pull_requests` and `issues`: mutable. Paged ordered by `UPDATED_AT` descending, stopping at the first item older than `watermark - fetch.overlap`; changed items are upserted by number. Still-open items are therefore refreshed whenever they change.
+   - `releases` and `star_events`: paged newest-first (`CREATED_AT`, `STARRED_AT`), stopping at the first known id.
+   - `workflow_runs`: REST with `created=>watermark - fetch.overlap`, plus a refetch of any cached run whose status is not `completed`.
+3. *The watermark is a server-side timestamp* taken at the start of the sync, not the newest item seen, and the overlap (default one hour) absorbs clock skew and in-flight updates.
+4. *Atomic advance.* Rows and the new watermark are written in one SQLite transaction per repo and resource, only after the last page succeeds. An interrupted or rate-limited run leaves the old watermark, so the next run resumes from it and re-fetching is harmless because writes are upserts.
+5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh`.
+6. *Offline and bounded.* `--no-fetch` renders from the cache alone; `--max-age` skips the network for a subject synced more recently than that.
 
 **Cache identity.** `meta` records `schema_version`, the hash of each query text, and the gitstat version. Opening a cache whose recorded identity differs from the running code raises `CacheVersionError`.
 
@@ -95,11 +111,13 @@ def resolve_token() -> str:
 |---------|------|---------|-------------|
 | `fetch.cache_path` | `Path` | `~/.cache/gitstat/cache.sqlite3` | SQLite cache file |
 | `fetch.include_forks` | `bool` | `False` | Include forked repos for user/org subjects |
+| `fetch.full_refresh_after` | `timedelta` | `30 days` | Age of the last full read after which a resource is fully re-read to catch deletions |
 | `fetch.include_archived` | `bool` | `False` | Include archived repos |
+| `fetch.max_age` | `timedelta` | `0` | Skip the network if the subject was synced more recently than this |
 | `fetch.max_retries` | `int` | `5` | Retries for transient and secondary-limit errors |
 | `fetch.on_rate_limit` | `Literal['wait', 'fail']` | `'wait'` | Behaviour on primary limit exhaustion |
+| `fetch.overlap` | `timedelta` | `1 hour` | Safety margin subtracted from the watermark |
 | `fetch.stats_retries` | `int` | `6` | Retries while a REST stats endpoint returns 202 |
-| `fetch.ttl_open_items` | `timedelta` | `1 hour` | Refresh age for open PRs, issues, runs |
 | `fetch.workers` | `int` | `4` | Concurrent repo fetches |
 
 ## External dependencies

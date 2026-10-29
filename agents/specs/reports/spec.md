@@ -41,6 +41,7 @@ Command line (`gitstat <command> <target>`):
 gitstat report  <target> [--format terminal|html|json] [--out PATH]
                          [--by year|month|week|day|total] [--since DATE] [--until DATE]
                          [--groups activity,flow,delivery] [--by-author] [--tz ZONE]
+                         [--full-refresh | --no-fetch] [--max-age DURATION]
 gitstat serve   <target> [--host 127.0.0.1] [--port 8000]
 gitstat cache   clear|info
 ```
