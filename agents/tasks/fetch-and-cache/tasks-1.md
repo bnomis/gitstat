@@ -94,7 +94,7 @@ The spec's `**Status:**` is not changed by this list: most of the spec is built 
 **Subtasks:**
 
 - [ ] Add `src/gitstat/fetch/errors.py` with `FetchError(Exception)` and its subclasses `AuthError`, `GraphQLError`, `NotFoundError`, `RateLimitError` and `StatsPendingError`
-- [ ] `RateLimitError.__init__(self, reset_at: datetime.datetime, message: str)` keeps `reset_at` as an attribute; the message states the reset time in UTC ISO format
+- [ ] `RateLimitError.__init__(self, reset_at: datetime.datetime)` keeps `reset_at` as an attribute and builds its own message stating the reset time in UTC ISO format, so every call site is `RateLimitError(reset_at)`
 - [ ] `GraphQLError.__init__(self, errors: list[tuple[str, str]])` keeps `errors` as `(type, message)` pairs and joins them into the message
 - [ ] `AuthError` has a module constant `NO_TOKEN_MESSAGE` telling the user to set `GITHUB_TOKEN` or run `gh auth login`
 - [ ] Write `src/tests/fetch/test_errors.py`: every class is a `FetchError`; `RateLimitError` exposes `reset_at` and names it in `str()`; `GraphQLError` exposes its pairs and names each type in `str()`
