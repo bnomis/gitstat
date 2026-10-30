@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import datetime
+import pathlib
 import typing
 import zoneinfo
 
@@ -81,6 +82,7 @@ def test_resources_for_maps_each_group() -> None:
     assert resources_for(frozenset({'activity'})) == {'commits'}
     assert resources_for(frozenset({'flow'})) == {'issues', 'pull_requests'}
     assert resources_for(frozenset({'delivery'})) == {'pull_requests', 'releases', 'workflow_runs'}
+    assert resources_for(frozenset({'popularity'})) == {'forks', 'star_events'}
     assert resources_for(frozenset({'activity', 'flow'})) == {
         'commits',
         'issues',
@@ -217,17 +219,15 @@ def test_a_commit_after_today_is_left_out_when_the_end_is_open(
     assert pick(result, 'commits')['2027-01'] == 1  # a6; b4 on the 15th is in the future
 
 
-def test_the_default_request_returns_flow_beside_activity_with_no_flow_row_unavailable(
+def test_the_default_request_returns_flow_beside_activity_and_lists_nothing_unavailable(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = asyncio.run(wambatic.stats.compute(fixture.ORG, stats_fetcher, Request(), clock=clock))
     assert pick(result, 'commits')
     assert pick(result, 'prs_opened')
-    rows = {row['metric']: row['reason'] for row in result.tables['unavailable']}
-    assert 'flow' not in rows
-    assert {'stars', 'forks', 'watchers', 'languages'} <= rows.keys()
-    assert 'step 10' in rows['stars']
-    assert 'delivery' not in rows
+    assert result.tables['unavailable'] == []
+    assert not {'popularity', 'languages'} & result.tables.keys()
+    assert not [s for s in result.series if s.metric.startswith(('stars', 'forks'))]
 
 
 def test_every_requested_group_is_in_the_series_and_none_is_unavailable(
@@ -624,3 +624,118 @@ def test_the_total_lines_added_are_the_non_merge_additions_in_range(
         c.additions for c in expected if not c.is_merge
     )
     assert sum(pick(result, 'commits').values()) == len(expected)
+
+
+# Popularity
+
+POPULARITY = frozenset({'popularity'})
+POPULARITY_METRICS = ('stars_added', 'stars_total', 'forks_added', 'forks_total')
+
+
+def test_an_org_by_month_matches_the_hand_written_popularity(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=POPULARITY)
+    for metric in POPULARITY_METRICS:
+        assert pick(result, metric) == {
+            label: values[metric] for label, values in fixture.ORG_POPULARITY_BY_MONTH_UTC.items()
+        }
+    assert [s.metric for s in result.series] == list(POPULARITY_METRICS)
+    assert result.tables['popularity'] == fixture.ORG_POPULARITY_TABLE
+    assert [row['language'] for row in result.tables['languages']] == [
+        row['language'] for row in fixture.ORG_LANGUAGES_TABLE
+    ]
+    assert set(result.tables) == {'popularity', 'languages', 'unavailable'}
+    assert (result.since, result.until) == (fixture.SINCE, fixture.UNTIL)
+
+
+def test_popularity_by_month_in_berlin_moves_the_midnight_star(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=POPULARITY, tz=BERLIN)
+    for metric in POPULARITY_METRICS:
+        assert pick(result, metric) == {
+            label: values[metric]
+            for label, values in fixture.ORG_POPULARITY_BY_MONTH_BERLIN.items()
+        }
+
+
+def test_every_group_is_ordered_activity_flow_delivery_popularity_then_breakdowns(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(
+        stats_fetcher, groups=frozenset({'activity', 'flow', 'delivery', 'popularity'})
+    )
+    names = [s.metric for s in result.series if s.by is None]
+    assert names[: len(TOTALS)] == list(TOTALS)
+    flow_end = len(TOTALS) + len(wambatic.stats.flow.FLOW_METRICS)
+    assert names[len(TOTALS) : flow_end] == [n for n, _ in wambatic.stats.flow.FLOW_METRICS]
+    assert names[-len(POPULARITY_METRICS) :] == list(POPULARITY_METRICS)
+    assert 'workflow_runs' in names[flow_end : -len(POPULARITY_METRICS)]
+    assert [s.by_kind for s in result.series if s.by is not None][0] == 'repo'
+    assert result.series[-1].by is not None
+
+
+def test_a_user_subject_counts_every_star_and_fork_of_the_users_repositories(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, fixture.USER, groups=POPULARITY)
+    for metric in POPULARITY_METRICS:
+        assert pick(result, metric) == {
+            label: values[metric] for label, values in fixture.USER_POPULARITY_BY_MONTH_UTC.items()
+        }
+    assert result.tables['popularity'] == fixture.USER_POPULARITY_TABLE
+    assert result.tables['languages'] == []
+
+
+def test_the_range_starts_at_the_earliest_star_or_fork_of_a_requested_group(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    only = compute(stats_fetcher, groups=POPULARITY, since=None)
+    assert only.since == datetime.date(2026, 7, 1)  # fork 1001, before the first star b1
+    assert pick(only, 'stars_added')['2026-08'] == 1
+    both = compute(stats_fetcher, groups=frozenset({'activity', 'popularity'}), since=None)
+    assert both.since == datetime.date(2026, 7, 1)
+    activity_only = compute(stats_fetcher, groups=ACTIVITY, since=None)
+    assert activity_only.since == datetime.date(2026, 10, 1)  # a1, the first commit
+
+
+def test_a_popularity_request_with_no_star_or_fork_gives_zeros_and_the_tables(
+    tmp_path: pathlib.Path,
+) -> None:
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'quiet.sqlite3')
+    try:
+        cache.upsert_repos('octo-org', [fixture.REPOS[0]], complete=True)
+        fetcher = wambatic.fetch.base.Fetcher('t', cache, wambatic.settings.FetchSettings())
+        result = compute(fetcher, groups=POPULARITY, since=None, until=datetime.date(2027, 1, 20))
+    finally:
+        cache.close()
+    assert result.since == datetime.date(2027, 1, 1)
+    assert pick(result, 'stars_added') == {'2027-01': 0}
+    assert pick(result, 'stars_total') == {'2027-01': 0}
+    assert [row['repo'] for row in result.tables['popularity']] == [fixture.ALPHA]
+
+
+def test_a_request_with_activity_has_no_unavailable_row_for_the_popularity_metrics(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=frozenset({'activity', 'popularity'}))
+    rows = {row['metric'] for row in result.tables['unavailable']}
+    assert not {'stars', 'forks', 'watchers', 'languages'} & rows
+
+
+def test_the_provenance_of_a_popularity_request_has_the_star_and_fork_syncs(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=POPULARITY)
+    assert result.provenance['fetched_at:star_events'] == '2027-02-01T10:00:00+00:00'
+    assert result.provenance['fetched_at:forks'] == '2027-02-01T10:00:00+00:00'
+    assert 'fetched_at:commits' not in result.provenance
+
+
+def test_compute_reads_popularity_without_a_request(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    assert stats_fetcher.client.session is None
+    compute(stats_fetcher, groups=POPULARITY)
+    assert stats_fetcher.client.session is None

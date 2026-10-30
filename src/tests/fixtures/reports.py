@@ -141,16 +141,6 @@ Flow times by period
 
 hours; - no data
 
-Unavailable
-
-  Metric      Reason
- ───────────────────────────────────────────────────────────────────────────────────
-  stars       stars come from star_events, which step 10 fetches
-  forks       forks has no fetch resource yet; step 10 specifies and fetches it
-  watchers    watchers has no fetch resource yet; step 10 specifies and fetches it
-  languages   languages has no fetch resource yet; step 10 specifies and fetches it
-
-
 Provenance
 computed_at: 2027-01-20T12:00:00+00:00
 fetched_at:commits: 2027-02-01T10:00:00+00:00

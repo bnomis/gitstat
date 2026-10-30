@@ -312,23 +312,22 @@ def test_exactly_twenty_top_contributors_have_no_more_line(
     assert ' more' not in output
 
 
-def test_unavailable_lists_the_unbuilt_activity_metrics_and_no_longer_flow(
+def test_the_default_groups_list_nothing_as_unavailable(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
-    output = render(org_result)
-    assert 'Unavailable' in output
-    for metric in ('stars', 'forks', 'watchers', 'languages'):
-        assert re.search(rf'^\s+{metric}\s+\S', output, re.MULTILINE), metric
-    assert not re.search(r'^\s+flow\s+\S', output, re.MULTILINE)
+    assert org_result.tables['unavailable'] == []
+    assert 'Unavailable' not in render(org_result)
 
 
-def test_unavailable_is_absent_when_the_table_is_empty(
+def test_unavailable_lists_each_row_with_its_reason(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
+    rows = [{'metric': 'deployments', 'reason': 'no releases in the cache'}]
     output = render(
-        dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': []})
+        dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': rows})
     )
-    assert 'Unavailable' not in output
+    assert 'Unavailable' in output
+    assert re.search(r'^\s+deployments\s+no releases in the cache', output, re.MULTILINE)
 
 
 # Flow tables

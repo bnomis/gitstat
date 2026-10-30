@@ -6,7 +6,7 @@ import typing
 import wambatic.fetch
 import wambatic.settings
 
-GROUPS = frozenset({'activity', 'delivery', 'flow'})
+GROUPS = frozenset({'activity', 'delivery', 'flow', 'popularity'})
 
 
 class Granularity(enum.StrEnum):

@@ -10,8 +10,8 @@ Bucket = wambatic.stats.base.Bucket
 Series = wambatic.stats.base.Series
 
 
-def test_groups_are_the_three_metric_groups() -> None:
-    assert wambatic.stats.base.GROUPS == {'activity', 'delivery', 'flow'}
+def test_groups_are_the_four_metric_groups() -> None:
+    assert wambatic.stats.base.GROUPS == {'activity', 'delivery', 'flow', 'popularity'}
 
 
 def test_granularity_has_the_five_values() -> None:

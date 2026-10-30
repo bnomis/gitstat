@@ -6,7 +6,6 @@ import io
 import json
 import os
 import pathlib
-import re
 import socket
 import sqlite3
 import subprocess
@@ -492,7 +491,7 @@ def test_full_refresh_syncs_a_fresh_cache_and_reads_the_history_again(
     assert 'Activity by period' in ran.console
 
 
-def test_the_default_groups_sync_commits_issues_and_pull_requests_and_flow_is_not_unavailable(
+def test_the_default_groups_sync_commits_issues_and_pull_requests_and_list_nothing_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,
     stats_cache_path: pathlib.Path,
@@ -513,8 +512,7 @@ def test_the_default_groups_sync_commits_issues_and_pull_requests_and_flow_is_no
     assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), BUILT, False)]
     assert ran.queries == ['repository', 'issues', 'pull_requests']
     assert wambatic.stats.base.StatsRequest().groups == frozenset({'activity', 'flow'})
-    assert 'Unavailable' in ran.console
-    assert not re.search(r'^\s+flow\s+the flow group', ran.console, re.MULTILINE)
+    assert 'Unavailable' not in ran.console
     assert 'Flow by period' in ran.console
 
 

@@ -149,17 +149,6 @@ def test_the_popularity_table_is_ordered_by_stars_then_name() -> None:
     assert [row['repo'] for row in tables['popularity']] == ['o/c', 'o/a', 'o/b']
 
 
-def test_has_event_in_range_uses_local_dates() -> None:
-    star = fixture.star(fixture.ALPHA, 'U_x', '2026-12-31T23:30')
-    in_utc = wambatic.stats.popularity.has_event_in_range
-    december = (datetime.date(2026, 12, 1), datetime.date(2026, 12, 31))
-    assert in_utc([star], [], UTC, *december) is True
-    assert in_utc([star], [], BERLIN, *december) is False
-    assert in_utc([], [], UTC, *december) is False
-    fork = fixture.fork(fixture.ALPHA, 1, '2026-12-05T10:00')
-    assert in_utc([], [fork], UTC, *december) is True
-
-
 TIMES = st.datetimes(
     min_value=datetime.datetime(2025, 6, 1), max_value=datetime.datetime(2027, 6, 1)
 ).map(lambda t: t.replace(tzinfo=UTC))

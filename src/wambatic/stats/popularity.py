@@ -17,18 +17,6 @@ OTHER = 'Other'
 Tables = dict[str, list[dict[str, typing.Any]]]
 
 
-def has_event_in_range(
-    stars: collections.abc.Iterable[wambatic.fetch.base.StarEvent],
-    forks: collections.abc.Iterable[wambatic.fetch.base.Fork],
-    tz: datetime.tzinfo,
-    since: datetime.date,
-    until: datetime.date,
-) -> bool:
-    """Whether any star was given, or fork made, on a local date in the range."""
-    moments = [star.starred_at for star in stars] + [fork.created_at for fork in forks]
-    return any(since <= moment.astimezone(tz).date() <= until for moment in moments)
-
-
 def counted(
     moments: list[datetime.datetime],
     buckets: list[wambatic.stats.base.Bucket],
