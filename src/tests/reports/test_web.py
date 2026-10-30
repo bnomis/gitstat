@@ -4,6 +4,7 @@ import contextlib
 import datetime
 import ipaddress
 import json
+import pathlib
 import re
 import subprocess
 import time
@@ -18,6 +19,7 @@ import pytest
 
 import tests.conftest
 import tests.fixtures.fetch.server
+import tests.fixtures.fetch.upstream
 import tests.fixtures.reports
 import tests.fixtures.stats
 import wambatic.fetch.base
@@ -646,3 +648,57 @@ def test_check_bind_refuses_a_public_host_unless_allowed_and_then_warns() -> Non
         loguru.logger.remove(sink)
     assert len(messages) == 1
     assert messages[0].startswith('WARNING Listening on 0.0.0.0')
+
+
+# A large org
+
+ANSWER_WITHIN = 1.0
+LARGE_ORG_DELAY = 0.05
+
+
+def test_a_large_orgs_sync_does_not_block_the_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    upstream = tests.fixtures.fetch.upstream.large_org()
+    upstream.history_delay = LARGE_ORG_DELAY
+    cache = wambatic.fetch.cache.Cache.open(tmp_path / 'large' / 'cache.sqlite3')
+
+    async def timed(client: httpx.AsyncClient, url: str) -> tuple[httpx.Response, float]:
+        started = time.monotonic()
+        response = await client.get(url)
+        return response, time.monotonic() - started
+
+    async def scenario() -> tuple[int, list[float], list[int], int, float]:
+        async with tests.fixtures.fetch.server.ReplayServer({}, upstream.respond) as server:
+            tests.fixtures.reports.install_replay(monkeypatch, make_client, server)
+            async with serving(web_settings('0s'), cache) as client:
+                first, first_seconds = await timed(client, '/report?target=org:octo-org')
+                data = progress_data(first.text)
+                waits = [first_seconds]
+                done_counts: list[int] = []
+                while True:
+                    page, seconds = await timed(client, '/')
+                    assert page.status_code == 200
+                    progress, more = await timed(client, data['progress'])
+                    waits += [seconds, more]
+                    body = progress.json()
+                    if body['state'] == 'done':
+                        break
+                    if body['repos_done'] is not None:
+                        done_counts.append(body['repos_done'])
+                    await asyncio.sleep(0.2)
+                report = await client.get(data['reload'])
+                return first.status_code, waits, done_counts, report.status_code, first_seconds
+
+    try:
+        status, waits, done_counts, report_status, first_seconds = asyncio.run(scenario())
+    finally:
+        cache.close()
+    assert status == 202
+    assert max(waits) < ANSWER_WITHIN
+    assert len(set(done_counts)) > 1
+    assert done_counts == sorted(done_counts)
+    assert report_status == 200

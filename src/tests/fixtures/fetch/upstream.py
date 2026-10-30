@@ -418,3 +418,25 @@ class Upstream:
             query = str(received.json['query'])
             found.append(next(kind for key, kind in kinds.items() if key in query))
         return found
+
+
+LARGE_ORG_REPOS = 300
+LARGE_ORG_START = datetime.datetime(2026, 1, 5, 9, 0, tzinfo=datetime.UTC)
+
+
+def large_org(count: int = LARGE_ORG_REPOS, owner: str = 'octo-org') -> Upstream:
+    """A fake GitHub whose organisation `owner` has `count` repositories of two commits each."""
+    repos = [
+        FakeRepo(
+            f'{owner}/r{n:04d}',
+            [
+                FakeCommit(
+                    hashlib.sha1(f'{owner}/{n}/{k}'.encode()).hexdigest(),
+                    LARGE_ORG_START + datetime.timedelta(days=n % 40 + k),
+                )
+                for k in range(2)
+            ],
+        )
+        for n in range(count)
+    ]
+    return Upstream(repos)
