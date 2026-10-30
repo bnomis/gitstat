@@ -17,6 +17,11 @@ query OwnerRepositories($login: String!, $cursor: String) {
           totalCount
           nodes { updatedAt }
         }
+        stargazerCount forkCount watchers { totalCount }
+        languages(first: 20, orderBy: {field: SIZE, direction: DESC}) {
+          totalSize
+          edges { size node { name } }
+        }
       }
     }
   }
@@ -36,6 +41,11 @@ query Repository($owner: String!, $name: String!) {
     releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
       nodes { updatedAt }
+    }
+    stargazerCount forkCount watchers { totalCount }
+    languages(first: 20, orderBy: {field: SIZE, direction: DESC}) {
+      totalSize
+      edges { size node { name } }
     }
   }
   rateLimit { cost remaining resetAt }
@@ -111,6 +121,18 @@ query Releases($owner: String!, $name: String!, $cursor: String) {
     releases(first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes { tagName createdAt publishedAt isDraft isPrerelease }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+STARGAZERS = """
+query Stargazers($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    stargazers(first: 100, after: $cursor, orderBy: {field: STARRED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      edges { starredAt node { id } }
     }
   }
   rateLimit { cost remaining resetAt }

@@ -248,6 +248,29 @@ def release_probe(repo: Repo) -> str:
     return f'{repo.releases_count} {newest}'
 
 
+def star_probe(repo: Repo) -> str:
+    """The text a repo's stars are compared by: its listed star count."""
+    return str(repo.stargazer_count)
+
+
+def fork_probe(repo: Repo) -> str:
+    """The text a repo's forks are compared by: its listed fork count, forks of forks included."""
+    return str(repo.fork_count)
+
+
+def parse_languages(languages: object) -> tuple[tuple[tuple[str, int], ...], int]:
+    """The listed languages in GitHub's order (largest first) and `totalSize`; `null` is none."""
+    if languages is None:
+        return (), 0
+    fields = mapping(languages, 'languages')
+    found: list[tuple[str, int]] = []
+    for edge in sequence(fields.get('edges'), 'languages.edges'):
+        edge_fields = mapping(edge, 'language edge')
+        name = text(mapping(edge_fields.get('node'), 'language').get('name'), 'language.name')
+        found.append((name, integer(edge_fields.get('size'), 'language.size')))
+    return tuple(found), integer(fields.get('totalSize'), 'languages.totalSize')
+
+
 def parse_repo(node: object) -> Repo:
     fields = mapping(node, 'repository')
     branch = fields.get('defaultBranchRef')
@@ -265,6 +288,7 @@ def parse_repo(node: object) -> Repo:
     releases_count = integer(
         mapping(fields.get('releases'), 'releases').get('totalCount'), 'releases.totalCount'
     )
+    languages, languages_size = parse_languages(fields.get('languages'))
     return Repo(
         name_with_owner=text(fields.get('nameWithOwner'), 'nameWithOwner'),
         default_branch=default_branch,
@@ -277,6 +301,13 @@ def parse_repo(node: object) -> Repo:
         issues_updated_at=issues_at,
         releases_count=releases_count,
         releases_updated_at=releases_at,
+        stargazer_count=integer(fields.get('stargazerCount'), 'stargazerCount'),
+        fork_count=integer(fields.get('forkCount'), 'forkCount'),
+        watcher_count=integer(
+            mapping(fields.get('watchers'), 'watchers').get('totalCount'), 'watchers.totalCount'
+        ),
+        languages=languages,
+        languages_size=languages_size,
     )
 
 
@@ -401,6 +432,27 @@ def parse_workflow_run(repo: str, node: object) -> WorkflowRun:
         updated_at=timestamp(fields.get('updated_at'), 'updated_at'),
         run_started_at=optional_timestamp(fields.get('run_started_at'), 'run_started_at'),
         run_attempt=1 if attempt is None else integer(attempt, 'run_attempt'),
+    )
+
+
+def parse_star_edge(repo: str, edge: object) -> StarEvent:
+    """An edge of `Repository.stargazers`; the user's node id is kept, never the login."""
+    fields = mapping(edge, 'stargazer edge')
+    user = mapping(fields.get('node'), 'stargazer')
+    return StarEvent(
+        repo=repo,
+        user_id=text(user.get('id'), 'stargazer.id'),
+        starred_at=timestamp(fields.get('starredAt'), 'starredAt'),
+    )
+
+
+def parse_fork(repo: str, node: object) -> Fork:
+    """A fork object of the REST list, trimmed to the fields the fetcher reads."""
+    fields = mapping(node, 'fork')
+    return Fork(
+        repo=repo,
+        id=integer(fields.get('id'), 'id'),
+        created_at=timestamp(fields.get('created_at'), 'created_at'),
     )
 
 
@@ -529,14 +581,16 @@ class Fetcher:
         query: str,
         variables: collections.abc.Mapping[str, object],
         connection_of: collections.abc.Callable[[dict[str, object]], dict[str, object]],
+        items: str = 'nodes',
     ) -> collections.abc.AsyncGenerator[tuple[list[object], datetime.datetime]]:
-        """The nodes of each page of a paged GraphQL connection, with the `Date` of the response
-        that carried it. `connection_of` finds the connection in a response's `data`."""
+        """The nodes (or the `items` of a connection that selects edges) of each page of a paged
+        GraphQL connection, with the `Date` of the response that carried it. `connection_of` finds
+        the connection in a response's `data`."""
         cursor: str | None = None
         while True:
             data, date = await self.client.graphql_dated(query, {**variables, 'cursor': cursor})
             connection = connection_of(data)
-            yield sequence(connection.get('nodes'), 'nodes'), date
+            yield sequence(connection.get(items), items), date
             page = mapping(connection.get('pageInfo'), 'pageInfo')
             if page.get('hasNextPage') is not True:
                 return
