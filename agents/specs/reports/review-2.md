@@ -1,0 +1,55 @@
+# Review: reports 1.4, the gaps step 7 needed settled
+
+**Date:** 2026-10-30
+**Spec:** `agents/specs/reports/spec.md` (1.3 to 1.4), with an amendment to `agents/specs/implementation-order.md` (1.5 to 1.6)
+**Task list written against it:** `agents/tasks/reports/tasks-2.md`
+
+## What is being reviewed and how
+
+Writing the task list for step 7 of the implementation order (static HTML report) found places where reports 1.3 was silent, or asked for something that cannot work as written: `render_html` took one result while the page must switch between four granularities, `build_figures` returned "one figure per metric group" while the spec's own visualisation choices name several charts per group, and the colours pointed at a skill that the shared agents repository does not hold. Version 1.4 settles them so the task list has no "decide with the user" tasks. One is a real decision, asked separately and written here with every option; the spec and the task list follow the recommended option, and another option changes the paragraphs and tasks named under it. The rest are choices made on the specs' own logic, each reversible, listed so you can approve or flag each. A flagged choice changes the spec paragraph and the task named under it before the list runs.
+
+## Automatic checks
+
+- Whitespace and end-of-file checks (the only pre-commit hooks that apply to Markdown): checked with `git diff --check` and a final-newline check. No code changed.
+- Every section of the reports spec that 1.4 adds or changes is mapped to a task or a later step in the task list's coverage table: checked by hand.
+- The library checks the implementation order asks for before `uv add`, run on 2026-10-30 against PyPI: `plotly` 7.1.0 (MIT, released 2026-09-15, [plotly/plotly.py](https://github.com/plotly/plotly.py); depends on `narwhals` and `packaging`); its wheel (9.7 MB) holds `plotly/package_data/plotly.min.js` (4.8 MB) and no `py.typed` or `.pyi` file, and there is no `types-plotly` package. `playwright` 1.64.1 (Apache 2.0, released 2026-10-22, [microsoft/playwright-python](https://github.com/microsoft/playwright-python)) is inside the project's 14-day `exclude-newer` window, so `uv add` resolves 1.64.0 (2026-10-13). Task 1 repeats the check on the day it runs.
+- This session's environment has Chromium at `/opt/pw-browsers/chromium` (revision 1243, for Playwright 1.63), not the revision Python Playwright 1.64 expects; the browser test falls back to that path (choice 15).
+
+## Decision
+
+1. **How the HTML report uses Plotly, which ships no type information.**
+   - *What is being decided.* How the charts are built, given that `mypy --strict` (the project's type check) rejects an import of a package with no `py.typed` and no stubs.
+   - *Background.* The reports spec has named Plotly for the HTML report since version 1.0, and the step 5 task list (2026-10-29) said to stop and ask, rather than add an `ignore_missing_imports` override, if a library had no types. Plotly 7.1.0 has none (see Automatic checks). The page needs plotly.js inlined either way; the question is where the figures are built.
+   - *What it affects.* `pyproject.toml` (a mypy override or a stub package), how much of `figures.py` mypy checks, and tasks 1, 3, 4 and 5.
+   - *Option A (recommended): own JSON figures, plotly.js only.* `figures.py` builds each figure as plain Plotly JSON (`data` and `layout` dicts, the shape documented in the [plotly.js reference](https://plotly.com/javascript/reference/)) in wambatic's own typed code. `html.py` imports `plotly` once, for `plotly.offline.get_plotlyjs()` and `get_plotlyjs_version()`, under a mypy override with `ignore_missing_imports` for `plotly` and `plotly.*` only. Tests pass every figure through `plotly.graph_objects.Figure(data=..., layout=...)`, which raises on an unknown property, so typos are still caught. Spec: Module location, Static HTML, External dependencies.
+   - *Option B: `plotly.graph_objects` throughout.* The same override, but figures are built with Plotly's Python classes; every call returns `Any`, so mypy checks nothing in the figure code, and the step 9 web app still has to serialise them. Changes tasks 3 and 4 to build `go.Figure` objects and `Figure` to hold one.
+   - *Option C: `plotly-stubs` as a development dependency.* A third-party stub package (0.1.4, 2026-08-24, one maintainer, MIT) instead of the override. Young and partial, so missing stubs would surface as type errors to work around. Changes task 1.
+   - *Option D: vendor plotly.min.js, no `plotly` dependency.* The 4.8 MB minified file is committed under `src/wambatic/reports/templates/` and updated by hand; no override, but tests lose Plotly's validators and the repository carries a large generated file. Changes tasks 1, 3, 4 and 5.
+   - Asked on 2026-10-30 as a decision card in the project thread; the answer is copied below.
+
+## Choices made (approve or flag)
+
+2. **The page is built from five results.** The switch must show year, month, week and day, and medians cannot be combined across buckets, so one result cannot drive the page. The CLI syncs once and runs `compute` five times with only the granularity changed (`TOTAL` for the tiles and whole-range charts, and the four period granularities); `HtmlReport` holds them and `html_document` refuses results that differ in anything else. `compute` reads the cache only, so the cost is five cache reads. (Spec API and Running `report` step 6; tasks 5 and 7)
+3. **`--by` picks the granularity shown on load, and `--by total` is a usage error with HTML.** The tiles are the totals; a `total` choice in the switch would only repeat them. (Spec Flags; task 7)
+4. **Where the file goes.** `--out` is a file, or an existing directory to write into; without it, `report.out_dir / report_filename(subject)` (`repo-OWNER-NAME.html`, `user-NAME.html`, `org-NAME.html`). Parents are created, an existing file is replaced, the write is a temporary file in the same directory moved into place with `os.replace`, and the path is printed to stdout so scripts can capture it. `--out` with another format is a usage error. (Spec Flags and Error handling; tasks 6 and 7)
+5. **`Figure` is wambatic's own dataclass, and there are three builders.** 1.3's "one figure per metric group" does not fit the spec's own chart list. `build_figures(result)` gives the per-period charts in page order, `build_range_figures(total)` the top-contributors and breakdown bars of the `TOTAL` result, and `build_calendar(day)` the heat-map of the `DAY` result, which does not change with the switch. The step 9 web app reuses all three. (Spec API and Static HTML; tasks 3 and 4)
+6. **Only total series are embedded per granularity.** Per-repo series for an org of hundreds of repos over years of days would make the file hundreds of MB; the breakdowns come from the `TOTAL` result instead. A page of a large org stays about the size of plotly.js plus a few MB at day granularity. (Spec Static HTML; tasks 3 and 5)
+7. **The switch swaps figures, it does not toggle traces.** 1.3 said "toggling traces". Calling `Plotly.react` with the chosen granularity's figure is simpler and gives each granularity its own axes; the tables are pre-rendered per granularity and toggled with `hidden`, so they work without script. (Spec Static HTML; tasks 5 and 6)
+8. **The charts.** One y-axis per chart, so Contributors (count) and Active days (days) are separate charts and flow durations are not on the pull-request count chart. Deleted lines are drawn below zero beside added lines above it, with net as a line, which reads better than stacking two positive bars. Durations are a p50 and a p90 line per duration with gaps for empty buckets. The calendar has a column per ISO week and a row per weekday. (Spec Static HTML; tasks 3 and 4)
+9. **Partial buckets.** Bars hatched with Plotly's `marker.pattern`, line points with open markers, and a caption saying so, matching the terminal's ` *` without relying on colour. (Spec Static HTML; task 3)
+10. **The palette is written into the spec.** 1.3 pointed at "the shared dataviz skill", which is not in the agents repository, so an unattended run could not read it. The colours are copied from the validated reference palette of the dataviz skill available to Claude sessions (read 2026-10-30): its first three categorical slots, which it validates for every pair in both themes, its blue sequential ramp for the heat-map, and its surfaces and inks. No chart has more than three series. (Spec Static HTML; task 3)
+11. **Themes are applied in the browser.** Figures carry a slot number per trace, not a colour; the page script fills colours from the active theme. `light` and `dark` are fixed; `auto` follows `prefers-color-scheme` and re-themes the charts when the system setting changes. (Spec Static HTML; tasks 3 and 6)
+12. **Data tables on the page, from code shared with the terminal.** The page shows the terminal's tables (activity, flow and flow times by period, by repository, by author, top contributors, unavailable) as its accessible data view. Their rows move from `terminal.py` to a new `rows.py` that both renderers use, so they cannot disagree; the terminal's known-good rendering must not change. (Spec Module location and Static HTML; tasks 2 and 5)
+13. **No templating library.** The page is one template plus a CSS and a script file under `reports/templates/`, filled with stdlib `string.Template` and read with `importlib.resources`; Jinja2 would add a dependency for a handful of substitutions. Every data string is HTML-escaped, and the embedded JSON has `<`, `>` and `&` escaped so a repository name cannot close the script element. (Spec Static HTML; task 5)
+14. **No `Renderer` protocol.** Review 1 (choice 19) deferred it to step 7. The HTML renderer takes five results and a path, so a `render(result)` protocol fits neither it nor the CLI, which dispatches on the format. It is dropped from the spec. (Spec API and Implementation)
+15. **The browser test uses Playwright for Python.** The implementation order asks for a headless-browser smoke test with the preinstalled Playwright, which in this environment is a Node package; the project is Python-only, so the test uses Playwright for Python (a development dependency, about 45 MB) in pytest under a new `browser` marker. It launches Playwright's own Chromium, else `/opt/pw-browsers/chromium`, else skips with the reason. The `check` CI job leaves `browser` tests out, and a new `browser` job installs Chromium and runs them, so the check binds in CI too. (Spec Static HTML; tasks 1 and 8)
+16. **The README gains an HTML section** and loses its "not built yet" note for HTML, per the shared user-guides rule. (Task 9)
+
+## Open for a later step
+
+- **Languages** (horizontal bars) wait for step 8's fetch resource, as review 1 of the stats spec records.
+- **The web app (step 9)** returns `html_document` for `/report`; it will need the same five-result build that this list puts in `cli.py`, and should hoist it to one owner then.
+
+## Answers
+
+(empty: your option for the decision and your verdict on each choice, with the date)
