@@ -6,7 +6,7 @@
 
 This list builds step 10 of the [implementation order](../../specs/implementation-order.md), "Popularity data and stats (stars, forks, watchers, languages)", the last step of that order: the `StarEvent` and `Fork` records and their cache tables (schema 4), the listing's star, fork and watcher counts and language sizes, the star and fork syncs with their probes, the `popularity` group in `compute` with its four series and two tables, the popularity sections of the terminal and the HTML page (the languages chart among them), and the README's popularity section. It is written against version 1.4 of the stats spec, 1.8 of the [fetch spec](../../specs/fetch-and-cache/spec.md) and 1.7 of the [reports spec](../../specs/reports/spec.md); the gaps and the choices made are in [review-4.md](../../specs/stats/review-4.md), whose review page is linked in its header.
 
-That review has one decision, where the four metrics live (review-4.md decision 1). This list follows its recommended option A, a new `popularity` group asked for with `--groups`. If the answer recorded in review-4.md's Answers section is another option, Tasks 7 to 11 change before they run: with option B the four stay `activity` metrics and no group is added; with option C the default groups become `activity,flow,popularity`. A task that finds no answer recorded there runs as written. A choice flagged there changes the task it names before the list runs.
+That review has one decision, where the four metrics live (review-4.md decision 1), answered on 2026-10-30 with option A, a new `popularity` group asked for with `--groups`, which this list follows. Every choice in it was approved on the same day, so no task changes for a flag.
 
 The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run syncs and the `delivery` group this list is modelled on: the star and fork syncs parallel the release probe and the pull request incremental read, and `popularity.py` parallels `delivery.py`. Task 12 has the deduplication subtask for that.
 
@@ -310,7 +310,6 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 - Depends on Tasks 4 and 6
 - Key files: `src/wambatic/stats/base.py`, `src/wambatic/stats/compute.py`, `src/tests/stats/test_compute.py`
-- If review-4.md's Answers records decision 1 as option B or C, this task changes first (see the header).
 
 ---
 
