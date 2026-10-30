@@ -270,6 +270,7 @@ def make_report(
     subject: wambatic.fetch.base.Subject,
     initial: wambatic.stats.base.Granularity = wambatic.stats.base.Granularity.MONTH,
     by_author: bool = False,
+    groups: frozenset[str] = frozenset({'activity', 'flow'}),
 ) -> wambatic.reports.html.HtmlReport:
     """The five results an HTML report is built from, over the stats fixture's range."""
 
@@ -279,6 +280,7 @@ def make_report(
             since=tests.fixtures.stats.SINCE,
             until=tests.fixtures.stats.UNTIL,
             by_author=by_author,
+            groups=groups,
         )
         return compute_stats(fetcher, subject, request)
 
@@ -293,6 +295,19 @@ def make_report(
 def org_report(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.reports.html.HtmlReport:
     """The stats fixture's org with an author breakdown, shown by month."""
     return make_report(stats_fetcher, tests.fixtures.stats.ORG, by_author=True)
+
+
+@pytest.fixture
+def delivery_report(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.reports.html.HtmlReport:
+    """The stats fixture's org with all three groups, shown by month; its releases are the
+    deployments."""
+    return make_report(
+        stats_fetcher,
+        tests.fixtures.stats.ORG,
+        groups=frozenset({'activity', 'delivery', 'flow'}),
+    )
 
 
 @pytest.fixture

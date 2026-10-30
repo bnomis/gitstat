@@ -1353,6 +1353,23 @@ def test_html_writes_the_default_file_and_prints_exactly_its_path(
     assert 'id="activity-commits"' in text
 
 
+def test_html_of_the_delivery_group_alone_has_the_delivery_section_and_no_other(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    out_dir = html_config(tmp_path, monkeypatch, stats_cache_path)
+    argv = ['report', 'org:octo-org', '--no-fetch', '--format', 'html', '--groups', 'delivery']
+    assert wambatic.cli.main([*argv, *ALPHA_FLAGS]) == 0
+    capsys.readouterr()
+    text = (out_dir / 'org-octo-org.html').read_text(encoding='utf-8')
+    assert 'id="delivery"' in text
+    assert 'id="delivery-runs"' in text
+    assert 'id="activity"' not in text
+    assert 'id="flow"' not in text
+
+
 def test_out_names_a_file_or_an_existing_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

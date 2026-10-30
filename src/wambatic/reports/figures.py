@@ -15,6 +15,9 @@ FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 PARTIAL_CAPTION = 'hatched or open: partial period'
 CATEGORICAL_SLOTS = 3
 HEIGHT = 320
+PERCENT = 'per cent'
+PERCENT_RANGE = [0, 100]
+PERCENT_FACTOR = 100
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -59,7 +62,7 @@ PALETTE: dict[typing.Literal['dark', 'light'], Theme] = {
 @dataclasses.dataclass(frozen=True, slots=True)
 class Figure:
     key: str
-    group: typing.Literal['activity', 'flow']
+    group: typing.Literal['activity', 'delivery', 'flow']
     title: str
     description: str
     data: list[dict[str, object]]
@@ -80,7 +83,7 @@ class Trace:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Chart:
     key: str
-    group: typing.Literal['activity', 'flow']
+    group: typing.Literal['activity', 'delivery', 'flow']
     title: str
     description: str
     unit: str
@@ -167,15 +170,100 @@ CHARTS = (
         'lines',
         (Trace('pr_size_p50', 'p50', 'line', 1),),
     ),
+    Chart(
+        'delivery-runs',
+        'delivery',
+        'Workflow runs per period',
+        'Bars of the Actions workflow runs created in each period.',
+        'runs',
+        (Trace('workflow_runs', 'Runs', 'bar', 1),),
+    ),
+    Chart(
+        'delivery-success-rate',
+        'delivery',
+        'Workflow success rate',
+        'A line of the per cent of completed runs that succeeded in each period, on a fixed axis '
+        'from 0 to 100, with a gap where no run completed.',
+        PERCENT,
+        (Trace('workflow_success_rate', 'Success rate', 'line', 1),),
+    ),
+    Chart(
+        'delivery-duration',
+        'delivery',
+        'Workflow duration',
+        'Lines of the median and 90th percentile minutes the completed runs took in each period.',
+        'minutes',
+        (
+            Trace('workflow_duration_p50', 'p50', 'line', 1),
+            Trace('workflow_duration_p90', 'p90', 'line', 2),
+        ),
+    ),
+    Chart(
+        'delivery-releases',
+        'delivery',
+        'Releases per period',
+        'Bars of the releases published in each period.',
+        'releases',
+        (Trace('release_count', 'Releases', 'bar', 1),),
+    ),
+    Chart(
+        'delivery-release-interval',
+        'delivery',
+        'Release interval',
+        'A line of the median whole days since the previous release of the repository, for the '
+        'releases published in each period.',
+        'days',
+        (Trace('release_interval_p50', 'p50', 'line', 1),),
+    ),
+    Chart(
+        'delivery-deployments',
+        'delivery',
+        'Deployments per period',
+        'Bars of the deployments in each period.',
+        'deployments',
+        (Trace('deployments', 'Deployments', 'bar', 1),),
+    ),
+    Chart(
+        'delivery-lead-time',
+        'delivery',
+        'Lead time',
+        'Lines of the median and 90th percentile hours from the first commit of a merged pull '
+        'request to the next deployment, for the deployments in each period.',
+        'hours',
+        (Trace('lead_time_p50', 'p50', 'line', 1), Trace('lead_time_p90', 'p90', 'line', 2)),
+    ),
+    Chart(
+        'delivery-change-failure-rate',
+        'delivery',
+        'Change failure rate',
+        'A line of the per cent of deployments followed by a hotfix pull request within the '
+        'failure window, on a fixed axis from 0 to 100.',
+        PERCENT,
+        (Trace('change_failure_rate', 'Change failure rate', 'line', 1),),
+    ),
+    Chart(
+        'delivery-time-to-restore',
+        'delivery',
+        'Time to restore',
+        'Lines of the median and 90th percentile hours from opening to merging a hotfix pull '
+        'request, for those merged in each period.',
+        'hours',
+        (
+            Trace('time_to_restore_p50', 'p50', 'line', 1),
+            Trace('time_to_restore_p90', 'p90', 'line', 2),
+        ),
+    ),
 )
 
 
 def number(value: float | None, unit: str, negate: bool) -> float | None:
-    """A series point as a JSON value: a whole number for a count, days or lines, and its
-    negation for a bar drawn below zero."""
+    """A series point as a JSON value: a whole number for a count, days or lines, a ratio as a
+    per cent, and its negation for a bar drawn below zero."""
     if value is None:
         return None
     value = -value if negate else value
+    if unit == 'ratio':
+        return value * PERCENT_FACTOR
     return int(value) if unit in wambatic.reports.base.INTEGER_UNITS else value
 
 
@@ -242,12 +330,15 @@ def caption_annotation(text: str) -> dict[str, object]:
 def chart_layout(
     unit: str, legend: bool, barmode: str, annotations: list[dict[str, object]]
 ) -> dict[str, object]:
+    yaxis: dict[str, object] = {'title': {'text': unit}, 'automargin': True, 'zeroline': True}
+    if unit == PERCENT:
+        yaxis['range'] = PERCENT_RANGE
     return {
         'height': HEIGHT,
         'margin': {'l': 64, 'r': 56 if legend else 24, 't': 48 if legend else 16, 'b': 72},
         'font': {'family': FONT},
         'xaxis': {'type': 'category', 'automargin': True},
-        'yaxis': {'title': {'text': unit}, 'automargin': True, 'zeroline': True},
+        'yaxis': yaxis,
         'barmode': barmode,
         'hovermode': 'x unified',
         'showlegend': legend,
@@ -263,6 +354,7 @@ def build_figures(result: wambatic.stats.base.StatsResult) -> list[Figure]:
         return []
     present = {
         'activity': wambatic.reports.rows.has_activity(result),
+        'delivery': wambatic.reports.rows.has_delivery(result),
         'flow': wambatic.reports.rows.has_flow(result),
     }
     series = wambatic.reports.rows.total_series(result)
@@ -271,7 +363,7 @@ def build_figures(result: wambatic.stats.base.StatsResult) -> list[Figure]:
     units = {s.metric: s.unit for s in result.series if s.by is None}
     figures: list[Figure] = []
     for chart in CHARTS:
-        if not present[chart.group]:
+        if not present[chart.group] or any(t.metric not in series for t in chart.traces):
             continue
         points = {t.metric: dict(series[t.metric]) for t in chart.traces}
         buckets = wambatic.reports.rows.bucket_list(result)
