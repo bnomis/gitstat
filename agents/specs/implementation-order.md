@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.8
+**Version:** 1.9
 **Status:** proposed
 **Date:** 2026-10-30
 
@@ -27,9 +27,9 @@ The order in which wambatic is built, with what each step delivers, what it depe
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | done: [tasks-2](../tasks/reports/tasks-2.md) |
 | 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats, reports | 6, 7 | done: [tasks-3](../tasks/stats/tasks-3.md) |
 | 9 | Local web app | [reports](reports/spec.md), fetch-and-cache | 7 | done: [tasks-3](../tasks/reports/tasks-3.md) |
-| 10 | Popularity data and stats (stars, forks, watchers, languages) | fetch-and-cache, stats, reports | 7 | not specified |
+| 10 | Popularity data and stats (stars, forks, watchers, languages) | fetch-and-cache, stats, reports | 7 | planned: [tasks-4](../tasks/stats/tasks-4.md) |
 
-Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done. Step 10 was split from step 8 on 2026-10-30 (stats review 3): its fetch resources are not specified yet, and the two together were more than one task list. Steps 9 and 10 are independent of each other.
+Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done. Step 10 was split from step 8 on 2026-10-30 (stats review 3), because its fetch resources were not specified and the two together were more than one task list; it was specified on 2026-10-30 (stats review 4). Steps 9 and 10 are independent of each other.
 
 ## Step detail
 
@@ -76,8 +76,8 @@ Done when: unconfigured proxies are listed as `unavailable` with a reason, in-pr
 
 ### 10. Popularity data and stats
 
-Deliver: fetch resources for stars (`star_events`), forks, watchers and languages, specified first (GitHub records when a star or a fork was made but not when someone started watching, so watchers can be a current count only; the counts and languages can come with the repo listing, the star and fork histories cost a request per 100 per repo), the `activity` metrics step 4 left unavailable, or a group of their own if the spec moves them there, and the languages chart (reports spec, Visualisation choices).
-Done when: specified with its task list.
+Deliver: the `StarEvent` and `Fork` records and tables, the listing's star, fork and watcher counts and language sizes, the star and fork probes (cache schema 4), `star_events()` (GraphQL stargazers, newest first, stopping at the watermark) and `forks()` (the REST fork list), both read in full when their count falls, `star_events` and `forks` in `BUILT_RESOURCES`, the `popularity` group (stars and forks added and cumulative per period, the `popularity` and `languages` tables) in `compute`, with the four metrics leaving `activity`'s unavailable list, the terminal's Popularity by period, Popularity now and Languages tables, the HTML page's popularity tiles, charts, languages chart and tables, the star and fork counts in `cache info`, and the README's popularity section. Fetch spec 1.8, stats spec 1.4 and reports spec 1.7; the choices are in the [stats review 4](stats/review-4.md).
+Done when: an unchanged repo's stars and forks cost no request, a removed star leaves the cache on the next sync, the default report lists nothing as unavailable, and `--groups popularity` renders in the terminal, JSON and HTML formats.
 
 ### 9. Local web app
 
