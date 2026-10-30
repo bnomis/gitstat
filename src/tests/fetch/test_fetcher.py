@@ -5,6 +5,7 @@ import email.utils
 import pathlib
 import sqlite3
 import threading
+import typing
 
 import aiohttp
 import loguru
@@ -2143,6 +2144,51 @@ def test_full_refresh_reads_every_page_of_stars_of_an_unchanged_repo(
         make_fetcher, upstream, resources=STARS, cache=first.cache, full_refresh=True
     )
     assert second.kinds == ['listing', 'stargazers']
+
+
+@pytest.mark.parametrize('hidden', ['empty', 'forbidden'])
+def test_stargazers_the_token_cannot_see_are_recorded_as_hidden_not_as_no_stars(
+    make_fetcher: tests.conftest.MakeFetcher, hidden: typing.Literal['empty', 'forbidden']
+) -> None:
+    upstream = popularity_upstream()
+    upstream.repos[HELLO].hidden_stars = hidden
+    run = sync_once(make_fetcher, upstream, resources=STARS)
+    assert run.kinds == ['listing', 'stargazers']
+    assert run.report.rows_written == {'star_events': 0}
+    assert star_ids(run.cache) == []
+    state = run.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == wambatic.fetch.base.STARS_HIDDEN
+    assert state.watermark is None
+    assert asyncio.run(run.fetcher.stars_hidden(listed(upstream)))
+
+
+def test_hidden_stargazers_are_read_again_at_every_sync_and_stored_once_visible(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    upstream.repos[HELLO].hidden_stars = 'empty'
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    again = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert again.kinds == ['listing', 'stargazers']
+    upstream.repos[HELLO].hidden_stars = None
+    visible = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert star_ids(visible.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
+    state = visible.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '5'
+    assert not asyncio.run(visible.fetcher.stars_hidden(listed(upstream)))
+
+
+def test_a_repository_with_no_stars_is_not_hidden(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(stars=0)
+    run = sync_once(make_fetcher, upstream, resources=STARS)
+    state = run.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '0'
+    assert not asyncio.run(run.fetcher.stars_hidden(listed(upstream)))
 
 
 def test_an_interrupted_star_read_leaves_the_old_rows_and_state(

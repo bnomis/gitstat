@@ -516,6 +516,11 @@ class Cache:
             ),
         )
 
+    def write_state(self, state: wambatic.fetch.base.SyncState) -> None:
+        """Write a `sync_state` row alone, in its own transaction."""
+        with self.lock, self.connection:
+            self.put_state(state)
+
     def write_rows[T: Record](
         self,
         table: str,

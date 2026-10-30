@@ -411,6 +411,16 @@ GRAPHQL_REPOSITORY_NOT_FOUND = {
         }
     ],
 }
+GRAPHQL_FORBIDDEN = {
+    'data': {'repository': None, 'rateLimit': RATE_LIMIT},
+    'errors': [
+        {
+            'type': 'FORBIDDEN',
+            'path': ['repository', 'stargazers'],
+            'message': 'Resource not accessible by personal access token',
+        }
+    ],
+}
 GRAPHQL_INTERNAL = {'errors': [{'type': 'INTERNAL', 'message': 'Something went wrong'}]}
 GRAPHQL_NO_RATE_LIMIT = {'data': {'repositoryOwner': {'login': 'octocat'}}}
 GRAPHQL_RATE_LIMITED = {

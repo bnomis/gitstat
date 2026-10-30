@@ -716,6 +716,25 @@ def test_a_popularity_request_with_no_star_or_fork_gives_zeros_and_the_tables(
     assert [row['repo'] for row in result.tables['popularity']] == [fixture.ALPHA]
 
 
+def test_a_repository_with_hidden_stargazers_is_left_out_of_the_star_series_and_listed(
+    stats_cache: wambatic.fetch.cache.Cache, stats_fetcher: wambatic.fetch.base.Fetcher
+) -> None:
+    alpha = fixture.REPOS[0]
+    state = stats_cache.sync_state(fixture.ALPHA, 'star_events')
+    assert state is not None
+    stats_cache.write_state(
+        dataclasses.replace(state, watermark=None, probe=wambatic.fetch.base.STARS_HIDDEN)
+    )
+    result = compute(stats_fetcher, groups=POPULARITY, since=None)
+    kept = [s for s in fixture.STAR_EVENTS if s.repo == fixture.BETA and s.starred_at < clock()]
+    assert sum(pick(result, 'stars_added').values()) == len(kept)
+    (gap,) = result.tables['unavailable']
+    assert gap['metric'] == f'stars_added, stars_total: {fixture.ALPHA}'
+    assert str(alpha.stargazer_count) in gap['reason']
+    shown = {row['repo']: row['stars'] for row in result.tables['popularity']}
+    assert shown[fixture.ALPHA] == alpha.stargazer_count
+
+
 def test_a_request_with_activity_has_no_unavailable_row_for_the_popularity_metrics(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
