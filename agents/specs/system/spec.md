@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** proposed
 **Date:** 2026-10-30
 
@@ -51,7 +51,7 @@ Three layers with one-way dependencies: `reports` imports `stats`, `stats` impor
 GitHub GraphQL / REST
         |  aiohttp
    [ fetch ]  -- reads/writes -->  SQLite cache (local file)
-        |  typed records (Commit, PullRequest, Issue, Release, WorkflowRun, StarEvent)
+        |  typed records (Commit, PullRequest, Issue, Release, WorkflowRun, StarEvent, Fork)
    [ stats ]  -- pure computation, no I/O
         |  StatsResult (series, tables, provenance)
    [ reports ]  -->  terminal | static HTML file | local web app | JSON
@@ -68,7 +68,7 @@ Rules that hold across the system:
 ## Data flow
 
 1. The CLI or web handler parses `<target>` into a `Subject` and the flags into a `StatsRequest`.
-2. Unless `--no-fetch` applies, the front end calls `Fetcher.sync` for the resources the requested groups need (`stats.resources_for`: commits for activity, pull requests and issues for flow, releases, workflow runs and pull requests for delivery; star events, with the other popularity data, from step 10).
+2. Unless `--no-fetch` applies, the front end calls `Fetcher.sync` for the resources the requested groups need (`stats.resources_for`: commits for activity, pull requests and issues for flow, releases, workflow runs and pull requests for delivery, star events and forks for popularity; the popularity group's counts and languages come with the repository listing every sync reads).
 3. `Fetcher` backfills everything on a subject's first sync and afterwards fetches only the delta since each per-repo, per-resource watermark, and writes it back atomically. `compute` then asks `Fetcher` for the subject's repositories and their typed records, which come from the cache alone; `compute` never syncs.
 4. `compute` normalises timestamps to the request timezone, assigns each record to a bucket, aggregates per group, and returns the `StatsResult`.
 5. A renderer presents the result. The web app repeats steps 1 to 5 per request; the cache makes repeats cheap.
