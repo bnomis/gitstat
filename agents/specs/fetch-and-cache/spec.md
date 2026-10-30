@@ -1,6 +1,6 @@
 # Fetch and cache
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** proposed
 **Date:** 2026-10-30
 
@@ -18,7 +18,7 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 | `client.py` | `GitHubClient`, `RestResponse`: the aiohttp transport | 2 |
 | `queries.py` | GraphQL query texts | 2 (first query), 3 onwards |
 | `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags; `CacheInfo`, `inspect_cache`, `clear_cache` | 3 (`CacheInfo`, `inspect_cache`, `clear_cache` in 5; the `pull_requests` and `issues` tables in 6; the `releases` and `workflow_runs` tables in 8) |
-| `base.py` | `Subject`, `RESOURCES`, `BUILT_RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, `PullRequest` and `Issue` in 6, `Release` and `WorkflowRun` in 8, `StarEvent` with its resource in 10), `SyncReport`, `Fetcher` | 3 (`BUILT_RESOURCES`, `Fetcher.owner_kind` in 5; `pull_requests`, `issues` in 6; `releases`, `workflow_runs` in 8) |
+| `base.py` | `Subject`, `RESOURCES`, `BUILT_RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, `PullRequest` and `Issue` in 6, `Release` and `WorkflowRun` in 8, `StarEvent` with its resource in 10), `SyncReport`, `SyncProgress`, `Fetcher` | 3 (`SyncProgress` in 9; `BUILT_RESOURCES`, `Fetcher.owner_kind` in 5; `pull_requests`, `issues` in 6; `releases`, `workflow_runs` in 8) |
 
 `Fetcher` owns one `GitHubClient` and one `Cache`; its `__aenter__` enters the client and its `__aexit__` exits it. `Fetcher` is therefore built in step 3, when `Cache` exists; step 2 builds the client it wraps.
 
@@ -29,6 +29,8 @@ Version 1.4 adds what step 5's CLI needs: `BUILT_RESOURCES`, `Fetcher.owner_kind
 Version 1.5 adds what step 6 (flow data) needs: the `PullRequest` and `Issue` records and their tables, `Fetcher.pull_requests` and `Fetcher.issues`, the repo listing's newest pull request and issue update times that let a sync skip unchanged repos, the `Date` header as the server-side watermark (`GitHubClient.graphql_dated`), and `SCHEMA_VERSION` 2. The choices are in the [stats review 2](../stats/review-2.md).
 
 Version 1.6 adds what step 8 (delivery data) needs: the `Release` and `WorkflowRun` records and their tables, `Fetcher.releases` and `Fetcher.workflow_runs`, the pull request fields `labels` and `first_commit_at` that the hotfix and lead-time proxies read, the repo listing's release probe and the `sync_state.probe` column it is compared with, `RestResponse.date`, and `SCHEMA_VERSION` 3. `star_events` moves to step 10 with the other popularity data (stars, forks, watchers, languages), which is specified then. The choices are in the [stats review 3](../stats/review-3.md).
+
+Version 1.7 adds what step 9 (local web app) needs: `SyncProgress` and `Fetcher.sync`'s `progress` argument, so the web app can report a sync while it runs. Nothing else changes, and the cache schema stays 3. The choices are in the [reports review 3](../reports/review-3.md) (choice 4).
 
 ## API
 
@@ -79,6 +81,14 @@ class SyncReport:
     repos_skipped: int               # unchanged for every requested resource, so no per-repo requests
     rows_written: dict[str, int]     # each requested resource -> rows inserted or replaced
     full_refetches: tuple[str, ...]  # 'owner/name' whose commits were re-read from scratch (commits only)
+
+@dataclasses.dataclass(slots=True)
+class SyncProgress:
+    """Filled in by `Fetcher.sync` as it runs, on the event loop that runs it (step 9)."""
+    repos_listed: int | None = None    # set once the listing is read and filtered
+    repos_pending: int | None = None   # repos with a resource to sync, set with repos_listed
+    repos_done: int = 0                # pending repos whose every needed resource is synced
+    rows_written: dict[str, int] = dataclasses.field(default_factory=dict)  # so far, per resource
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class PullRequest:
@@ -136,11 +146,15 @@ class Fetcher:
     async def __aexit__(self, *exc_info: object) -> None:
         """Closes the aiohttp session."""
 
-    async def sync(self, subject: Subject, resources: frozenset[str], full_refresh: bool = False) -> SyncReport:
+    async def sync(self, subject: Subject, resources: frozenset[str], full_refresh: bool = False,
+                   *, progress: SyncProgress | None = None) -> SyncReport:
         """Bring the cache up to date for the subject: backfill on first use, otherwise only the delta.
 
         `resources` is a subset of RESOURCES; a name outside it raises ValueError, and a resource
-        whose implementation step has not been built yet raises NotImplementedError."""
+        whose implementation step has not been built yet raises NotImplementedError.
+        `progress`, when given, is updated as the sync runs: `repos_listed` and `repos_pending`
+        once the unchanged repos are known, `rows_written` after each resource of a repo, and
+        `repos_done` after each pending repo; at the end its counts equal the `SyncReport`'s."""
 
     async def repos(self, subject: Subject) -> list[Repo]:
         """From the cache: repositories owned by a user or org, excluding missing ones and
