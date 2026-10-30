@@ -358,7 +358,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 8: Headless-browser smoke test and the `browser` CI job
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Static HTML (Testing: the browser test and CI job); implementation order step 7 "Done when" (opens offline, all four granularities, headless-browser smoke test); review-2.md choice 15
@@ -395,6 +395,10 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/tests/reports/test_html_browser.py`, `.github/workflows/ci.yml`
 - Playwright for Python: [network routing](https://playwright.dev/python/docs/network#abort-requests), [`emulate_media`](https://playwright.dev/python/docs/api/class-page#page-emulate-media), [console events](https://playwright.dev/python/docs/api/class-page#page-event-console), [installing browsers in CI](https://playwright.dev/python/docs/ci)
 - If the preinstalled Chromium is too old for the locked Playwright, stop and record the error rather than pinning an older Playwright.
+- Ran here on 2026-10-30: Playwright 1.64.0 looks for its own headless shell (revision 1248), which is not installed, so the fixture fell back to `/opt/pw-browsers/chromium` (Chromium 153.0.8010.12, revision 1243) and all five tests passed, with the page's requests all aborted and recorded (none recorded) and no console or page error.
+- Defect checks, both done by hand and restored: with the plotly.js `<script>` left empty the first test fails (the charts never draw); with an `<img src="https://example.com/x.png">` added to the template the same test fails on the recorded request, which shows the routing sees requests from a `file://` page.
+- The `chromium` fixture is per test, not per session as the list said: Playwright's sync API runs an event loop while it is open, and the report fixtures compute with `asyncio.run`, which fails inside a running loop. Each test's fixtures build the report first and launch the browser after (about 4 seconds a test).
+- The `check` job leaves `browser` tests out, and the new `browser` job installs Chromium with `playwright install --with-deps chromium` and runs only them; the job is untested until CI runs it.
 
 ---
 
