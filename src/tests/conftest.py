@@ -163,10 +163,39 @@ def store_delivery(
     cache.write_workflow_runs(name, runs, state('workflow_runs', None), replace=True)
 
 
+def store_popularity(
+    cache: wambatic.fetch.cache.Cache, repo: wambatic.fetch.base.Repo, synced_at: datetime.datetime
+) -> None:
+    """Write the repo's fixture stars and forks with a sync state for each."""
+
+    def state(resource: str, probe: str) -> wambatic.fetch.base.SyncState:
+        return wambatic.fetch.base.SyncState(
+            repo=repo.name_with_owner,
+            resource=resource,
+            watermark=synced_at,
+            head_oid=None,
+            pushed_at=repo.pushed_at,
+            updated_at=repo.updated_at,
+            synced_at=synced_at,
+            full_synced_at=synced_at,
+            probe=probe,
+        )
+
+    name = repo.name_with_owner
+    stars = [s for s in tests.fixtures.stats.STAR_EVENTS if s.repo == name]
+    forks = [f for f in tests.fixtures.stats.FORKS if f.repo == name]
+    cache.write_star_events(
+        name, stars, state('star_events', wambatic.fetch.base.star_probe(repo)), replace=True
+    )
+    cache.write_forks(
+        name, forks, state('forks', wambatic.fetch.base.fork_probe(repo)), replace=True
+    )
+
+
 @pytest.fixture
 def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.Cache]:
-    """A cache holding the stats fixture's repositories, commits, pull requests, issues, releases
-    and workflow runs."""
+    """A cache holding the stats fixture's repositories, commits, pull requests, issues, releases,
+    workflow runs, stars and forks."""
     fixture = tests.fixtures.stats
     cache = wambatic.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
     alpha, beta, gamma = fixture.REPOS
@@ -181,6 +210,9 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.
     store_delivery(cache, alpha, fixture.ALPHA_SYNCED_AT)
     store_delivery(cache, beta, fixture.BETA_SYNCED_AT)
     store_delivery(cache, gamma, fixture.GAMMA_SYNCED_AT)
+    store_popularity(cache, alpha, fixture.ALPHA_SYNCED_AT)
+    store_popularity(cache, beta, fixture.BETA_SYNCED_AT)
+    store_popularity(cache, gamma, fixture.GAMMA_SYNCED_AT)
     yield cache
     cache.close()
 

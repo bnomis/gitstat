@@ -304,3 +304,66 @@ def test_a_gamma_release_and_runs_are_the_users_whole_delivery() -> None:
     assert [r.tag_name for r in fixture.RELEASES if r.repo == fixture.GAMMA] == ['g1.0']
     assert [run.id for run in fixture.WORKFLOW_RUNS if run.repo == fixture.GAMMA] == [301, 302]
     assert not any(p.labels for p in fixture.PULL_REQUESTS if p.repo == fixture.GAMMA)
+
+
+def test_every_star_and_fork_belongs_to_a_fixture_repo_and_no_user_starred_twice() -> None:
+    names = {repo.name_with_owner for repo in fixture.REPOS}
+    assert {star.repo for star in fixture.STAR_EVENTS} <= names
+    assert {fork.repo for fork in fixture.FORKS} <= names
+    pairs = [(star.repo, star.user_id) for star in fixture.STAR_EVENTS]
+    assert len(pairs) == len(set(pairs))
+    ids = [(fork.repo, fork.id) for fork in fixture.FORKS]
+    assert len(ids) == len(set(ids))
+
+
+def test_each_repos_listed_languages_sum_to_no_more_than_its_size() -> None:
+    for repo in fixture.REPOS:
+        assert sum(size for _, size in repo.languages) <= repo.languages_size
+
+
+def test_the_popularity_fixture_covers_the_cases_it_is_for() -> None:
+    by_name = {repo.name_with_owner: repo for repo in fixture.REPOS}
+    cached_stars = {
+        name: sum(star.repo == name for star in fixture.STAR_EVENTS) for name in by_name
+    }
+    assert any(cached_stars[name] != by_name[name].stargazer_count for name in by_name)
+    assert any(
+        repo.languages_size > sum(size for _, size in repo.languages) for repo in by_name.values()
+    )
+    assert any(not repo.languages for repo in by_name.values())
+    language_repos = [{name for name, _ in repo.languages} for repo in by_name.values()]
+    assert any(len(a & b) for i, a in enumerate(language_repos) for b in language_repos[:i])
+    assert any(
+        star.starred_at < datetime.datetime(2026, 10, 1, tzinfo=datetime.UTC)
+        for star in fixture.STAR_EVENTS
+    )
+    assert any(
+        fork.created_at < datetime.datetime(2026, 10, 1, tzinfo=datetime.UTC)
+        for fork in fixture.FORKS
+    )
+
+
+def test_the_popularity_months_have_the_expected_runs_of_totals() -> None:
+    for months in (
+        fixture.ORG_POPULARITY_BY_MONTH_UTC,
+        fixture.ORG_POPULARITY_BY_MONTH_BERLIN,
+        fixture.USER_POPULARITY_BY_MONTH_UTC,
+    ):
+        assert tuple(months) == fixture.LABELS
+        for kind in ('stars', 'forks'):
+            totals = [values[f'{kind}_total'] for values in months.values()]
+            added = [values[f'{kind}_added'] for values in months.values()]
+            assert totals == sorted(totals)
+            assert [b - a for a, b in zip(totals, totals[1:], strict=False)] == added[1:]
+    assert any(v['stars_added'] == 0 for v in fixture.ORG_POPULARITY_BY_MONTH_UTC.values())
+    assert any(v['forks_added'] == 0 for v in fixture.ORG_POPULARITY_BY_MONTH_UTC.values())
+    total = fixture.ORG_POPULARITY_TOTAL
+    last = fixture.ORG_POPULARITY_BY_MONTH_UTC['2027-01']
+    assert total['stars_total'] == last['stars_total']
+    assert total['forks_total'] == last['forks_total']
+
+
+def test_the_languages_shares_sum_to_one_with_other_last() -> None:
+    rows = fixture.ORG_LANGUAGES_TABLE
+    assert abs(sum(row['share'] for row in rows) - 1) < 1e-12
+    assert rows[-1]['language'] == 'Other'
