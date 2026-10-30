@@ -90,6 +90,16 @@ def total_series(
     }
 
 
+def has_activity(result: wambatic.stats.base.StatsResult) -> bool:
+    """Whether the result holds the activity group's total series."""
+    return any(s.metric == 'commits' and s.by is None for s in result.series)
+
+
+def has_flow(result: wambatic.stats.base.StatsResult) -> bool:
+    """Whether the result holds the flow group's total series."""
+    return any(s.metric == 'prs_opened' and s.by is None for s in result.series)
+
+
 def bucket_list(result: wambatic.stats.base.StatsResult) -> list[wambatic.stats.base.Bucket]:
     """The result's buckets, from whichever total series is present."""
     series = total_series(result)
@@ -125,9 +135,9 @@ def period_row(
 
 def activity_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
     """Activity by period; None without activity series."""
-    series = total_series(result)
-    if 'commits' not in series:
+    if not has_activity(result):
         return None
+    series = total_series(result)
     partial = partial_labels(result)
     rows = tuple(
         period_row(bucket.label, partial, (series[metric][index][1] for metric in TOTAL_METRICS))
@@ -143,9 +153,9 @@ def activity_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | Non
 
 def flow_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
     """Flow by period; None without flow series."""
-    series = total_series(result)
-    if 'prs_opened' not in series:
+    if not has_flow(result):
         return None
+    series = total_series(result)
     partial = partial_labels(result)
     rows = tuple(
         period_row(bucket.label, partial, (series[metric][index][1] for metric in FLOW_COUNTS))
@@ -160,9 +170,9 @@ def flow_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
 def flow_times_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
     """Flow times by period, a bucket with no value `None`; there is no total, because medians
     do not add up over buckets. None without flow series."""
-    series = total_series(result)
-    if 'prs_opened' not in series:
+    if not has_flow(result):
         return None
+    series = total_series(result)
     partial = partial_labels(result)
     points = {metric: dict(series[metric]) for metric in FLOW_TIMES_METRICS}
     rows = tuple(

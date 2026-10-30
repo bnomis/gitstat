@@ -442,7 +442,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 10: Exports, layering and closing checks
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location (layering; only `html.py` imports `plotly`); API; implementation order step 7 "Done when"; review-2.md decision 1 and choice 14
@@ -479,4 +479,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Tasks 1 to 9
 - The project has no affected-tests tool; the commands above name every test file that reaches a module this list changed (`wambatic.reports` is reached by the reports and CLI tests, `wambatic.cli` by the CLI tests, and the package and layering tests check the whole tree). No fetch or stats module changes, so their tests are not needed.
 - The reports spec's `**Status:**` stays `proposed` (see the header).
+- Duplication: the tests for "has activity series" and "has flow series" were repeated in `rows.py`, `figures.py` and `html.py`; they are now `rows.has_activity` and `rows.has_flow`. Metric names and order, partial labels, the unattributed login, `TOP_CONTRIBUTORS_SHOWN`, number and hour formatting (`terminal.format_number`, `format_cell`), the subject text and the provenance lines each have one owner (`rows.py` or `terminal.py`); `OutputError` is exported with the step 7 names.
+- Step 7 "Done when", where each is shown: the file opens offline with no request (`test_the_file_opens_offline_without_errors_and_every_chart_is_drawn` aborts and records every request, and none is recorded), all four granularities (`test_each_granularity_shows_its_own_buckets_and_tables`), and the headless-browser smoke test (`src/tests/reports/test_html_browser.py`, run here on the preinstalled Chromium; CI's `browser` job runs it on Playwright's own, untested until CI runs).
+- Run on 2026-10-30: `pytest src/tests/reports src/tests/test_cli.py src/tests/test_package.py src/tests/test_layering.py -m 'not browser'` and `pytest -m browser -rs src/tests/reports/test_html_browser.py`, both passing (browser tests not skipped).
 - Key files: `src/wambatic/reports/__init__.py`, `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`

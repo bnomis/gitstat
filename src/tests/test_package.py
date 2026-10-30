@@ -62,7 +62,23 @@ def test_reports_names_resolve(name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    'name', ['UsageError', 'render_json', 'render_terminal', 'result_to_dict', 'sparkline']
+    'name',
+    [
+        'Figure',
+        'HtmlReport',
+        'OutputError',
+        'UsageError',
+        'build_calendar',
+        'build_figures',
+        'build_range_figures',
+        'html_document',
+        'render_html',
+        'render_json',
+        'render_terminal',
+        'report_filename',
+        'result_to_dict',
+        'sparkline',
+    ],
 )
 def test_reports_names_are_exported(name: str) -> None:
     assert name in wambatic.reports.__all__

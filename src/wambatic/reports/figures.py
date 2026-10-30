@@ -168,7 +168,6 @@ CHARTS = (
         (Trace('pr_size_p50', 'p50', 'line', 1),),
     ),
 )
-GROUP_METRIC = {'activity': 'commits', 'flow': 'prs_opened'}
 
 
 def number(value: float | None, unit: str, negate: bool) -> float | None:
@@ -262,13 +261,17 @@ def build_figures(result: wambatic.stats.base.StatsResult) -> list[Figure]:
     the result holds; `[]` for a TOTAL result, whose one bucket has no trend to chart."""
     if result.request.granularity is wambatic.stats.base.Granularity.TOTAL:
         return []
+    present = {
+        'activity': wambatic.reports.rows.has_activity(result),
+        'flow': wambatic.reports.rows.has_flow(result),
+    }
     series = wambatic.reports.rows.total_series(result)
     labels = [bucket.label for bucket in wambatic.reports.rows.bucket_list(result)]
     flags = partial_flags(labels, wambatic.reports.rows.partial_labels(result))
     units = {s.metric: s.unit for s in result.series if s.by is None}
     figures: list[Figure] = []
     for chart in CHARTS:
-        if GROUP_METRIC[chart.group] not in series:
+        if not present[chart.group]:
             continue
         points = {t.metric: dict(series[t.metric]) for t in chart.traces}
         buckets = wambatic.reports.rows.bucket_list(result)
@@ -345,7 +348,7 @@ def build_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
         raise ValueError(
             f'build_range_figures needs a TOTAL result, not {total.request.granularity}'
         )
-    if 'commits' not in wambatic.reports.rows.total_series(total):
+    if not wambatic.reports.rows.has_activity(total):
         return []
     figures: list[Figure] = []
     top = wambatic.reports.rows.top_contributors(
@@ -386,9 +389,9 @@ def build_calendar(day: wambatic.stats.base.StatsResult) -> Figure | None:
     granularity."""
     if day.request.granularity is not wambatic.stats.base.Granularity.DAY:
         raise ValueError(f'build_calendar needs a DAY result, not {day.request.granularity}')
-    series = wambatic.reports.rows.total_series(day)
-    if 'commits' not in series:
+    if not wambatic.reports.rows.has_activity(day):
         return None
+    series = wambatic.reports.rows.total_series(day)
     commits = {bucket.start: value for bucket, value in series['commits']}
     first = day.since - datetime.timedelta(days=day.since.weekday())
     weeks = (day.until - first).days // 7 + 1

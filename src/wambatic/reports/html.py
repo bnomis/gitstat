@@ -305,7 +305,7 @@ def tiles_html(total: wambatic.stats.base.StatsResult) -> str:
         return points[0][1] if points else None
 
     pieces = []
-    if 'commits' in series:
+    if wambatic.reports.rows.has_activity(total):
         pieces += [
             tile('Commits', format_number(value('commits') or 0)),
             tile('Contributors', format_number(wambatic.reports.rows.contributor_count(total))),
@@ -313,7 +313,7 @@ def tiles_html(total: wambatic.stats.base.StatsResult) -> str:
             tile('Lines deleted', format_number(value('lines_deleted') or 0)),
             tile('Net lines', format_number(value('lines_net') or 0, signed=True)),
         ]
-    if 'prs_opened' in series:
+    if wambatic.reports.rows.has_flow(total):
         pieces += [
             tile('PRs opened', format_number(value('prs_opened') or 0)),
             tile('PRs merged', format_number(value('prs_merged') or 0)),
