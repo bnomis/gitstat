@@ -10,6 +10,59 @@ section. The versions in the provenance footer are `{wambatic_version}` and
 lines without them.
 """
 
+import datetime
+
+import pytest
+
+import tests.conftest
+import tests.fixtures.fetch.server
+import tests.fixtures.fetch.upstream
+import tests.fixtures.stats
+import wambatic.fetch.base
+import wambatic.fetch.cache
+import wambatic.reports.service
+import wambatic.settings
+
+UTC = datetime.UTC
+
+
+def alpha_upstream() -> tests.fixtures.fetch.upstream.Upstream:
+    """A fake GitHub whose repositories match the stats fixture's, so a sync finds them
+    unchanged."""
+    alpha, _, gamma = tests.fixtures.stats.REPOS
+    repos = [
+        tests.fixtures.fetch.upstream.FakeRepo(
+            repo.name_with_owner,
+            [
+                tests.fixtures.fetch.upstream.FakeCommit(
+                    str(repo.head_oid), datetime.datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
+                )
+            ],
+            pushed_at=repo.pushed_at or tests.fixtures.stats.NOW,
+            updated_at=repo.updated_at,
+        )
+        for repo in (alpha, gamma)
+    ]
+    return tests.fixtures.fetch.upstream.Upstream(repos)
+
+
+def install_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    server: tests.fixtures.fetch.server.ReplayServer,
+) -> None:
+    """Make `service.make_fetcher` build fetchers whose client talks to `server`."""
+
+    def factory(
+        token: str, cache: wambatic.fetch.cache.Cache, settings: wambatic.settings.FetchSettings
+    ) -> wambatic.fetch.base.Fetcher:
+        return wambatic.fetch.base.Fetcher(
+            token, cache, settings, client=make_client(server, settings)
+        )
+
+    monkeypatch.setattr(wambatic.reports.service, 'make_fetcher', factory)
+
+
 ORG_MONTH_TERMINAL = """\
 org octo-org, 2026-10-01 to 2027-01-31, by month, UTC
 Activity by period

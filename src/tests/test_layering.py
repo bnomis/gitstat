@@ -4,6 +4,7 @@ import pathlib
 SOURCE = pathlib.Path(__file__).parents[1] / 'wambatic'
 COMPOSITION_ROOTS = ('wambatic.cli', 'wambatic.__main__')
 PLOTLY_IMPORTER = 'wambatic.reports.html'
+FETCH_IMPORTERS = ('wambatic.reports.service', 'wambatic.reports.web')
 
 
 def all_imports(path: pathlib.Path) -> set[str]:
@@ -62,6 +63,7 @@ def violations(package_dir: pathlib.Path) -> list[str]:
                     'wambatic.stats',
                     'wambatic.settings',
                     'wambatic.version',
+                    *(('wambatic.fetch',) if module in FETCH_IMPORTERS else ()),
                 )
             ):
                 found.append(f'{module} imports {name}')
@@ -111,6 +113,19 @@ def test_detects_reports_importing_fetch_or_the_cli(tmp_path: pathlib.Path) -> N
         'wambatic.reports.probe imports wambatic.fetch.base',
         'wambatic.reports.probe imports wambatic.logs',
     ]
+
+
+def test_only_the_service_and_the_web_app_may_import_fetch_in_reports(
+    tmp_path: pathlib.Path,
+) -> None:
+    package = tmp_path / 'wambatic'
+    (package / 'reports').mkdir(parents=True)
+    for name in ('service', 'web'):
+        (package / 'reports' / f'{name}.py').write_text(
+            'import wambatic.fetch.base\nimport wambatic.reports.errors\nimport wambatic.stats\n'
+        )
+    (package / 'reports' / 'terminal.py').write_text('import wambatic.fetch.base\n')
+    assert violations(package) == ['wambatic.reports.terminal imports wambatic.fetch.base']
 
 
 def test_only_the_composition_root_may_import_the_cli(tmp_path: pathlib.Path) -> None:

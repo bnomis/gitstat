@@ -39,6 +39,27 @@ class HtmlReport:
     initial: Granularity
 
 
+def period_requests(
+    request: wambatic.stats.base.StatsRequest,
+) -> list[wambatic.stats.base.StatsRequest]:
+    """The five requests of a report: `request` with granularity TOTAL, then YEAR, MONTH, WEEK
+    and DAY, everything else unchanged."""
+    return [
+        dataclasses.replace(request, granularity=granularity)
+        for granularity in (Granularity.TOTAL, *PERIODS)
+    ]
+
+
+def html_report(results: list[wambatic.stats.base.StatsResult], initial: Granularity) -> HtmlReport:
+    """The `HtmlReport` of the five results of `period_requests`, in that order."""
+    total, *periods = results
+    return HtmlReport(
+        total=total,
+        periods={result.request.granularity: result for result in periods},
+        initial=initial,
+    )
+
+
 class SubjectLike(typing.Protocol):
     """What `report_filename` reads of a `wambatic.fetch.Subject`, which `wambatic.reports` may
     not import."""
