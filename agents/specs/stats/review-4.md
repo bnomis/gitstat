@@ -59,4 +59,7 @@ Step 10 of the implementation order (popularity data and stats: stars, forks, wa
 
 ## Answers
 
-(empty: your verdict on each choice and your option for the decision, with the date)
+Answered on the review page on 2026-10-30 (read back from its database, all answers saved between 10:11:47 and 10:11:52 UTC), after the plan had merged in PR #26:
+
+- **Decision 1:** option A, a new `popularity` group asked for with `--groups`. No comment. The specs and the task list already follow it, so nothing changes.
+- **Choices 1 to 19:** each approved, with no comment and nothing flagged. No spec paragraph or task changes.
