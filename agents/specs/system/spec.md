@@ -1,6 +1,6 @@
 # System
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** proposed
 **Date:** 2026-10-30
 
@@ -80,12 +80,12 @@ Errors are typed in the layer that detects them and presented only at the edge:
 - `settings` raises `SettingsError`.
 - `fetch` raises `AuthError`, `NotFoundError`, `RateLimitError`, `StatsPendingError`, `GraphQLError`, `CacheVersionError`, all subclasses of `FetchError`.
 - `stats` raises `InvalidRangeError`, `InvalidRequestError`, `UnknownGroupError`, `EmptySubjectError`, all subclasses of `StatsError`.
-- `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for `UsageError` and `SettingsError`) and in the web app's exception handlers (HTTP 400 or 502).
+- `reports` raises `UsageError` and converts all of the above once, in `cli.main` (exit status 1, or 2 for `UsageError` and `SettingsError`) and in the web app's error middleware (HTTP 400, 404, 502 or 500, as the reports spec lists).
 - Unexpected exceptions propagate and are logged with `loguru.logger.exception`.
 
 ## Implementation
 
-**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `json`.
+**Stack.** Python 3.14 (as in the shared Python rules), managed with [uv](https://docs.astral.sh/uv/) and a committed `uv.lock`; ruff and pre-commit as in the shared rules; pytest and hypothesis for tests; mypy for type checking. Runtime libraries are proposals pending a maintenance check before each `uv add`: [aiohttp](https://docs.aiohttp.org/en/stable/), [loguru](https://loguru.readthedocs.io/), [Rich](https://rich.readthedocs.io/), [Plotly](https://plotly.com/python/), [FastAPI](https://fastapi.tiangolo.com/) with [uvicorn](https://www.uvicorn.org/), [cappa](https://cappa.readthedocs.io/). The local web app is FastAPI on uvicorn, chosen over aiohttp's own server (reports review 3, decision 1, answered 2026-10-30). The stdlib covers `sqlite3`, `datetime`, `zoneinfo`, `statistics` and `json`.
 
 **Build order.** The sequence of steps, with deliverables, dependencies and done criteria, is in [Implementation order](../implementation-order.md).
 
