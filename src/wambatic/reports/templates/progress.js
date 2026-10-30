@@ -1,6 +1,18 @@
 (function () {
   'use strict';
   const data = JSON.parse(document.getElementById('progress-data').textContent);
+
+  // The page only ever goes to this server's own paths, whatever the embedded data says.
+  function ownPath(value, path) {
+    const url = new URL(value, location.origin);
+    if (url.origin !== location.origin || url.pathname !== path) {
+      throw new Error('unexpected address in the progress data');
+    }
+    return url.pathname + url.search;
+  }
+
+  const progressPath = ownPath(data.progress, '/api/progress');
+  const reloadPath = ownPath(data.reload, '/report');
   const stateElement = document.getElementById('state');
   const countsElement = document.getElementById('counts');
   const errorElement = document.getElementById('error');
@@ -33,7 +45,7 @@
 
   async function poll() {
     try {
-      const response = await fetch(data.progress, { cache: 'no-store' });
+      const response = await fetch(progressPath, { cache: 'no-store' });
       const body = await response.json();
       if (!response.ok) {
         stateElement.textContent = 'The sync cannot be followed';
@@ -42,7 +54,7 @@
       }
       show(body);
       if (body.state === 'done') {
-        location.replace(data.reload);
+        location.replace(reloadPath);
         return;
       }
       if (body.state === 'failed') {
