@@ -59,6 +59,8 @@ class Repo:
     updated_at: datetime.datetime
     pull_requests_updated_at: datetime.datetime | None = None
     issues_updated_at: datetime.datetime | None = None
+    releases_count: int = 0
+    releases_updated_at: datetime.datetime | None = None
     missing: bool = False
 
 
@@ -85,6 +87,8 @@ class PullRequest:
     first_review_at: datetime.datetime | None
     additions: int
     deletions: int
+    labels: tuple[str, ...] = ()
+    first_commit_at: datetime.datetime | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -98,6 +102,35 @@ class Issue:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class Release:
+    """A published release; drafts are not stored."""
+
+    repo: str
+    tag_name: str
+    created_at: datetime.datetime
+    published_at: datetime.datetime
+    is_prerelease: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class WorkflowRun:
+    """A GitHub Actions run, its latest attempt."""
+
+    repo: str
+    id: int
+    workflow_path: str
+    name: str
+    event: str
+    head_branch: str | None
+    status: str
+    conclusion: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    run_started_at: datetime.datetime | None
+    run_attempt: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class SyncState:
     repo: str
     resource: str
@@ -107,6 +140,7 @@ class SyncState:
     updated_at: datetime.datetime
     synced_at: datetime.datetime
     full_synced_at: datetime.datetime
+    probe: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

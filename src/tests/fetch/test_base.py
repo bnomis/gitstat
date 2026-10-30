@@ -92,7 +92,28 @@ def test_a_repo_built_without_the_probe_fields_has_them_none() -> None:
     repo = wambatic.fetch.base.Repo('octocat/Hello-World', 'main', None, False, False, None, NOW)
     assert repo.pull_requests_updated_at is None
     assert repo.issues_updated_at is None
+    assert (repo.releases_count, repo.releases_updated_at) == (0, None)
     assert not hasattr(repo, '__dict__')
+
+
+def test_release_and_workflow_run_are_frozen_and_slotted() -> None:
+    release = wambatic.fetch.base.Release('octocat/Hello-World', 'v1', NOW, NOW, False)
+    run = wambatic.fetch.base.WorkflowRun(
+        'octocat/Hello-World', 1, 'ci.yml', 'CI', 'push', None, 'queued', None, NOW, NOW, None, 1
+    )
+    for record, field in ((release, 'tag_name'), (run, 'id')):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(record, field, 2)
+        assert not hasattr(record, '__dict__')
+
+
+def test_a_pull_request_and_a_sync_state_built_without_the_new_fields_have_defaults() -> None:
+    pull = pull_request()
+    assert (pull.labels, pull.first_commit_at) == ((), None)
+    state = wambatic.fetch.base.SyncState(
+        'octocat/Hello-World', 'commits', None, None, None, NOW, NOW, NOW
+    )
+    assert state.probe is None
 
 
 # Parsing pull requests, issues and the listing probes
