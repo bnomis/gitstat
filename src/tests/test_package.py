@@ -5,6 +5,7 @@ import pytest
 import wambatic
 import wambatic.cli
 import wambatic.fetch
+import wambatic.fetch.base
 import wambatic.reports
 import wambatic.stats
 
@@ -42,6 +43,10 @@ def test_fetch_names_resolve(name: str) -> None:
 @pytest.mark.parametrize('name', wambatic.stats.__all__)
 def test_stats_names_resolve(name: str) -> None:
     assert getattr(wambatic.stats, name)
+
+
+def test_sync_progress_is_exported_by_the_fetch_layer() -> None:
+    assert wambatic.fetch.SyncProgress is wambatic.fetch.base.SyncProgress
 
 
 def test_the_stats_names_are_the_stats_layers() -> None:
