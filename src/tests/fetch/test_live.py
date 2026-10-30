@@ -65,7 +65,13 @@ def test_line_totals_match_code_frequency(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.live
 @pytest.mark.skipif(not TOKEN, reason='GITHUB_TOKEN is not set')
-def test_cached_stars_are_no_more_than_the_listed_count(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ('resource', 'listed'),
+    [('star_events', 'stargazer_count'), ('forks', 'fork_count')],
+)
+def test_cached_stars_and_forks_are_no_more_than_the_listed_count(
+    tmp_path: pathlib.Path, resource: str, listed: str
+) -> None:
     subject = wambatic.fetch.base.Subject('repo', 'octocat', 'Hello-World')
 
     async def scenario() -> tuple[int, int]:
@@ -74,14 +80,19 @@ def test_cached_stars_are_no_more_than_the_listed_count(tmp_path: pathlib.Path) 
             async with wambatic.fetch.base.Fetcher(
                 TOKEN, cache, wambatic.settings.FetchSettings()
             ) as fetcher:
-                await fetcher.sync(subject, frozenset({'star_events'}))
+                await fetcher.sync(subject, frozenset({resource}))
             (repo,) = cache.read_repos(subject)
-            return len(cache.read_star_events(subject.full_name)), repo.stargazer_count
+            rows = (
+                cache.read_star_events(subject.full_name)
+                if resource == 'star_events'
+                else cache.read_forks(subject.full_name)
+            )
+            return len(rows), getattr(repo, listed)
         finally:
             cache.close()
 
-    stored, listed = asyncio.run(scenario())
-    assert 0 < stored <= listed
+    stored, count = asyncio.run(scenario())
+    assert 0 < stored <= count
 
 
 def repository_names(data: dict[str, object]) -> list[str]:

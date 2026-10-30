@@ -19,8 +19,7 @@ if typing.TYPE_CHECKING:
 RESOURCES = frozenset(
     {'commits', 'forks', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
-BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'workflow_runs'})
-UNBUILT_RESOURCE_STEPS = {'forks': 10, 'star_events': 10}
+BUILT_RESOURCES = RESOURCES
 PAGE_SIZE = 100
 BOT_SUFFIX = '[bot]'
 
@@ -1024,6 +1023,55 @@ class Fetcher:
             replace=full,
         )
 
+    async def read_forks(
+        self, repo: Repo, cutoff: datetime.datetime | None
+    ) -> tuple[list[Fork], datetime.datetime | None]:
+        """The repo's direct forks, newest first, and the `Date` of the first response, which is
+        the watermark. Paging stops at the first fork made before `cutoff` (never when None) and at
+        a short page. A 404 on the first page is an empty list with no date."""
+        path = f'/repos/{repo.name_with_owner}/forks'
+        found: list[Fork] = []
+        watermark: datetime.datetime | None = None
+        page = 1
+        while True:
+            params = {'sort': 'newest', 'per_page': str(PAGE_SIZE), 'page': str(page)}
+            if page == 1:
+                try:
+                    response = await self.client.rest_get(path, params)
+                except wambatic.fetch.errors.NotFoundError:
+                    loguru.logger.debug(f'No forks for {repo.name_with_owner}: not found')
+                    return found, None
+                watermark = wambatic.fetch.client.require_date(response.date)
+            else:
+                response = await self.client.rest_get(path, params)
+            nodes = sequence(response.data, 'forks')
+            for node in nodes:
+                fork = parse_fork(repo.name_with_owner, node)
+                if cutoff is not None and fork.created_at < cutoff:
+                    return found, watermark
+                found.append(fork)
+            if len(nodes) < PAGE_SIZE:
+                return found, watermark
+            page += 1
+
+    async def sync_forks(self, repo: Repo, full_refresh: bool) -> int:
+        """As `sync_star_events` for the repo's direct forks, from the REST fork list (outside the
+        ETag store: the listed fork count has already said they changed)."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, 'forks')
+        full, full_synced_at = self.plan_full_read(
+            repo, 'forks', state, full_refresh, repo.fork_count
+        )
+        forks, watermark = await self.read_forks(repo, self.read_cutoff(state, full))
+        if watermark is None and state is not None:
+            watermark = state.watermark
+        return await self.db(
+            self.cache.write_forks,
+            repo.name_with_owner,
+            forks,
+            self.flow_state(repo, 'forks', watermark, full_synced_at, fork_probe(repo)),
+            replace=full,
+        )
+
     async def read_workflow_runs(
         self, repo: Repo, cutoff: datetime.datetime | None
     ) -> tuple[list[WorkflowRun], datetime.datetime | None]:
@@ -1106,6 +1154,11 @@ class Fetcher:
         for star in await self.db(self.cache.read_star_events, repo.name_with_owner):
             yield star
 
+    async def forks(self, repo: Repo) -> collections.abc.AsyncIterator[Fork]:
+        """From the cache: every direct fork of the repo, oldest first."""
+        for fork in await self.db(self.cache.read_forks, repo.name_with_owner):
+            yield fork
+
     async def releases(self, repo: Repo) -> collections.abc.AsyncIterator[Release]:
         """From the cache: the repo's published releases, oldest first. All of them: an interval
         and a lead time reach back before any range."""
@@ -1149,10 +1202,6 @@ class Fetcher:
         unknown = sorted(resources - RESOURCES)
         if unknown:
             raise ValueError(f'unknown resources: {", ".join(unknown)}')
-        unbuilt = sorted(resources - BUILT_RESOURCES)
-        if unbuilt:
-            steps = ', '.join(f'{name} (step {UNBUILT_RESOURCE_STEPS[name]})' for name in unbuilt)
-            raise NotImplementedError(f'not built yet: {steps}')
         listed = await self.list_repos(subject)
         await self.db(
             self.cache.upsert_repos, subject.login, listed, complete=subject.kind != 'repo'
@@ -1186,6 +1235,8 @@ class Fetcher:
                         written = await self.sync_workflow_runs(repo, full_refresh)
                     elif resource == 'star_events':
                         written = await self.sync_star_events(repo, full_refresh)
+                    elif resource == 'forks':
+                        written = await self.sync_forks(repo, full_refresh)
                     else:
                         written = await self.sync_updated(repo, resource, full_refresh)
                     rows[resource] += written

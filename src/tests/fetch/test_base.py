@@ -68,8 +68,8 @@ def test_resources_are_the_spec_names() -> None:
     }
 
 
-def test_built_resources_are_a_subset_of_all_resources() -> None:
-    assert wambatic.fetch.base.BUILT_RESOURCES <= wambatic.fetch.base.RESOURCES
+def test_every_resource_is_built() -> None:
+    assert wambatic.fetch.base.BUILT_RESOURCES == wambatic.fetch.base.RESOURCES
 
 
 def pull_request() -> wambatic.fetch.base.PullRequest:

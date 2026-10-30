@@ -163,7 +163,6 @@ class Upstream:
         self.star_page_size = 100
         self.failing_star_cursors: set[str] = set()
         self.failing_fork_pages: set[int] = set()
-        self.fork_dates = True
         self.run_etags = True
         self.now = tests.fixtures.fetch.responses.NOW
 
@@ -342,9 +341,10 @@ class Upstream:
         ordered = sorted(repo.forks, key=lambda f: (f.created_at, f.id), reverse=True)
         size = int(received.query['per_page'])
         shown = ordered[(page - 1) * size : page * size]
-        headers = dict(tests.fixtures.fetch.responses.RATE_HEADERS)
-        if self.fork_dates:
-            headers['Date'] = email.utils.format_datetime(self.now, usegmt=True)
+        headers = {
+            **tests.fixtures.fetch.responses.RATE_HEADERS,
+            'Date': email.utils.format_datetime(self.now, usegmt=True),
+        }
         return tests.fixtures.fetch.server.Canned(
             200,
             [tests.fixtures.fetch.responses.fork_object(f.id, f.created_at) for f in shown],

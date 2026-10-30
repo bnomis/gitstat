@@ -48,9 +48,9 @@ class Subject:
     name: str | None = None    # repo name when kind == 'repo'
 
 RESOURCES = frozenset({'commits', 'forks', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'})
-# The resources whose implementation step is built; each later step adds its own. `sync` raises
-# NotImplementedError for a resource in RESOURCES but not here, and callers sync only these.
-BUILT_RESOURCES = RESOURCES   # from step 10; step 8 had every resource but 'forks' and 'star_events'
+# The resources whose implementation step is built, which callers sync. Every resource is built
+# since step 10; step 8 had every resource but 'forks' and 'star_events'.
+BUILT_RESOURCES = RESOURCES
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Repo:
@@ -169,8 +169,7 @@ class Fetcher:
                    *, progress: SyncProgress | None = None) -> SyncReport:
         """Bring the cache up to date for the subject: backfill on first use, otherwise only the delta.
 
-        `resources` is a subset of RESOURCES; a name outside it raises ValueError, and a resource
-        whose implementation step has not been built yet raises NotImplementedError.
+        `resources` is a subset of RESOURCES; a name outside it raises ValueError.
         `progress`, when given, is updated as the sync runs: `repos_listed` and `repos_pending`
         once the unchanged repos are known, `rows_written` after each resource of a repo, and
         `repos_done` after each pending repo; at the end its counts equal the `SyncReport`'s."""
