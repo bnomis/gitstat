@@ -80,15 +80,10 @@ def test_stars_and_forks_are_cached(tmp_path: pathlib.Path, resource: str) -> No
             ) as fetcher:
                 try:
                     await fetcher.sync(subject, frozenset({resource}))
-                except ExceptionGroup as group:
+                except wambatic.fetch.errors.GraphQLError as error:
                     # The Actions token is an installation token, which GitHub refuses the
-                    # stargazers' user nodes; a personal access token reads them.
-                    if resource == 'star_events' and group.subgroup(
-                        lambda e: (
-                            isinstance(e, wambatic.fetch.errors.GraphQLError)
-                            and 'FORBIDDEN' in str(e)
-                        )
-                    ):
+                    # stargazers; a personal access token reads them.
+                    if resource == 'star_events' and 'FORBIDDEN' in str(error):
                         pytest.skip('this token cannot read stargazers (FORBIDDEN)')
                     raise
             rows = (
