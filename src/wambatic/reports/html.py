@@ -91,9 +91,12 @@ def first_difference(
             other.request, field.name
         ):
             return f'request {field.name}'
-    for name in ('since', 'until'):
-        if getattr(total, name) != getattr(other, name):
-            return f'the resolved {name}'
+    if total.until != other.until:
+        return 'the resolved until'
+    # Without a requested start each result begins at the start of the bucket holding the first
+    # record, so the resolved starts differ by granularity by design.
+    if total.request.since is not None and total.since != other.since:
+        return 'the resolved since'
     return None
 
 
