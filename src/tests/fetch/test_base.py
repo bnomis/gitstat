@@ -279,12 +279,29 @@ def test_an_author_without_a_login_is_malformed() -> None:
         wambatic.fetch.base.parse_pull_request(HELLO, node)
 
 
-def test_the_hand_written_pages_parse() -> None:
+def test_the_recorded_pull_request_and_issue_pages_parse() -> None:
     pulls = responses.PULL_REQUESTS_OK['data']['repository']['pullRequests']['nodes']  # type: ignore[index]
     parsed = [wambatic.fetch.base.parse_pull_request(HELLO, node) for node in pulls]
-    assert [pull.number for pull in parsed] == [2, 1]
-    assert parsed[0].first_review_at is not None
-    assert parsed[1].author_login == 'dependabot[bot]'
+    assert parsed
+    assert any(pull.merged_at is not None for pull in parsed)
+    assert any(pull.labels for pull in parsed)
+    assert all(pull.first_commit_at is not None for pull in parsed)
+    bots = [node['author']['login'] for node in pulls if node['author']['__typename'] == 'Bot']
+    assert bots
+    assert not any(login.endswith('[bot]') for login in bots)
+    assert {f'{login}[bot]' for login in bots} <= {pull.author_login for pull in parsed}
+    issues = responses.ISSUES_OK['data']['repository']['issues']['nodes']  # type: ignore[index]
+    assert [wambatic.fetch.base.parse_issue(HELLO, node).number for node in issues] == [
+        node['number'] for node in issues
+    ]
+
+
+def test_an_automatic_reviewer_is_a_bot_without_the_suffix_and_not_a_first_review() -> None:
+    reviews = responses.BOT_REVIEWS_OK['data']['repository']['pullRequest']['reviews']  # type: ignore[index]
+    assert [node['author'] for node in reviews['nodes']] == [
+        {'__typename': 'Bot', 'login': 'copilot-pull-request-reviewer'}
+    ]
+    assert wambatic.fetch.base.first_review_at(reviews, 'someone') is None
 
 
 # Labels, first commits, releases, workflow runs and the release probe
@@ -330,11 +347,13 @@ def test_a_release_without_a_tag_is_malformed() -> None:
         wambatic.fetch.base.parse_release(HELLO, node)
 
 
-def test_the_hand_written_release_page_parses_without_drafts() -> None:
+def test_the_recorded_release_page_parses_and_keeps_a_prerelease() -> None:
     nodes = responses.RELEASES_OK['data']['repository']['releases']['nodes']  # type: ignore[index]
     parsed = [wambatic.fetch.base.parse_release(HELLO, node) for node in nodes]
-    assert [release.tag_name for release in parsed if release] == ['v1.1.0', 'v1.1.0-rc.1']
-    assert [release.is_prerelease for release in parsed if release] == [False, True]
+    assert [release.tag_name for release in parsed if release] == [
+        node['tagName'] for node in nodes if not node['isDraft']
+    ]
+    assert [release.is_prerelease for release in parsed if release].count(True) == 1
 
 
 def test_a_workflow_run_parses_every_field() -> None:
@@ -395,14 +414,15 @@ def test_a_malformed_run_raises(field: str) -> None:
         wambatic.fetch.base.parse_workflow_run(HELLO, node)
 
 
-def test_the_hand_written_run_pages_parse() -> None:
+def test_the_recorded_run_pages_parse_with_the_short_workflow_path() -> None:
     runs = responses.WORKFLOW_RUNS_OK['workflow_runs']
     assert isinstance(runs, list)
     parsed = [wambatic.fetch.base.parse_workflow_run(HELLO, node) for node in runs]
-    assert [run.id for run in parsed] == [103, 102, 101, 100]
-    assert [run.status for run in parsed] == ['in_progress', 'completed', 'completed', 'queued']
+    assert [run.id for run in parsed] == [node['id'] for node in runs]
+    assert all(run.workflow_path.startswith('.github/workflows/') for run in parsed)
+    assert all(run.name and run.status and run.run_started_at for run in parsed)
     single = wambatic.fetch.base.parse_workflow_run(HELLO, responses.WORKFLOW_RUN_OK)
-    assert (single.id, single.status, single.conclusion) == (103, 'completed', 'success')
+    assert single == parsed[0]
 
 
 def test_the_release_probe_reads_the_count_and_the_newest_update() -> None:
@@ -519,19 +539,23 @@ def test_a_malformed_fork_raises(node: object) -> None:
         wambatic.fetch.base.parse_fork(HELLO, node)
 
 
-def test_the_hand_written_popularity_responses_parse() -> None:
+def test_the_recorded_popularity_responses_parse() -> None:
     listing = responses.OWNER_REPOSITORIES_OK['data']['repositoryOwner']['repositories']['nodes']  # type: ignore[index]
-    hello, spoon = (wambatic.fetch.base.parse_repo(node) for node in listing)
-    assert (hello.stargazer_count, hello.fork_count, hello.watcher_count) == (3, 2, 4)
-    assert hello.languages[0] == ('Python', 7000)
-    assert hello.languages_size > sum(size for _, size in hello.languages)
-    assert (spoon.languages, spoon.languages_size) == ((), 0)
-    edges = responses.STARGAZERS_OK['data']['repository']['stargazers']['edges']  # type: ignore[index]
-    assert [wambatic.fetch.base.parse_star_edge(HELLO, edge).user_id for edge in edges] == [
-        'MDQ6VXNlcjM=',
-        'MDQ6VXNlcjI=',
-    ]
-    assert [wambatic.fetch.base.parse_fork(HELLO, fork).id for fork in responses.FORKS_OK] == [
-        202,
-        201,
-    ]
+    repos = {node['nameWithOwner']: wambatic.fetch.base.parse_repo(node) for node in listing}
+    hello, spoon = repos['octocat/Hello-World'], repos['octocat/Spoon-Knife']
+    assert (hello.languages, hello.languages_size) == ((), 0)
+    assert spoon.languages[0][0] == 'HTML'
+    assert spoon.languages_size == sum(size for _, size in spoon.languages)
+    assert spoon.stargazer_count > 0
+    assert spoon.fork_count > 0
+    assert spoon.watcher_count > 0
+    stars = responses.STARGAZERS_OK['data']['repository']['stargazers']['edges']  # type: ignore[index]
+    parsed = [wambatic.fetch.base.parse_star_edge(HELLO, edge) for edge in stars]
+    assert [star.user_id for star in parsed] == [edge['node']['id'] for edge in stars]
+    assert [star.starred_at for star in parsed] == sorted(
+        (star.starred_at for star in parsed), reverse=True
+    )
+    forks = [wambatic.fetch.base.parse_fork(HELLO, fork) for fork in responses.FORKS_OK]
+    assert [fork.created_at for fork in forks] == sorted(
+        (fork.created_at for fork in forks), reverse=True
+    )

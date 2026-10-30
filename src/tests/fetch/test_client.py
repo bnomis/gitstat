@@ -224,7 +224,11 @@ def test_graphql_returns_data_and_tracks_limit(make_client: tests.conftest.MakeC
 
     data, limit, sent = asyncio.run(scenario())
     assert data == responses.OWNER_REPOSITORIES_OK['data']
-    assert limit == wambatic.fetch.ratelimit.RateLimitState(4999, responses.RESET)
+    recorded = responses.OWNER_REPOSITORIES_OK['data']['rateLimit']
+    assert isinstance(recorded, dict)
+    assert limit == wambatic.fetch.ratelimit.RateLimitState(
+        recorded['remaining'], datetime.datetime.fromisoformat(recorded['resetAt'])
+    )
     assert sent == {'query': wambatic.fetch.queries.OWNER_REPOSITORIES, 'variables': VARIABLES}
 
 

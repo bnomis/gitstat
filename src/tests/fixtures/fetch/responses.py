@@ -1,32 +1,15 @@
 """Canned GitHub responses.
 
-Every body here is written from the shapes in GitHub's documentation, with the page it came
-from beside it. None is recorded from the live API: the sandbox this was written in cannot
-reach api.github.com/graphql (it answers 403 to Claude Code sessions). Replace the
-OWNER_REPOSITORIES_OK, REPOSITORY_OK, COMMIT_HISTORY_OK, COMPARE_AHEAD, COMMIT_NODES_OK and REPO
-stand-ins with recordings from the live API (spec, Testing) when a session with network access
-is available. Their commit ids are synthetic.
-
-The step 6 stand-ins to re-record are the listing probe fields of OWNER_REPOSITORIES_OK and
-REPOSITORY_OK, PULL_REQUESTS_OK and ISSUES_OK. The recording should confirm that an automatic
-reviewer such as Copilot has the `Bot` type, and that GraphQL gives a bot's login without the
-`[bot]` suffix.
-
-The step 8 stand-ins to re-record are the release probe of the listing nodes, RELEASES_OK, the
-labels and first commits of PULL_REQUESTS_OK, WORKFLOW_RUNS_OK and WORKFLOW_RUN_OK. Their shapes
-were checked against GitHub's published schemas (`@octokit/graphql-schema` 15.26.1 and
-`@octokit/openapi` 24.0.0), which describe a run's `path` in two forms (`.github/workflows/ci.yml`
-and `owner/repo/.github/workflows/ci.yml@main`); the recording should confirm which one the API
-gives and that `name`, `status` and `run_started_at` are present on every run.
-
-The step 10 stand-ins to re-record are the counts and languages of the listing nodes,
-STARGAZERS_OK and FORKS_OK. Their shapes were checked against the same published schemas; the
-recording should confirm that `languages` is `null` for a repository with no recognised code and
-that `forkCount` counts the whole network while the REST fork list holds the direct forks only.
+The successful responses named in capitals come from `tests.fixtures.fetch.recorded`, recorded
+from the live API by bin/record-fixtures.sh (re-run it after changing a query or the fields a
+parser reads; `test_queries` fails until then). The builders below write the variations a test
+needs that no recording holds, from the shapes in GitHub's documentation, with the page each
+came from beside it, and so do the error responses.
 """
 
 import datetime
 
+import tests.fixtures.fetch.recorded
 import tests.fixtures.fetch.server
 
 NOW = datetime.datetime(2026, 10, 29, 12, 0, tzinfo=datetime.UTC)
@@ -387,144 +370,24 @@ def compare_response(
     }
 
 
-# Synthetic stand-ins for recordings of octocat/Hello-World, which has a short history.
-HELLO_OLD = 'a' * 40
-HELLO_NEW = 'b' * 40
+# Times for the synthetic upstream in `tests.fixtures.fetch.upstream`.
 HELLO_PUSHED_AT = datetime.datetime(2026, 10, 20, 9, 0, tzinfo=datetime.UTC)
 HELLO_UPDATED_AT = datetime.datetime(2026, 10, 21, 9, 0, tzinfo=datetime.UTC)
-HELLO_PULL_REQUESTS_UPDATED_AT = datetime.datetime(2026, 10, 19, 9, 0, tzinfo=datetime.UTC)
-HELLO_RELEASED_AT = datetime.datetime(2026, 10, 18, 9, 0, tzinfo=datetime.UTC)
-HELLO_NODE = repo_node(
-    'octocat/Hello-World',
-    head=HELLO_NEW,
-    pushed_at=HELLO_PUSHED_AT,
-    updated_at=HELLO_UPDATED_AT,
-    branch='master',
-    pull_requests_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-    issues_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-    releases_count=4,
-    releases_updated_at=HELLO_RELEASED_AT,
-    stargazer_count=3,
-    fork_count=2,
-    watcher_count=4,
-    languages=[('Python', 7000), ('Shell', 500), ('Ünïcode', 50)],
-    languages_size=8000,
-)
-SPOON_NODE = repo_node(
-    'octocat/Spoon-Knife',
-    head='c' * 40,
-    pushed_at=HELLO_PUSHED_AT,
-    updated_at=HELLO_UPDATED_AT,
-    branch='main',
-)
-STARGAZERS_OK = stargazers_page(
-    [
-        star_edge('MDQ6VXNlcjM=', HELLO_PUSHED_AT),
-        star_edge('MDQ6VXNlcjI=', HELLO_PUSHED_AT - datetime.timedelta(days=2)),
-    ],
-    True,
-    'Y3Vyc29yOjI=',
-)
-STARGAZERS_LAST = stargazers_page(
-    [star_edge('MDQ6VXNlcjE=', HELLO_PUSHED_AT - datetime.timedelta(days=9))], False, 'Y3Vyc29yOjM='
-)
-FORKS_OK = [
-    fork_object(202, HELLO_PUSHED_AT - datetime.timedelta(days=1)),
-    fork_object(201, HELLO_PUSHED_AT - datetime.timedelta(days=5)),
-]
-OWNER_REPOSITORIES_OK = owner_page([HELLO_NODE, SPOON_NODE], False, 'Y3Vyc29yOjg=')
-REPOSITORY_OK = repository_response(HELLO_NODE)
-COMMIT_HISTORY_OK = history_page(
-    [
-        history_node(HELLO_NEW, HELLO_PUSHED_AT, 'octocat', 3, 1),
-        history_node(HELLO_OLD, HELLO_PUSHED_AT - datetime.timedelta(days=2), None, 5, 0),
-    ],
-    False,
-    'Y3Vyc29yOjI=',
-)
-PULL_REQUESTS_OK = pull_requests_page(
-    [
-        pull_request_node(
-            2,
-            state='MERGED',
-            created_at=HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=2),
-            updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-            merged_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-            closed_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-            labels=('bug', 'Hotfix'),
-            first_commit_at=HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=3),
-            reviews=[
-                review_node(HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=1), 'hubot')
-            ],
-        ),
-        pull_request_node(1, state='OPEN', login='dependabot', bot=True),
-    ],
-    False,
-    'Y3Vyc29yOjI=',
-)
-ISSUES_OK = issues_page(
-    [
-        issue_node(
-            3,
-            state='CLOSED',
-            updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-            closed_at=HELLO_PULL_REQUESTS_UPDATED_AT,
-        ),
-        issue_node(1, state='OPEN', login=None),
-    ],
-    False,
-    'Y3Vyc29yOjI=',
-)
-RELEASES_OK = releases_page(
-    [
-        release_node('v1.1.0', created_at=HELLO_RELEASED_AT, published_at=HELLO_RELEASED_AT),
-        release_node(
-            'v1.1.0-rc.1',
-            created_at=HELLO_RELEASED_AT - datetime.timedelta(days=3),
-            published_at=HELLO_RELEASED_AT - datetime.timedelta(days=2),
-            is_prerelease=True,
-        ),
-        release_node(
-            'v1.2.0',
-            created_at=HELLO_RELEASED_AT + datetime.timedelta(days=1),
-            published_at=None,
-            is_draft=True,
-        ),
-        release_node(
-            'v1.0.0', created_at=HELLO_RELEASED_AT - datetime.timedelta(days=9), published_at=None
-        ),
-    ],
-    False,
-    'Y3Vyc29yOjQ=',
-)
-WORKFLOW_RUNS_OK = workflow_runs_response(
-    [
-        workflow_run_object(103, status='in_progress', conclusion=None, created_at=HELLO_PUSHED_AT),
-        workflow_run_object(
-            102,
-            conclusion='failure',
-            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=1),
-        ),
-        workflow_run_object(
-            101,
-            path='.github/workflows/deploy.yml',
-            name='Deploy',
-            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=2),
-        ),
-        workflow_run_object(
-            100,
-            status='queued',
-            conclusion=None,
-            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=3),
-            run_started_at=None,
-        ),
-    ]
-)
-WORKFLOW_RUN_OK = workflow_run_object(
-    103, created_at=HELLO_PUSHED_AT, updated_at=HELLO_PUSHED_AT + datetime.timedelta(minutes=7)
-)
-COMPARE_AHEAD = compare_response('ahead', [compare_commit(HELLO_NEW, HELLO_PUSHED_AT, 'octocat')])
-COMMIT_NODES_OK = nodes_response([{'oid': HELLO_NEW, 'additions': 3, 'deletions': 1}])
+
+Recorded = tests.fixtures.fetch.recorded
+OWNER_REPOSITORIES_OK = Recorded.OWNER_REPOSITORIES_OK
+REPOSITORY_OK = Recorded.REPOSITORY_OK
+COMMIT_HISTORY_OK = Recorded.COMMIT_HISTORY_OK
+COMPARE_AHEAD = Recorded.COMPARE_AHEAD
+COMMIT_NODES_OK = Recorded.COMMIT_NODES_OK
+PULL_REQUESTS_OK = Recorded.PULL_REQUESTS_OK
+ISSUES_OK = Recorded.ISSUES_OK
+RELEASES_OK = Recorded.RELEASES_OK
+WORKFLOW_RUNS_OK = Recorded.WORKFLOW_RUNS_OK
+WORKFLOW_RUN_OK = Recorded.WORKFLOW_RUN_OK
+STARGAZERS_OK = Recorded.STARGAZERS_OK
+FORKS_OK = Recorded.FORKS_OK
+BOT_REVIEWS_OK = Recorded.BOT_REVIEWS_OK
 GRAPHQL_NOT_FOUND = {
     'data': {
         'repositoryOwner': None,
@@ -573,16 +436,11 @@ SECONDARY_LIMIT = {
     )
 }
 
-# Hand-written stand-in for GET /repos/octocat/Hello-World
-# https://docs.github.com/en/rest/repos/repos#get-a-repository
-REPO = {'id': 1296269, 'full_name': 'octocat/Hello-World', 'default_branch': 'master'}
-REPO_ETAG = '"670f8b5e6ec1ff7a0e8f1d4d2e1ab2c4"'
+REPO = Recorded.REPO
+REPO_ETAG = Recorded.REPO_ETAG
 
 # https://docs.github.com/en/rest/metrics/statistics#a-word-about-caching
 STATS_PENDING = Canned(202)
 
-# Hand-written stand-ins for GET /users/octocat and GET /users/github, trimmed to the two fields
-# `owner_kind` reads; to be re-recorded from the live API.
-# https://docs.github.com/en/rest/users/users#get-a-user
-USER_OK = {'login': 'octocat', 'type': 'User'}
-ORGANIZATION_OK = {'login': 'github', 'type': 'Organization'}
+USER_OK = Recorded.USER_OK
+ORGANIZATION_OK = Recorded.ORGANIZATION_OK
