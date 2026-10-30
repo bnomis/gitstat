@@ -2,17 +2,13 @@
   'use strict';
   const data = JSON.parse(document.getElementById('progress-data').textContent);
 
-  // The page only ever goes to this server's own paths, whatever the embedded data says.
-  function ownPath(value, path) {
-    const url = new URL(value, location.origin);
-    if (url.origin !== location.origin || url.pathname !== path) {
-      throw new Error('unexpected address in the progress data');
-    }
-    return url.pathname + url.search;
-  }
-
-  const progressPath = ownPath(data.progress, '/api/progress');
-  const reloadPath = ownPath(data.reload, '/report');
+  // The addresses are built here from the job id and this page's own query, so nothing in the
+  // embedded data can send the page elsewhere.
+  const jobId = String(data.job);
+  const progressPath = '/api/progress?job=' + encodeURIComponent(jobId);
+  const query = new URLSearchParams(location.search);
+  query.set('job', jobId);
+  const reloadPath = '/report?' + query.toString();
   const stateElement = document.getElementById('state');
   const countsElement = document.getElementById('counts');
   const errorElement = document.getElementById('error');
