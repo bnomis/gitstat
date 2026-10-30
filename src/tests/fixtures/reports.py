@@ -40,6 +40,18 @@ def alpha_upstream() -> tests.fixtures.fetch.upstream.Upstream:
             ],
             pushed_at=repo.pushed_at or tests.fixtures.stats.NOW,
             updated_at=repo.updated_at,
+            stars=[
+                tests.fixtures.fetch.upstream.FakeStar(star.user_id, star.starred_at)
+                for star in tests.fixtures.stats.STAR_EVENTS
+                if star.repo == repo.name_with_owner
+            ],
+            forks=[
+                tests.fixtures.fetch.upstream.FakeFork(fork.id, fork.created_at)
+                for fork in tests.fixtures.stats.FORKS
+                if fork.repo == repo.name_with_owner
+            ],
+            watchers=repo.watcher_count,
+            languages=list(repo.languages) or None,
         )
         for repo in (alpha, gamma)
     ]
