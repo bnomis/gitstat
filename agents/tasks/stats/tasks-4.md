@@ -54,7 +54,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 1: Records and cache schema 4
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** fetch spec 1.8 (Module location; API: `RESOURCES`, `Repo`, `StarEvent`, `Fork`, `SyncState`, `Cache`, `SCHEMA_VERSION`, `CacheInfo`; Implementation, Cache); review-4.md choices 1 to 4 and 9
@@ -95,7 +95,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 2: Queries and parsing
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** fetch spec 1.8 (Implementation: Incremental sync steps 1 and 2; Testing); review-4.md choices 1 to 6
@@ -131,7 +131,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 3: Syncing star events
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** fetch spec 1.8 (API: `Fetcher.star_events`; Implementation: Incremental sync steps 1 to 5); review-4.md choices 4, 6, 7 and 8
@@ -169,7 +169,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 4: Syncing forks, and `BUILT_RESOURCES`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** fetch spec 1.8 (API: `BUILT_RESOURCES`, `Fetcher.forks`; Implementation: Incremental sync steps 1 to 5); review-4.md choices 5 to 8
@@ -209,7 +209,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 5: Popularity fixture data for stats
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** stats spec 1.4 (Metric groups, popularity; Aggregation); review-4.md choices 10 to 13
@@ -242,7 +242,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 6: The pure `popularity` aggregation
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** stats spec 1.4 (Module location; Metric groups, popularity; Aggregation); review-4.md choices 2, 3, 10, 11 and 14
@@ -279,7 +279,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 7: `popularity` in `compute`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** stats spec 1.4 (API: `GROUPS`, `resources_for`, `StatsResult.tables`; Error handling; Range; Reading the cache; Groups not built yet; Metric groups, activity; Aggregation: user subject, series order); system spec 1.7 Architecture and Data flow step 2; review-4.md decision 1 and choices 12 and 13
@@ -316,7 +316,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 8: Terminal popularity sections, JSON and the groups help
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** medium
 **Spec Reference:** reports spec 1.7 (Command line: `--groups`; Terminal items 3 and 10 to 14; JSON output); review-4.md choices 11, 15 and 17
@@ -350,7 +350,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 9: CLI: `cache info` and a popularity report end to end
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** reports spec 1.7 (`cache info`; Running `report` step 5); fetch spec 1.8 (`CacheInfo`); review-4.md choices 9 and 17
@@ -382,7 +382,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 10: HTML popularity section
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** medium
 **Spec Reference:** reports spec 1.7 (API `Figure.group`, `build_range_figures`; Static HTML: layout items 2 and 6 to 8, charts, testing; Visualisation choices); review-4.md choice 16
@@ -417,7 +417,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 11: README
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** shared user-guides rule (keep guides in sync with code); reports spec 1.7 Terminal and Static HTML; stats spec 1.4 popularity; fetch spec 1.8 Cache (schema 4); review-4.md decision 1 and choices 2, 3, 6, 8 and 10
@@ -453,7 +453,7 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 
 ## Task 12: Exports, layering, closing checks and spec status
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** fetch spec 1.8 API; stats spec 1.4 Module location; system spec Architecture (layering); implementation order step 10 "Done when"; review-4.md choice 18
@@ -490,3 +490,5 @@ The step 8 list, [tasks-3.md](tasks-3.md), built the release and workflow-run sy
 - `pre-commit run --all-files` runs `mypy` over the whole tree with the other hooks; it is the list's one whole-tree lint run.
 - `src/tests/fetch/test_live.py` needs a working `GITHUB_TOKEN` and gets a 401 in cloud sessions, as on `main`; CI's `live` job runs it. Record that here if it is the only failure.
 - Key files: `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`, the four spec files
+- Done-when evidence: an unchanged repo's stars and forks cost no request (`test_fetcher.py` star and fork sections, `test_cli.py` second-run test); a removed star leaves the cache on the next sync (`test_fetcher.py`, the falling-count full read); the default report lists nothing as unavailable (`reports/test_terminal.py` known-good text, `test_cli.py`); `--groups popularity` in terminal, JSON and HTML (`test_cli.py` end-to-end, `reports/test_html.py`, `reports/test_html_browser.py`).
+- Closing run: all of the listed test files pass except the four `test_live.py` tests, which get a 401 in this cloud session and run in CI's `live` job. `pre-commit run --all-files` passes.

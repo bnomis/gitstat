@@ -1,7 +1,7 @@
 # Fetch and cache
 
 **Version:** 1.8
-**Status:** proposed
+**Status:** implemented
 **Date:** 2026-10-30
 
 Fetches raw data about a GitHub user, repository or organisation and stores it in a local SQLite cache so that repeated and incremental runs stay inside the API rate limits. It uses the [GraphQL API](https://docs.github.com/en/graphql) for almost everything and the [REST API](https://docs.github.com/en/rest) only where GraphQL has no equivalent (workflow runs, the `stats/*` endpoints, comparing two commits, and the list of a repository's forks). It knows nothing about metrics; [Stats](../stats/spec.md) consumes its output.

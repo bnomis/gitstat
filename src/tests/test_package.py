@@ -9,6 +9,7 @@ import wambatic.fetch.base
 import wambatic.reports
 import wambatic.reports.service
 import wambatic.stats
+import wambatic.stats.base
 
 
 @pytest.mark.parametrize(
@@ -135,3 +136,16 @@ def test_the_step_8_fetch_records_are_exported(name: str) -> None:
 
 def test_the_built_resources_include_releases_and_workflow_runs() -> None:
     assert {'releases', 'workflow_runs'} <= wambatic.fetch.BUILT_RESOURCES
+
+
+def test_star_and_fork_records_are_exported() -> None:
+    assert wambatic.fetch.StarEvent is wambatic.fetch.base.StarEvent
+    assert wambatic.fetch.Fork is wambatic.fetch.base.Fork
+
+
+def test_every_resource_is_built() -> None:
+    assert wambatic.fetch.base.BUILT_RESOURCES == wambatic.fetch.base.RESOURCES
+
+
+def test_popularity_is_a_group() -> None:
+    assert 'popularity' in wambatic.stats.base.GROUPS

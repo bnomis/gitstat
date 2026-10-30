@@ -1,7 +1,7 @@
 # System
 
 **Version:** 1.7
-**Status:** proposed
+**Status:** implemented
 **Date:** 2026-10-30
 
 wambatic reports statistics from github.com for a user, a repository or an organisation, as a terminal report, a static HTML report or a local web app, with the numbers bucketed by year, month, week or day. This spec is the top of the set: it fixes the architecture, the boundaries between components, the data flow, the stack and the build order. The detail of each component is in its own spec; where this spec and a component spec differ, the component spec wins and this one is amended.
