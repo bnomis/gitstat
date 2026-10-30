@@ -301,6 +301,15 @@ def parse_compare_commit(node: object) -> NewCommit:
     )
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class UpdatedRead[R: PullRequest | Issue]:
+    """How to page a mutable resource: its query, the connection the query selects, its parser."""
+
+    query: str
+    connection: str
+    parse: collections.abc.Callable[[str, object], R]
+
+
 def split_name(name_with_owner: str) -> tuple[str, str]:
     owner, _, name = name_with_owner.partition('/')
     return owner, name
@@ -585,6 +594,117 @@ class Fetcher:
             reason = 'history rewritten'
         loguru.logger.info(f'Reading all commits of {repo.name_with_owner}: {reason}')
         return await self.backfill_commits(repo), True
+
+    def full_read_due(self, state: SyncState | None, now: datetime.datetime) -> bool:
+        """Whether a time-windowed resource must be read from scratch: it never was, or not for
+        longer than `fetch.full_refresh_after`, the only way a deleted item leaves the cache."""
+        return state is None or now - state.full_synced_at > self.settings.full_refresh_after
+
+    async def read_updated[R: PullRequest | Issue](
+        self, repo: Repo, read: UpdatedRead[R], state: SyncState | None, full: bool
+    ) -> tuple[list[R], datetime.datetime]:
+        """The repo's pull requests or issues, newest update first, and the watermark for them:
+        the `Date` of the first page's response. Paging stops at the first item last updated
+        before `state.watermark - fetch.overlap`, unless `full` or there is no watermark."""
+        owner, name = split_name(repo.name_with_owner)
+        cutoff = (
+            None
+            if full or state is None or state.watermark is None
+            else state.watermark - self.settings.overlap
+        )
+        found: list[R] = []
+        watermark: datetime.datetime | None = None
+        cursor: str | None = None
+        while True:
+            data, date = await self.client.graphql_dated(
+                read.query, {'owner': owner, 'name': name, 'cursor': cursor}
+            )
+            watermark = watermark or date
+            repository = mapping(data.get('repository'), 'repository')
+            connection = mapping(repository.get(read.connection), read.connection)
+            for node in sequence(connection.get('nodes'), 'nodes'):
+                record = read.parse(repo.name_with_owner, node)
+                if cutoff is not None and record.updated_at < cutoff:
+                    return found, watermark
+                found.append(record)
+            page = mapping(connection.get('pageInfo'), 'pageInfo')
+            if page.get('hasNextPage') is not True:
+                return found, watermark
+            cursor = text(page.get('endCursor'), 'endCursor')
+
+    async def sync_updated(self, repo: Repo, resource: str, full_refresh: bool) -> int:
+        """Bring the repo's pull requests or issues up to date and return the rows written:
+        everything on the first sync, on a full refresh or when a full read is due, else the
+        items changed since the watermark. The rows and the new state go in one transaction."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
+        if state is None:
+            reason = 'no previous sync'
+        elif full_refresh:
+            reason = 'full refresh requested'
+        elif self.full_read_due(state, self.client.clock()):
+            reason = 'full refresh interval passed'
+        else:
+            reason = ''
+        full = bool(reason)
+        if full:
+            loguru.logger.info(f'Reading all {resource} of {repo.name_with_owner}: {reason}')
+        full_synced_at = None if full or state is None else state.full_synced_at
+        if resource == 'pull_requests':
+            pulls, watermark = await self.read_updated(
+                repo,
+                UpdatedRead(
+                    wambatic.fetch.queries.PULL_REQUESTS, 'pullRequests', parse_pull_request
+                ),
+                state,
+                full,
+            )
+            return await self.db(
+                self.cache.write_pull_requests,
+                repo.name_with_owner,
+                pulls,
+                self.flow_state(repo, resource, watermark, full_synced_at),
+                replace=full,
+            )
+        issues, watermark = await self.read_updated(
+            repo,
+            UpdatedRead(wambatic.fetch.queries.ISSUES, 'issues', parse_issue),
+            state,
+            full,
+        )
+        return await self.db(
+            self.cache.write_issues,
+            repo.name_with_owner,
+            issues,
+            self.flow_state(repo, resource, watermark, full_synced_at),
+            replace=full,
+        )
+
+    def flow_state(
+        self,
+        repo: Repo,
+        resource: str,
+        watermark: datetime.datetime,
+        full_synced_at: datetime.datetime | None,
+    ) -> SyncState:
+        return dataclasses.replace(
+            self.new_state(repo, resource, full_synced_at), watermark=watermark, head_oid=None
+        )
+
+    async def pull_requests(
+        self, repo: Repo, since: datetime.datetime | None
+    ) -> collections.abc.AsyncIterator[PullRequest]:
+        """From the cache: the repo's pull requests with `updated_at >= since` (all when None),
+        by number. Every event of a pull request is at or before its `updated_at`, so this
+        holds every one with an event since `since`."""
+        for pull in await self.db(self.cache.read_pull_requests, repo.name_with_owner, since):
+            yield pull
+
+    async def issues(
+        self, repo: Repo, since: datetime.datetime | None
+    ) -> collections.abc.AsyncIterator[Issue]:
+        """From the cache, as `pull_requests`."""
+        for issue in await self.db(self.cache.read_issues, repo.name_with_owner, since):
+            yield issue
 
     async def sync(
         self, subject: Subject, resources: frozenset[str], full_refresh: bool = False

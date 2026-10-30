@@ -8,6 +8,7 @@ comes from.
 
 import dataclasses
 import datetime
+import email.utils
 import re
 
 import tests.fixtures.fetch.responses
@@ -27,6 +28,29 @@ class FakeCommit:
 
 
 @dataclasses.dataclass(slots=True)
+class FakePull:
+    number: int
+    updated_at: datetime.datetime
+    state: str = 'OPEN'
+    created_at: datetime.datetime = tests.fixtures.fetch.responses.NOW
+    merged_at: datetime.datetime | None = None
+    closed_at: datetime.datetime | None = None
+    login: str | None = 'octocat'
+    additions: int = 5
+    deletions: int = 2
+
+
+@dataclasses.dataclass(slots=True)
+class FakeIssue:
+    number: int
+    updated_at: datetime.datetime
+    state: str = 'OPEN'
+    created_at: datetime.datetime = tests.fixtures.fetch.responses.NOW
+    closed_at: datetime.datetime | None = None
+    login: str | None = 'octocat'
+
+
+@dataclasses.dataclass(slots=True)
 class FakeRepo:
     name: str
     history: list[FakeCommit]
@@ -35,6 +59,8 @@ class FakeRepo:
     is_fork: bool = False
     is_archived: bool = False
     branch: str = 'main'
+    pulls: list[FakePull] = dataclasses.field(default_factory=list)
+    issues: list[FakeIssue] = dataclasses.field(default_factory=list)
 
     @property
     def head(self) -> str | None:
@@ -49,6 +75,8 @@ class FakeRepo:
             branch=self.branch,
             is_fork=self.is_fork,
             is_archived=self.is_archived,
+            pull_requests_updated_at=max((p.updated_at for p in self.pulls), default=None),
+            issues_updated_at=max((i.updated_at for i in self.issues), default=None),
         )
 
     def push(self, *commits: FakeCommit) -> None:
@@ -67,6 +95,9 @@ class Upstream:
         self.history_delay = 0.0
         self.unknown_base = 'not found'
         self.dropped_nodes: set[str] = set()
+        self.flow_page_size = 100
+        self.failing_flow_cursors: set[str] = set()
+        self.now = tests.fixtures.fetch.responses.NOW
 
     def respond(
         self, received: tests.fixtures.fetch.server.Received
@@ -85,7 +116,12 @@ class Upstream:
         assert isinstance(body, dict)
         query, variables = str(body['query']), body['variables']
         assert isinstance(variables, dict)
-        headers = tests.fixtures.fetch.responses.RATE_HEADERS
+        headers = {
+            **tests.fixtures.fetch.responses.RATE_HEADERS,
+            'Date': email.utils.format_datetime(self.now, usegmt=True),
+        }
+        if 'query PullRequests' in query or 'query Issues' in query:
+            return self.flow_page(query, variables, headers)
         if 'query OwnerRepositories' in query:
             return tests.fixtures.fetch.server.Canned(200, self.owner_page(variables), headers)
         if 'query Repository(' in query:
@@ -109,6 +145,57 @@ class Upstream:
         if 'query CommitNodes' in query:
             return tests.fixtures.fetch.server.Canned(200, self.nodes(variables['ids']), headers)
         raise AssertionError(f'unexpected query: {query}')
+
+    def flow_page(
+        self, query: str, variables: dict[str, object], headers: dict[str, str]
+    ) -> tests.fixtures.fetch.server.Canned:
+        cursor = str(variables['cursor'] or 0)
+        if cursor in self.failing_flow_cursors:
+            return tests.fixtures.fetch.server.Canned(
+                500, tests.fixtures.fetch.responses.SERVER_ERROR
+            )
+        repo = self.repos[f'{variables["owner"]}/{variables["name"]}']
+        responses = tests.fixtures.fetch.responses
+        start = int(cursor)
+        end = start + self.flow_page_size
+        if 'query PullRequests' in query:
+            pulls = sorted(repo.pulls, key=lambda p: (p.updated_at, p.number), reverse=True)
+            body = responses.pull_requests_page(
+                [
+                    responses.pull_request_node(
+                        p.number,
+                        state=p.state,
+                        created_at=p.created_at,
+                        updated_at=p.updated_at,
+                        merged_at=p.merged_at,
+                        closed_at=p.closed_at,
+                        additions=p.additions,
+                        deletions=p.deletions,
+                        login=p.login,
+                    )
+                    for p in pulls[start:end]
+                ],
+                end < len(pulls),
+                str(end),
+            )
+        else:
+            items = sorted(repo.issues, key=lambda i: (i.updated_at, i.number), reverse=True)
+            body = responses.issues_page(
+                [
+                    responses.issue_node(
+                        i.number,
+                        state=i.state,
+                        created_at=i.created_at,
+                        updated_at=i.updated_at,
+                        closed_at=i.closed_at,
+                        login=i.login,
+                    )
+                    for i in items[start:end]
+                ],
+                end < len(items),
+                str(end),
+            )
+        return tests.fixtures.fetch.server.Canned(200, body, headers)
 
     def owner_page(self, variables: dict[str, object]) -> dict[str, object]:
         owner = str(variables['login'])
@@ -190,6 +277,8 @@ class Upstream:
             'query Repository(': 'repository',
             'query CommitHistory': 'history',
             'query CommitNodes': 'nodes',
+            'query PullRequests': 'pull_requests',
+            'query Issues': 'issues',
         }
         found: list[str] = []
         for received in server.received:
