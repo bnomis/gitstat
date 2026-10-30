@@ -62,7 +62,7 @@ PALETTE: dict[typing.Literal['dark', 'light'], Theme] = {
 @dataclasses.dataclass(frozen=True, slots=True)
 class Figure:
     key: str
-    group: typing.Literal['activity', 'delivery', 'flow']
+    group: typing.Literal['activity', 'delivery', 'flow', 'popularity']
     title: str
     description: str
     data: list[dict[str, object]]
@@ -83,7 +83,7 @@ class Trace:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Chart:
     key: str
-    group: typing.Literal['activity', 'delivery', 'flow']
+    group: typing.Literal['activity', 'delivery', 'flow', 'popularity']
     title: str
     description: str
     unit: str
@@ -253,6 +253,40 @@ CHARTS = (
             Trace('time_to_restore_p90', 'p90', 'line', 2),
         ),
     ),
+    Chart(
+        'popularity-stars-added',
+        'popularity',
+        'Stars per period',
+        'Bars of the stars given in each period.',
+        'stars',
+        (Trace('stars_added', 'Stars', 'bar', 1),),
+    ),
+    Chart(
+        'popularity-stars-total',
+        'popularity',
+        'Stars over time',
+        'A line of the stars that exist now, counted by when they were given, up to the end of '
+        'each period.',
+        'stars',
+        (Trace('stars_total', 'Stars', 'line', 1),),
+    ),
+    Chart(
+        'popularity-forks-added',
+        'popularity',
+        'Forks per period',
+        'Bars of the forks made in each period.',
+        'forks',
+        (Trace('forks_added', 'Forks', 'bar', 1),),
+    ),
+    Chart(
+        'popularity-forks-total',
+        'popularity',
+        'Forks over time',
+        'A line of the forks that exist now, counted by when they were made, up to the end of '
+        'each period.',
+        'forks',
+        (Trace('forks_total', 'Forks', 'line', 1),),
+    ),
 )
 
 
@@ -356,6 +390,7 @@ def build_figures(result: wambatic.stats.base.StatsResult) -> list[Figure]:
         'activity': wambatic.reports.rows.has_activity(result),
         'delivery': wambatic.reports.rows.has_delivery(result),
         'flow': wambatic.reports.rows.has_flow(result),
+        'popularity': wambatic.reports.rows.has_popularity(result),
     }
     series = wambatic.reports.rows.total_series(result)
     labels = [bucket.label for bucket in wambatic.reports.rows.bucket_list(result)]
@@ -418,30 +453,43 @@ def bars_layout(unit: str, rows: int) -> dict[str, object]:
     }
 
 
-def commit_bars(
-    key: str, title: str, description: str, names: list[str], commits: list[float]
+def bars(
+    key: str,
+    group: typing.Literal['activity', 'popularity'],
+    title: str,
+    description: str,
+    name: str,
+    unit: str,
+    labels: list[str],
+    values: list[float],
 ) -> Figure:
     trace: dict[str, object] = {
         'type': 'bar',
         'orientation': 'h',
-        'name': 'Commits',
-        'x': [int(value) for value in commits],
-        'y': names,
+        'name': name,
+        'x': values,
+        'y': labels,
         'meta': {'slot': 1},
     }
-    return Figure(key, 'activity', title, description, [trace], bars_layout('commits', len(names)))
+    return Figure(key, group, title, description, [trace], bars_layout(unit, len(labels)))
 
 
-def build_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
-    """The whole-range charts of a TOTAL result, as horizontal bars of commits: the top
-    contributors, then each breakdown the result holds, with the tables' rows. `[]` without
-    activity series. Raises ValueError for any other granularity."""
-    if total.request.granularity is not wambatic.stats.base.Granularity.TOTAL:
-        raise ValueError(
-            f'build_range_figures needs a TOTAL result, not {total.request.granularity}'
-        )
-    if not wambatic.reports.rows.has_activity(total):
-        return []
+def commit_bars(
+    key: str, title: str, description: str, names: list[str], commits: list[float]
+) -> Figure:
+    return bars(
+        key,
+        'activity',
+        title,
+        description,
+        'Commits',
+        'commits',
+        names,
+        [int(value) for value in commits],
+    )
+
+
+def activity_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
     figures: list[Figure] = []
     top = wambatic.reports.rows.top_contributors(
         total, wambatic.reports.rows.TOP_CONTRIBUTORS_SHOWN
@@ -471,6 +519,39 @@ def build_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
                     [row.commits for row in rows],
                 )
             )
+    return figures
+
+
+def languages_figure(total: wambatic.stats.base.StatsResult) -> Figure | None:
+    languages = wambatic.reports.rows.languages_rows(
+        total, wambatic.reports.rows.TOP_LANGUAGES_SHOWN
+    )
+    if languages is None:
+        return None
+    return bars(
+        'popularity-languages',
+        'popularity',
+        'Languages',
+        'Horizontal bars of the share of each language in the code, the largest at the top.',
+        'Share',
+        PERCENT,
+        [row.language for row in languages.rows],
+        [row.share * PERCENT_FACTOR for row in languages.rows],
+    )
+
+
+def build_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
+    """The whole-range charts of a TOTAL result: horizontal bars of commits (the top
+    contributors, then each breakdown the result holds, with the tables' rows) when it has
+    activity series, then the languages' shares when its languages table is not empty. Raises
+    ValueError for any other granularity."""
+    if total.request.granularity is not wambatic.stats.base.Granularity.TOTAL:
+        raise ValueError(
+            f'build_range_figures needs a TOTAL result, not {total.request.granularity}'
+        )
+    figures = activity_range_figures(total) if wambatic.reports.rows.has_activity(total) else []
+    if (languages := languages_figure(total)) is not None:
+        figures.append(languages)
     return figures
 
 

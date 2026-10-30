@@ -104,6 +104,22 @@ def test_a_delivery_report_draws_every_chart_with_no_request_or_error(
     assert opened.problems == []
 
 
+def test_a_popularity_report_draws_every_chart_with_no_request_or_error(
+    popularity_report: wambatic.reports.html.HtmlReport,
+    open_report: typing.Callable[..., Opened],
+) -> None:
+    opened = open_report(report=popularity_report)
+    expected = keys(popularity_report)
+    assert {'popularity-stars-added', 'popularity-languages'} <= set(expected)
+    for key in expected:
+        opened.page.wait_for_selector(f'#{key} .main-svg')
+    for granularity in wambatic.reports.html.PERIODS:
+        opened.page.check(f'input[name=granularity][value={granularity}]')
+        opened.page.wait_for_selector('#popularity-stars-total .main-svg')
+    assert opened.requests == []
+    assert opened.problems == []
+
+
 def visible_tables(page: playwright.sync_api.Page) -> set[str]:
     found = page.eval_on_selector_all(
         'table.period',

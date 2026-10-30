@@ -9,6 +9,7 @@ import pytest
 import tests.fixtures.reports
 import tests.fixtures.stats as fixture
 import wambatic.reports.figures
+import wambatic.reports.rows
 import wambatic.stats.base
 
 Granularity = wambatic.stats.base.Granularity
@@ -510,3 +511,74 @@ def test_a_result_without_delivery_series_has_no_delivery_figure(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     assert not any(f.group == 'delivery' for f in delivery_figures(org_result))
+
+
+POPULARITY_ORDER = [
+    'popularity-stars-added',
+    'popularity-stars-total',
+    'popularity-forks-added',
+    'popularity-forks-total',
+]
+
+
+def test_the_popularity_figures_come_in_the_specs_order_and_belong_to_popularity(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = wambatic.reports.figures.build_figures(popularity_result)
+    assert [f.key for f in figures] == POPULARITY_ORDER
+    assert {f.group for f in figures} == {'popularity'}
+    assert all(f.description.endswith('.') for f in figures)
+
+
+def test_the_popularity_traces_equal_the_hand_worked_months(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = {f.key: f for f in wambatic.reports.figures.build_figures(popularity_result)}
+    months = sorted(fixture.ORG_POPULARITY_BY_MONTH_UTC)
+    for key, metric, kind in (
+        ('popularity-stars-added', 'stars_added', 'bar'),
+        ('popularity-stars-total', 'stars_total', 'scatter'),
+        ('popularity-forks-added', 'forks_added', 'bar'),
+        ('popularity-forks-total', 'forks_total', 'scatter'),
+    ):
+        (trace,) = figures[key].data
+        assert trace['type'] == kind
+        assert trace['x'] == months
+        assert trace['y'] == [int(fixture.ORG_POPULARITY_BY_MONTH_UTC[m][metric]) for m in months]
+
+
+def test_every_popularity_figure_is_valid_plotly_plain_json_and_colourless(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    for figure in wambatic.reports.figures.build_figures(popularity_result):
+        plotly.graph_objects.Figure(data=figure.data, layout=figure.layout)
+        assert json.loads(json.dumps(figure.data)) == figure.data
+        assert not HEX.search(json.dumps([figure.data, figure.layout]))
+
+
+def test_the_languages_figure_plots_each_share_in_per_cent_first_row_at_the_top(
+    popularity_total: wambatic.stats.base.StatsResult,
+) -> None:
+    (figure,) = wambatic.reports.figures.build_range_figures(popularity_total)
+    assert (figure.key, figure.group) == ('popularity-languages', 'popularity')
+    (trace,) = figure.data
+    assert trace['orientation'] == 'h'
+    assert trace['y'] == [row['language'] for row in fixture.ORG_LANGUAGES_TABLE]
+    assert trace['x'] == [row['share'] * 100 for row in fixture.ORG_LANGUAGES_TABLE]
+    assert trace['y'][-1] == 'Other'
+    assert figure.layout['yaxis']['autorange'] == 'reversed'  # type: ignore[index]
+    plotly.graph_objects.Figure(data=figure.data, layout=figure.layout)
+
+
+def test_the_languages_figure_shows_only_the_top_rows_and_is_absent_when_the_table_is_empty(
+    popularity_total: wambatic.stats.base.StatsResult,
+) -> None:
+    many = [{'language': f'L{n}', 'bytes': 1, 'share': 0.05} for n in range(15)]
+    figure = wambatic.reports.figures.build_range_figures(
+        dataclasses.replace(popularity_total, tables={**popularity_total.tables, 'languages': many})
+    )[0]
+    assert len(figure.data[0]['y']) == wambatic.reports.rows.TOP_LANGUAGES_SHOWN  # type: ignore[arg-type]
+    empty = dataclasses.replace(
+        popularity_total, tables={**popularity_total.tables, 'languages': []}
+    )
+    assert wambatic.reports.figures.build_range_figures(empty) == []

@@ -300,6 +300,20 @@ def org_total_result(
 
 
 @pytest.fixture
+def popularity_total(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org as one bucket with the popularity group alone."""
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.TOTAL,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+        groups=frozenset({'popularity'}),
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+@pytest.fixture
 def org_day_result(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.stats.base.StatsResult:
     """The stats fixture's org by day."""
     request = wambatic.stats.base.StatsRequest(
@@ -352,6 +366,18 @@ def delivery_report(
         stats_fetcher,
         tests.fixtures.stats.ORG,
         groups=frozenset({'activity', 'delivery', 'flow'}),
+    )
+
+
+@pytest.fixture
+def popularity_report(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.reports.html.HtmlReport:
+    """The stats fixture's org with the activity and popularity groups, shown by month."""
+    return make_report(
+        stats_fetcher,
+        tests.fixtures.stats.ORG,
+        groups=frozenset({'activity', 'popularity'}),
     )
 
 
