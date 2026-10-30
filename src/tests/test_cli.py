@@ -1,11 +1,13 @@
 import asyncio
 import dataclasses
 import datetime
+import errno
 import io
 import json
 import os
 import pathlib
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -13,9 +15,12 @@ import tomllib
 import typing
 
 import cappa
+import fastapi
+import httpx
 import loguru
 import pytest
 import rich.console
+import uvicorn
 
 import tests.conftest
 import tests.fixtures.fetch.responses
@@ -1417,3 +1422,187 @@ def test_a_json_delivery_report_has_the_delivery_series(
     assert metrics['workflow_success_rate']['points'][0]['value'] == 0.5
     assert metrics['release_count']['points'][0]['value'] == 1
     assert 'activity' not in data['request']['groups']
+
+
+# serve
+
+
+@dataclasses.dataclass
+class Served:
+    """What `serve` did, with `socket.create_server` and `uvicorn.Server.run` replaced."""
+
+    status: int
+    binds: list[tuple[object, ...]]
+    runs: list[uvicorn.Server]
+    sockets: list[socket.socket]
+    host_check_off: list[bool]
+    logs: list[str]
+
+
+def serve_main(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    argv: list[str],
+    *,
+    cache: pathlib.Path | None = None,
+    run: typing.Callable[[uvicorn.Server], None] | None = None,
+    bind_error: OSError | None = None,
+) -> Served:
+    config_for(tmp_path, monkeypatch, cache or tmp_path / 'serve' / 'cache.sqlite3')
+    binds: list[tuple[object, ...]] = []
+    runs: list[uvicorn.Server] = []
+    sockets: list[socket.socket] = []
+    host_check_off: list[bool] = []
+    real_create = socket.create_server
+
+    def create_server(address: tuple[str, int], **kwargs: object) -> socket.socket:
+        binds.append((address, kwargs))
+        if bind_error is not None:
+            raise bind_error
+        sockets.append(real_create(('127.0.0.1', 0)))
+        return sockets[-1]
+
+    async def without_host_header(app: fastapi.FastAPI) -> bool:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://127.0.0.1:8000') as c:
+            return (await c.get('/', headers={'Host': 'evil.example'})).status_code == 200
+
+    def fake_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        runs.append(self)
+        host_check_off.append(
+            asyncio.run(without_host_header(typing.cast(fastapi.FastAPI, self.config.app)))
+        )
+        if run is not None:
+            run(self)
+
+    monkeypatch.setattr(socket, 'create_server', create_server)
+    monkeypatch.setattr(uvicorn.Server, 'run', fake_run)
+    status = wambatic.cli.main(['serve', *argv])
+    return Served(
+        status, binds, runs, sockets, host_check_off, capsys.readouterr().err.splitlines()
+    )
+
+
+def test_serve_binds_loopback_and_runs_uvicorn_with_the_host_check_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    served = serve_main(monkeypatch, capsys, tmp_path, ['org:octo-org', '--port', '8123'])
+    assert served.status == 0
+    assert served.binds[0][0] == ('127.0.0.1', 8123)
+    (server,) = served.runs
+    assert (server.config.loop, server.config.lifespan, server.config.log_config) == (
+        'asyncio',
+        'on',
+        None,
+    )
+    assert (server.config.access_log, server.config.log_level) == (False, 'warning')
+    assert served.host_check_off == [False]
+    assert served.sockets[0].fileno() == -1
+    assert any('Serving on http://127.0.0.1:' in line for line in served.logs)
+    assert any('/report?target=org%3Aocto-org' in line for line in served.logs)
+
+
+def test_serve_refuses_a_public_host_before_binding(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    served = serve_main(monkeypatch, capsys, tmp_path, ['--host', '0.0.0.0'])
+    assert served.status == 2
+    assert served.binds == []
+    assert served.runs == []
+    assert any('--allow-remote' in line for line in served.logs)
+
+
+def test_serve_allow_remote_turns_the_host_check_off_and_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    served = serve_main(monkeypatch, capsys, tmp_path, ['--host', '0.0.0.0', '--allow-remote'])
+    assert served.status == 0
+    assert served.binds[0][0] == ('0.0.0.0', 8000)
+    assert served.host_check_off == [True]
+    assert any(line.startswith('WARNING') and '0.0.0.0' in line for line in served.logs)
+
+
+@pytest.mark.parametrize(
+    'argv', [['--port', '0'], ['--port', '70000'], ['a/b/c'], ['--max-age', '1x']]
+)
+def test_serve_usage_errors_return_2_before_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    argv: list[str],
+) -> None:
+    served = serve_main(monkeypatch, capsys, tmp_path, argv)
+    assert served.status == 2
+    assert served.binds == []
+    assert served.runs == []
+
+
+def test_serve_with_a_cache_of_another_version_returns_1_before_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    set_schema_version(stats_cache_path, '0')
+    served = serve_main(monkeypatch, capsys, tmp_path, [], cache=stats_cache_path)
+    assert served.status == 1
+    assert served.binds == []
+    served = serve_main(
+        monkeypatch, capsys, tmp_path, ['--ignore-cache-version'], cache=stats_cache_path
+    )
+    assert served.status == 0
+
+
+def test_serve_with_a_busy_port_returns_1_with_the_reason(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    error = OSError(errno.EADDRINUSE, os.strerror(errno.EADDRINUSE))
+    served = serve_main(monkeypatch, capsys, tmp_path, ['--port', '8123'], bind_error=error)
+    assert served.status == 1
+    assert served.runs == []
+    assert any(
+        'cannot listen on 127.0.0.1:8123: Address already in use' in line for line in served.logs
+    )
+
+
+def test_serve_ctrl_c_returns_130_and_closes_the_socket_and_the_cache(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    closed: list[bool] = []
+    original = wambatic.fetch.cache.Cache.close
+
+    def close(self: wambatic.fetch.cache.Cache) -> None:
+        closed.append(True)
+        original(self)
+
+    monkeypatch.setattr(wambatic.fetch.cache.Cache, 'close', close)
+
+    def interrupt(server: uvicorn.Server) -> None:
+        raise KeyboardInterrupt
+
+    served = serve_main(monkeypatch, capsys, tmp_path, [], run=interrupt)
+    assert served.status == 130
+    assert served.sockets[0].fileno() == -1
+    assert closed == [True]
+
+
+def test_serve_help_lists_every_flag_and_the_root_help_lists_serve(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert wambatic.cli.main(['serve', '--help']) == 0
+    out = capsys.readouterr().out
+    for flag in ('--host', '--port', '--allow-remote', '--max-age', '--ignore-cache-version'):
+        assert flag in out
+    assert wambatic.cli.main(['--help']) == 0
+    assert 'serve' in capsys.readouterr().out
+
+
+def test_serve_overrides_are_only_the_flags_given() -> None:
+    assert wambatic.cli.serve_overrides(wambatic.cli.Serve()) == {}
+    assert wambatic.cli.serve_overrides(
+        wambatic.cli.Serve(host='::1', port=9, allow_remote=True, max_age='1d')
+    ) == {
+        'report': {'web_host': '::1', 'web_port': 9, 'allow_remote': True},
+        'fetch': {'max_age': '1d'},
+    }

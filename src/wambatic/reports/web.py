@@ -6,7 +6,9 @@ import collections.abc
 import contextlib
 import dataclasses
 import datetime
+import ipaddress
 import secrets
+import socket
 import string
 import time
 import typing
@@ -16,6 +18,7 @@ import fastapi
 import fastapi.exceptions
 import fastapi.responses
 import loguru
+import uvicorn
 
 import wambatic.fetch.base
 import wambatic.fetch.cache
@@ -489,3 +492,82 @@ def make_app(
         return fastapi.responses.JSONResponse(progress_json(found))
 
     return app
+
+
+def is_loopback(host: str) -> bool:
+    """Exactly `localhost`, or an IP address (IPv6 in brackets or not) that is loopback; no name
+    is resolved."""
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host.strip('[]')).is_loopback
+    except ValueError:
+        return False
+
+
+def check_bind(host: str, allow_remote: bool) -> None:
+    """Refuse a host that other machines can reach unless remote access was asked for."""
+    if is_loopback(host):
+        return
+    if not allow_remote:
+        raise wambatic.reports.errors.UsageError(
+            f'{host} is not a loopback address, so anyone who can reach it would act with your '
+            'GitHub token; pass --allow-remote (or set report.allow_remote) to allow that'
+        )
+    loguru.logger.warning(
+        f'Listening on {host}: anyone who can reach this port acts with your GitHub token'
+    )
+
+
+def listen(host: str, port: int) -> socket.socket:
+    """The listening socket, bound here rather than by uvicorn, which logs a bind failure and
+    exits the process itself."""
+    bare = host.strip('[]')
+    family = socket.AF_INET6 if ':' in bare else socket.AF_INET
+    try:
+        return socket.create_server((bare, port), family=family)
+    except OSError as e:
+        raise wambatic.reports.errors.ServeError(
+            f'cannot listen on {host}:{port}: {e.strerror or e}'
+        ) from e
+
+
+def serve(
+    settings: wambatic.settings.Settings, *, default_target: str | None, ignore_cache_version: bool
+) -> None:
+    """Open the cache, bind `report.web_host:report.web_port`, then run the app on uvicorn until
+    Ctrl-C, which ends in the KeyboardInterrupt uvicorn raises again after a graceful stop."""
+    report = settings.report
+    check_bind(report.web_host, report.allow_remote)
+    if not 1 <= report.web_port <= 65535:
+        raise wambatic.reports.errors.UsageError('the port must be from 1 to 65535')
+    if default_target is not None:
+        wambatic.reports.service.parse_target(default_target)
+    cache = wambatic.fetch.cache.Cache.open(
+        settings.fetch.cache_path, ignore_version=ignore_cache_version
+    )
+    sock: socket.socket | None = None
+    try:
+        sock = listen(report.web_host, report.web_port)
+        app = make_app(
+            settings, cache, default_target=default_target, check_host=not report.allow_remote
+        )
+        shown = f'[{report.web_host}]' if ':' in report.web_host else report.web_host
+        base = f'http://{shown}:{sock.getsockname()[1]}'
+        loguru.logger.info(f'Serving on {base}/ (Ctrl-C to stop)')
+        if default_target is not None:
+            quoted = urllib.parse.quote(default_target, safe='')
+            loguru.logger.info(f'Report of {default_target}: {base}/report?target={quoted}')
+        config = uvicorn.Config(
+            app,
+            loop='asyncio',
+            lifespan='on',
+            log_config=None,
+            access_log=False,
+            log_level='warning',
+        )
+        uvicorn.Server(config).run(sockets=[sock])
+    finally:
+        if sock is not None:
+            sock.close()
+        cache.close()

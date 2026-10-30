@@ -24,6 +24,7 @@ import wambatic.reports.errors
 import wambatic.reports.html
 import wambatic.reports.service
 import wambatic.reports.terminal
+import wambatic.reports.web
 import wambatic.settings
 import wambatic.stats
 import wambatic.stats.base
@@ -87,6 +88,37 @@ class Report:
     ] = False
 
 
+@cappa.command(name='serve', help='Run the web app, on this machine only unless told otherwise.')
+@dataclasses.dataclass
+class Serve:
+    target: typing.Annotated[
+        str | None,
+        cappa.Arg(help='Fills the form and names the first report URL, like the report target'),
+    ] = None
+    host: typing.Annotated[
+        str | None,
+        cappa.Arg(long=True, help='Address to listen on (default: report.web_host, 127.0.0.1)'),
+    ] = None
+    port: typing.Annotated[
+        int | None, cappa.Arg(long=True, help='Port to listen on (default: report.web_port, 8000)')
+    ] = None
+    allow_remote: typing.Annotated[
+        bool,
+        cappa.Arg(
+            long=True,
+            help='Listen on an address other than loopback; anyone who can reach it'
+            ' acts with your GitHub token',
+        ),
+    ] = False
+    max_age: typing.Annotated[
+        str | None,
+        cappa.Arg(long=True, help='Skip the network if synced more recently, e.g. 30m or 1d'),
+    ] = None
+    ignore_cache_version: typing.Annotated[
+        bool, cappa.Arg(long=True, help='Read a cache written by a different version')
+    ] = False
+
+
 @cappa.command(name='cache', help='Show or remove the local cache.')
 @dataclasses.dataclass
 class CacheCommand:
@@ -99,7 +131,7 @@ class CacheCommand:
 @cappa.command(name='wambatic', help='Statistics from github.com for a user, an org or a repo.')
 @dataclasses.dataclass
 class Wambatic:
-    command: cappa.Subcommands[Report | CacheCommand]
+    command: cappa.Subcommands[Report | Serve | CacheCommand]
     verbose: typing.Annotated[
         bool, cappa.Arg(short='-v', long=True, help='Log debugging detail')
     ] = False
@@ -117,6 +149,20 @@ def overrides(report: Report) -> dict[str, object]:
         result.setdefault('fetch', {})['max_age'] = report.max_age
     if report.tz is not None:
         result.setdefault('stats', {})['timezone'] = report.tz
+    return typing.cast(dict[str, object], result)
+
+
+def serve_overrides(serve: Serve) -> dict[str, object]:
+    """The `load_settings` overrides for the flags of `serve`, only where given."""
+    result: dict[str, dict[str, object]] = {}
+    if serve.host is not None:
+        result.setdefault('report', {})['web_host'] = serve.host
+    if serve.port is not None:
+        result.setdefault('report', {})['web_port'] = serve.port
+    if serve.allow_remote:
+        result.setdefault('report', {})['allow_remote'] = True
+    if serve.max_age is not None:
+        result.setdefault('fetch', {})['max_age'] = serve.max_age
     return typing.cast(dict[str, object], result)
 
 
@@ -303,6 +349,12 @@ def execute(root: Wambatic) -> None:
     if isinstance(command, Report):
         settings = wambatic.settings.load_settings(None, overrides(command))
         asyncio.run(run_report(command, settings, console, sys.stdout))
+    elif isinstance(command, Serve):
+        wambatic.reports.web.serve(
+            wambatic.settings.load_settings(None, serve_overrides(command)),
+            default_target=command.target,
+            ignore_cache_version=command.ignore_cache_version,
+        )
     else:
         run_cache(command, wambatic.settings.load_settings(None, {}), console)
 
@@ -327,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         wambatic.fetch.errors.FetchError,
         wambatic.reports.errors.OutputError,
+        wambatic.reports.errors.ServeError,
         wambatic.stats.StatsError,
     ) as e:
         loguru.logger.error(wambatic.reports.service.redact_environment_token(str(e)))

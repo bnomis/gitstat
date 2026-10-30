@@ -2,6 +2,7 @@ import asyncio
 import collections.abc
 import contextlib
 import datetime
+import ipaddress
 import json
 import re
 import subprocess
@@ -10,6 +11,9 @@ import typing
 import zoneinfo
 
 import httpx
+import hypothesis
+import hypothesis.strategies as st
+import loguru
 import pytest
 
 import tests.conftest
@@ -601,3 +605,44 @@ def test_a_failed_job_is_reported_once_then_a_new_request_starts_a_new_job(
                 )
 
     assert asyncio.run(scenario()) == (404, 'text/html; charset=utf-8', 404, True)
+
+
+# Loopback
+
+
+@pytest.mark.parametrize('host', ['localhost', '127.0.0.1', '127.1.2.3', '::1', '[::1]'])
+def test_loopback_hosts(host: str) -> None:
+    assert wambatic.reports.web.is_loopback(host)
+
+
+@pytest.mark.parametrize(
+    'host',
+    ['0.0.0.0', '::', '[::]', '192.168.1.2', 'localhost.example', 'example.com', '', 'LOCALHOST'],
+)
+def test_other_hosts_are_not_loopback(host: str) -> None:
+    assert not wambatic.reports.web.is_loopback(host)
+
+
+@hypothesis.settings(max_examples=20, deadline=10000)
+@hypothesis.given(address=st.ip_addresses(v=4))
+def test_is_loopback_agrees_with_ipaddress_for_ipv4(address: ipaddress.IPv4Address) -> None:
+    assert wambatic.reports.web.is_loopback(str(address)) is address.is_loopback
+
+
+def test_check_bind_refuses_a_public_host_unless_allowed_and_then_warns() -> None:
+    wambatic.reports.web.check_bind('127.0.0.1', False)
+    with pytest.raises(wambatic.reports.errors.UsageError, match='--allow-remote'):
+        wambatic.reports.web.check_bind('0.0.0.0', False)
+    messages: list[str] = []
+    sink = loguru.logger.add(
+        lambda message: messages.append(
+            f'{message.record["level"].name} {message.record["message"]}'
+        )
+    )
+    try:
+        wambatic.reports.web.check_bind('0.0.0.0', True)
+        wambatic.reports.web.check_bind('127.0.0.1', True)
+    finally:
+        loguru.logger.remove(sink)
+    assert len(messages) == 1
+    assert messages[0].startswith('WARNING Listening on 0.0.0.0')
