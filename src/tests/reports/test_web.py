@@ -56,9 +56,10 @@ def test_a_second_start_for_a_running_key_returns_the_same_job() -> None:
         first = jobs.start(KEY, run)
         await asyncio.sleep(0)
         assert jobs.start(KEY, run) is first
-        assert first.state == 'listing'
+        states = [first.state]
         first.progress.repos_listed = 3
-        assert first.state == 'syncing'
+        states.append(first.state)
+        assert states == ['listing', 'syncing']
         release.set()
         await jobs.close()
 
