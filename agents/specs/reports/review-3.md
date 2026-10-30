@@ -3,6 +3,7 @@
 **Date:** 2026-10-30
 **Spec:** `agents/specs/reports/spec.md` (1.5 to 1.6), with amendments to `agents/specs/fetch-and-cache/spec.md` (1.6 to 1.7), `agents/specs/system/spec.md` (1.5 to 1.6) and `agents/specs/implementation-order.md` (1.7 to 1.8)
 **Task list written against it:** `agents/tasks/reports/tasks-3.md`
+**Review page:** https://claude.ai/artifact/BwEoZSK7YRDEMqKh96n4EL (approve or flag each choice there; answers are copied into Answers below)
 
 ## What is being reviewed and how
 
