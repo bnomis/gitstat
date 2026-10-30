@@ -306,12 +306,28 @@ def test_response_date_converts_an_offset_to_utc() -> None:
 
 # REST
 
+HTTP_DATE = 'Thu, 29 Oct 2026 12:00:00 GMT'
+HTTP_DATE_PARSED = datetime.datetime(2026, 10, 29, 12, 0, tzinfo=datetime.UTC)
+
+
+def test_rest_304_carries_the_date_of_its_own_response(
+    make_client: tests.conftest.MakeClient,
+) -> None:
+    result = run_rest({REPO: [Canned(304, headers={'Date': HTTP_DATE})]}, make_client)
+    assert result.date == HTTP_DATE_PARSED
+
+
+@pytest.mark.parametrize('headers', [{}, {'Date': ''}, {'Date': 'not a date'}])
+def test_header_date_is_none_without_a_parseable_date(headers: dict[str, str]) -> None:
+    response = wambatic.fetch.client.Response(200, headers, None, None)  # type: ignore[arg-type]
+    assert wambatic.fetch.client.header_date(response) is None
+
 
 def test_rest_200_returns_data_and_etag(make_client: tests.conftest.MakeClient) -> None:
-    headers = {**responses.RATE_HEADERS, 'ETag': responses.REPO_ETAG}
+    headers = {**responses.RATE_HEADERS, 'ETag': responses.REPO_ETAG, 'Date': HTTP_DATE}
     result = run_rest({REPO: [Canned(200, responses.REPO, headers)]}, make_client)
     assert result == wambatic.fetch.client.RestResponse(
-        200, responses.REPO, responses.REPO_ETAG, None
+        200, responses.REPO, responses.REPO_ETAG, None, HTTP_DATE_PARSED
     )
 
 
@@ -325,7 +341,10 @@ def test_rest_304_sends_if_none_match(
                 return result, server.received[0]
 
     result, received = asyncio.run(scenario())
-    assert result == wambatic.fetch.client.RestResponse(304, None, responses.REPO_ETAG, None)
+    assert result.status == 304
+    assert (result.data, result.etag, result.next_url) == (None, responses.REPO_ETAG, None)
+    assert result.date is not None
+    assert result.date.tzinfo is not None
     assert received.headers['If-None-Match'] == responses.REPO_ETAG
     assert sleeps == []
 

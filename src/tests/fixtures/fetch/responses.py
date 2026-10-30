@@ -11,6 +11,13 @@ The step 6 stand-ins to re-record are the listing probe fields of OWNER_REPOSITO
 REPOSITORY_OK, PULL_REQUESTS_OK and ISSUES_OK. The recording should confirm that an automatic
 reviewer such as Copilot has the `Bot` type, and that GraphQL gives a bot's login without the
 `[bot]` suffix.
+
+The step 8 stand-ins to re-record are the release probe of the listing nodes, RELEASES_OK, the
+labels and first commits of PULL_REQUESTS_OK, WORKFLOW_RUNS_OK and WORKFLOW_RUN_OK. Their shapes
+were checked against GitHub's published schemas (`@octokit/graphql-schema` 15.26.1 and
+`@octokit/openapi` 24.0.0), which describe a run's `path` in two forms (`.github/workflows/ci.yml`
+and `owner/repo/.github/workflows/ci.yml@main`); the recording should confirm which one the API
+gives and that `name`, `status` and `run_started_at` are present on every run.
 """
 
 import datetime
@@ -45,6 +52,8 @@ def repo_node(
     is_archived: bool = False,
     pull_requests_updated_at: datetime.datetime | None = None,
     issues_updated_at: datetime.datetime | None = None,
+    releases_count: int = 0,
+    releases_updated_at: datetime.datetime | None = None,
 ) -> dict[str, object]:
     """A repository node as `OWNER_REPOSITORIES` and `REPOSITORY` select it."""
     return {
@@ -56,6 +65,7 @@ def repo_node(
         'defaultBranchRef': None if head is None else {'name': branch, 'target': {'oid': head}},
         'pullRequests': probe_connection(pull_requests_updated_at),
         'issues': probe_connection(issues_updated_at),
+        'releases': {**probe_connection(releases_updated_at), 'totalCount': releases_count},
     }
 
 
@@ -113,6 +123,8 @@ def pull_request_node(
     login: str | None = 'octocat',
     bot: bool = False,
     reviews: list[dict[str, object]] | None = None,
+    labels: tuple[str, ...] = (),
+    first_commit_at: datetime.datetime | None = None,
 ) -> dict[str, object]:
     """A node of `Repository.pullRequests` as `PULL_REQUESTS` selects it."""
     return {
@@ -126,6 +138,14 @@ def pull_request_node(
         'deletions': deletions,
         'author': actor(login, bot=bot),
         'reviews': {'nodes': reviews or []},
+        # https://docs.github.com/en/graphql/reference/objects#label
+        'labels': {'nodes': [{'name': name} for name in labels]},
+        # https://docs.github.com/en/graphql/reference/objects#pullrequestcommit
+        'commits': {
+            'nodes': []
+            if first_commit_at is None
+            else [{'commit': {'authoredDate': iso(first_commit_at)}}]
+        },
     }
 
 
@@ -177,6 +197,70 @@ def connection_page(
             'rateLimit': RATE_LIMIT,
         }
     }
+
+
+# https://docs.github.com/en/graphql/reference/objects#release
+def release_node(
+    tag_name: str,
+    *,
+    created_at: datetime.datetime = NOW,
+    published_at: datetime.datetime | None = NOW,
+    is_draft: bool = False,
+    is_prerelease: bool = False,
+) -> dict[str, object]:
+    """A node of `Repository.releases` as `RELEASES` selects it."""
+    return {
+        'tagName': tag_name,
+        'createdAt': iso(created_at),
+        'publishedAt': None if published_at is None else iso(published_at),
+        'isDraft': is_draft,
+        'isPrerelease': is_prerelease,
+    }
+
+
+# https://docs.github.com/en/graphql/reference/objects#releaseconnection
+def releases_page(nodes: list[dict[str, object]], has_next: bool, cursor: str) -> dict[str, object]:
+    return connection_page('releases', nodes, has_next, cursor)
+
+
+# https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run
+def workflow_run_object(
+    run_id: int,
+    *,
+    path: str = '.github/workflows/ci.yml',
+    name: str | None = 'CI',
+    event: str = 'push',
+    head_branch: str | None = 'main',
+    status: str | None = 'completed',
+    conclusion: str | None = 'success',
+    created_at: datetime.datetime = NOW,
+    updated_at: datetime.datetime | None = None,
+    run_started_at: datetime.datetime | None = NOW,
+    run_attempt: int = 1,
+) -> dict[str, object]:
+    """A run of the REST list, trimmed to the fields the fetcher reads."""
+    return {
+        'id': run_id,
+        'name': name,
+        'path': path,
+        'event': event,
+        'head_branch': head_branch,
+        'status': status,
+        'conclusion': conclusion,
+        'created_at': iso(created_at),
+        'updated_at': iso(
+            created_at + datetime.timedelta(minutes=5) if updated_at is None else updated_at
+        ),
+        'run_started_at': None if run_started_at is None else iso(run_started_at),
+        'run_attempt': run_attempt,
+    }
+
+
+# https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository
+def workflow_runs_response(
+    runs: list[dict[str, object]], total: int | None = None
+) -> dict[str, object]:
+    return {'total_count': len(runs) if total is None else total, 'workflow_runs': runs}
 
 
 def history_node(
@@ -256,6 +340,7 @@ HELLO_NEW = 'b' * 40
 HELLO_PUSHED_AT = datetime.datetime(2026, 10, 20, 9, 0, tzinfo=datetime.UTC)
 HELLO_UPDATED_AT = datetime.datetime(2026, 10, 21, 9, 0, tzinfo=datetime.UTC)
 HELLO_PULL_REQUESTS_UPDATED_AT = datetime.datetime(2026, 10, 19, 9, 0, tzinfo=datetime.UTC)
+HELLO_RELEASED_AT = datetime.datetime(2026, 10, 18, 9, 0, tzinfo=datetime.UTC)
 HELLO_NODE = repo_node(
     'octocat/Hello-World',
     head=HELLO_NEW,
@@ -264,6 +349,8 @@ HELLO_NODE = repo_node(
     branch='master',
     pull_requests_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
     issues_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+    releases_count=4,
+    releases_updated_at=HELLO_RELEASED_AT,
 )
 SPOON_NODE = repo_node(
     'octocat/Spoon-Knife',
@@ -291,6 +378,8 @@ PULL_REQUESTS_OK = pull_requests_page(
             updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
             merged_at=HELLO_PULL_REQUESTS_UPDATED_AT,
             closed_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+            labels=('bug', 'Hotfix'),
+            first_commit_at=HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=3),
             reviews=[
                 review_node(HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=1), 'hubot')
             ],
@@ -312,6 +401,54 @@ ISSUES_OK = issues_page(
     ],
     False,
     'Y3Vyc29yOjI=',
+)
+RELEASES_OK = releases_page(
+    [
+        release_node('v1.1.0', created_at=HELLO_RELEASED_AT, published_at=HELLO_RELEASED_AT),
+        release_node(
+            'v1.1.0-rc.1',
+            created_at=HELLO_RELEASED_AT - datetime.timedelta(days=3),
+            published_at=HELLO_RELEASED_AT - datetime.timedelta(days=2),
+            is_prerelease=True,
+        ),
+        release_node(
+            'v1.2.0',
+            created_at=HELLO_RELEASED_AT + datetime.timedelta(days=1),
+            published_at=None,
+            is_draft=True,
+        ),
+        release_node(
+            'v1.0.0', created_at=HELLO_RELEASED_AT - datetime.timedelta(days=9), published_at=None
+        ),
+    ],
+    False,
+    'Y3Vyc29yOjQ=',
+)
+WORKFLOW_RUNS_OK = workflow_runs_response(
+    [
+        workflow_run_object(103, status='in_progress', conclusion=None, created_at=HELLO_PUSHED_AT),
+        workflow_run_object(
+            102,
+            conclusion='failure',
+            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=1),
+        ),
+        workflow_run_object(
+            101,
+            path='.github/workflows/deploy.yml',
+            name='Deploy',
+            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=2),
+        ),
+        workflow_run_object(
+            100,
+            status='queued',
+            conclusion=None,
+            created_at=HELLO_PUSHED_AT - datetime.timedelta(days=3),
+            run_started_at=None,
+        ),
+    ]
+)
+WORKFLOW_RUN_OK = workflow_run_object(
+    103, created_at=HELLO_PUSHED_AT, updated_at=HELLO_PUSHED_AT + datetime.timedelta(minutes=7)
 )
 COMPARE_AHEAD = compare_response('ahead', [compare_commit(HELLO_NEW, HELLO_PUSHED_AT, 'octocat')])
 COMMIT_NODES_OK = nodes_response([{'oid': HELLO_NEW, 'additions': 3, 'deletions': 1}])

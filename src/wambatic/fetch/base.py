@@ -208,6 +208,17 @@ def probe(fields: dict[str, object], name: str) -> datetime.datetime | None:
     return timestamp(mapping(nodes[0], f'{name} node').get('updatedAt'), f'{name}.updatedAt')
 
 
+def release_probe(repo: Repo) -> str:
+    """The text a repo's releases are compared by: their count and the newest-created one's
+    `updatedAt`, so adding, deleting, publishing or editing the newest release changes it."""
+    newest = (
+        'none'
+        if repo.releases_updated_at is None
+        else repo.releases_updated_at.astimezone(datetime.UTC).isoformat()
+    )
+    return f'{repo.releases_count} {newest}'
+
+
 def parse_repo(node: object) -> Repo:
     fields = mapping(node, 'repository')
     branch = fields.get('defaultBranchRef')
@@ -221,6 +232,10 @@ def parse_repo(node: object) -> Repo:
     pushed_at = fields.get('pushedAt')
     pulls_at = probe(fields, 'pullRequests')
     issues_at = probe(fields, 'issues')
+    releases_at = probe(fields, 'releases')
+    releases_count = integer(
+        mapping(fields.get('releases'), 'releases').get('totalCount'), 'releases.totalCount'
+    )
     return Repo(
         name_with_owner=text(fields.get('nameWithOwner'), 'nameWithOwner'),
         default_branch=default_branch,
@@ -231,6 +246,8 @@ def parse_repo(node: object) -> Repo:
         updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
         pull_requests_updated_at=pulls_at,
         issues_updated_at=issues_at,
+        releases_count=releases_count,
+        releases_updated_at=releases_at,
     )
 
 
@@ -265,6 +282,20 @@ def first_review_at(reviews: object, author: str | None) -> datetime.datetime | 
     return min(found, default=None)
 
 
+def label_names(labels: object) -> tuple[str, ...]:
+    nodes = sequence(mapping(labels, 'labels').get('nodes'), 'labels.nodes')
+    return tuple(text(mapping(node, 'label').get('name'), 'label.name') for node in nodes)
+
+
+def first_commit_at(commits: object) -> datetime.datetime | None:
+    """The `authoredDate` of the first (oldest) commit of a pull request, None when it has none."""
+    nodes = sequence(mapping(commits, 'commits').get('nodes'), 'commits.nodes')
+    if not nodes:
+        return None
+    commit = mapping(mapping(nodes[0], 'pull request commit').get('commit'), 'commit')
+    return timestamp(commit.get('authoredDate'), 'commit.authoredDate')
+
+
 def parse_pull_request(repo: str, node: object) -> PullRequest:
     fields = mapping(node, 'pull request')
     state = text(fields.get('state'), 'state')
@@ -284,6 +315,8 @@ def parse_pull_request(repo: str, node: object) -> PullRequest:
         first_review_at=first_review_at(fields.get('reviews'), author),
         additions=integer(fields.get('additions'), 'additions'),
         deletions=integer(fields.get('deletions'), 'deletions'),
+        labels=label_names(fields.get('labels')),
+        first_commit_at=first_commit_at(fields.get('commits')),
     )
 
 
@@ -299,6 +332,46 @@ def parse_issue(repo: str, node: object) -> Issue:
         closed_at=optional_timestamp(fields.get('closedAt'), 'closedAt')
         if state == 'CLOSED'
         else None,
+    )
+
+
+def parse_release(repo: str, node: object) -> Release | None:
+    """None for a draft or a release with no `publishedAt`: drafts are not stored."""
+    fields = mapping(node, 'release')
+    published = optional_timestamp(fields.get('publishedAt'), 'publishedAt')
+    if fields.get('isDraft') is True or published is None:
+        return None
+    return Release(
+        repo=repo,
+        tag_name=text(fields.get('tagName'), 'tagName'),
+        created_at=timestamp(fields.get('createdAt'), 'createdAt'),
+        published_at=published,
+        is_prerelease=fields.get('isPrerelease') is True,
+    )
+
+
+def parse_workflow_run(repo: str, node: object) -> WorkflowRun:
+    """A run object of the REST list. `name`, `status` and `run_started_at` may be null and
+    `run_attempt` absent in GitHub's schema; a missing attempt is the first."""
+    fields = mapping(node, 'workflow run')
+    name = fields.get('name')
+    status = fields.get('status')
+    branch = fields.get('head_branch')
+    conclusion = fields.get('conclusion')
+    attempt = fields.get('run_attempt')
+    return WorkflowRun(
+        repo=repo,
+        id=integer(fields.get('id'), 'id'),
+        workflow_path=text(fields.get('path'), 'path'),
+        name='' if name is None else text(name, 'name'),
+        event=text(fields.get('event'), 'event'),
+        head_branch=None if branch is None else text(branch, 'head_branch'),
+        status='' if status is None else text(status, 'status'),
+        conclusion=None if conclusion is None else text(conclusion, 'conclusion'),
+        created_at=timestamp(fields.get('created_at'), 'created_at'),
+        updated_at=timestamp(fields.get('updated_at'), 'updated_at'),
+        run_started_at=optional_timestamp(fields.get('run_started_at'), 'run_started_at'),
+        run_attempt=1 if attempt is None else integer(attempt, 'run_attempt'),
     )
 
 

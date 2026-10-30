@@ -26,6 +26,7 @@ class RestResponse:
     data: object | None
     etag: str | None
     next_url: str | None
+    date: datetime.datetime | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -61,19 +62,27 @@ def error_types(data: object) -> list[tuple[str, str]]:
     ]
 
 
-def response_date(response: Response) -> datetime.datetime:
-    """The `Date` header as an aware UTC datetime; `GraphQLError` (`MALFORMED`) when it is
-    missing or unparseable."""
+def header_date(response: Response) -> datetime.datetime | None:
+    """The `Date` header as an aware UTC datetime; None when it is missing or unparseable."""
     value = response.headers.get('Date')
     try:
         parsed = None if value is None else email.utils.parsedate_to_datetime(value)
     except TypeError, ValueError:
-        parsed = None
+        return None
     if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(datetime.UTC)
+
+
+def response_date(response: Response) -> datetime.datetime:
+    """The `Date` header as an aware UTC datetime; `GraphQLError` (`MALFORMED`) when it is
+    missing or unparseable."""
+    parsed = header_date(response)
+    if parsed is None:
         raise wambatic.fetch.errors.GraphQLError(
             [('MALFORMED', 'response has no parseable Date header')]
         )
-    return parsed.astimezone(datetime.UTC)
+    return parsed
 
 
 class GitHubClient:
@@ -173,12 +182,13 @@ class GitHubClient:
             await self.sleep(wambatic.fetch.ratelimit.backoff_delay(pending, self.rng))
             pending += 1
         if response.status == 304:
-            return RestResponse(304, None, etag, None)
+            return RestResponse(304, None, etag, None, header_date(response))
         return RestResponse(
             response.status,
             response.data,
             response.headers.get('ETag'),
             next_link(response.headers.get('Link')),
+            header_date(response),
         )
 
     async def send(
