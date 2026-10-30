@@ -102,7 +102,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 2: Move the table rows into `rows.py`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Module location (`rows.py`); Implementation (One result, three renderers); Static HTML (Layout: tables hold the terminal's rows); review-2.md choice 12
@@ -136,6 +136,9 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 1 (only so the environment is synced)
 - Key files: `src/wambatic/reports/rows.py`, `src/wambatic/reports/terminal.py`, `src/tests/reports/test_rows.py`
 - A refactor commit of its own (`refactor(reports): ...`), before any HTML code, so a change in terminal output would show in its diff alone.
+- `rows.py` also holds what both renderers need beyond the tables' rows: the column headers, `subject_text` and `provenance_lines` (so the page's header and footer are the terminal's), and the series helpers (`total_series`, `bucket_list`). The period tables are one `PeriodTable` type (rows, headers, metrics, optional total), so the terminal builds all three the same way; `terminal.format_cell` is the one place a cell is formatted, for the HTML page too.
+- `terminal.TOP_CONTRIBUTORS_SHOWN` stays readable through a module `__getattr__`, because `test_terminal.py` must not change and `wambatic.reports` is still being imported when `terminal.py` loads, so the constant cannot be copied at import time.
+- The org fixture has no partial buckets in its provenance (its range is whole months); a test of the marks sets `provenance['partial_buckets']`.
 
 ---
 
