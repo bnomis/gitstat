@@ -230,7 +230,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 5: The HTML document
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** large
 **Spec Reference:** API (`HtmlReport`, `html_document`, `report_filename`); Static HTML (Self-contained and offline, Escaping, Layout, Granularity switch: pre-rendered tables); review-2.md decision 1 and choices 2, 6, 7, 12 and 13
@@ -267,6 +267,11 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/wambatic/reports/html.py`, `src/wambatic/reports/templates/`, `src/tests/reports/test_html.py`, `src/tests/conftest.py`
 - `string.Template` uses `$name`; CSS and the script contain no `$`, or escape it as `$$` (Python [string.Template](https://docs.python.org/3.14/library/string.html#template-strings)).
 - Check that `uv build` puts `templates/` in the wheel (list it with `python -m zipfile -l`); if not, configure the build backend to include it and record how in Notes.
+- Checked: `uv build --wheel` puts `wambatic/reports/templates/` with `report.html`, `report.css` and `report.js` in the wheel, with no build configuration.
+- `html.py` is in `wambatic.reports` and may not import `wambatic.fetch`, so `report_filename` takes a `SubjectLike` protocol (`kind`, `login`, `full_name`) that a `Subject` satisfies, in place of the spec's `Subject` annotation.
+- The chart element is a `div` inside the `<figure>`: it has the `id` (the figure's key), `role="img"` and the `aria-label`, plotly.js draws into it, and the `<figcaption>` with the title stays outside, so drawing does not remove the caption and `role="img"` does not hide it. The period tables carry `class="period"` and `data-granularity` (and `hidden`) on the `<table>`.
+- `report.css` is a template (`$light` and `$dark` hold the token declarations built from `PALETTE`); `report.js` is inserted as is. The page's data holds one figure list per granularity, and the chart elements are the union over the five results (a chart one granularity leaves out is hidden by the script).
+- The tests pass `html.escape` and the JSON escapes through a defect check: with `escape` made the identity, or the `<`, `>` and `&` escapes of the JSON removed, the hostile-login tests fail.
 
 ---
 
