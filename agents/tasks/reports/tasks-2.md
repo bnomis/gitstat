@@ -191,7 +191,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 4: Whole-range charts and the calendar
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`build_range_figures`, `build_calendar`); Static HTML (Charts; Layout item 3); review-2.md choices 5, 6 and 8
@@ -223,6 +223,8 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 3
 - Key files: `src/wambatic/reports/figures.py`, `src/tests/reports/test_figures.py`, `src/tests/conftest.py` (add `org_total_result` and `org_day_result` fixtures beside `org_result`, through `compute_stats`)
 - plotly.js: [heatmap](https://plotly.com/javascript/reference/heatmap/) (`xgap`, `ygap` give the cell gaps), [bar](https://plotly.com/javascript/reference/bar/) (`orientation='h'`, `yaxis.autorange='reversed'`)
+- The calendar's `text` matrix holds each cell's own date, so the hover shows the day and not its week's Monday (`hovertemplate` `%{text}: %{z} commits`); the heat-map's `colorbar` is the one key with `color` in its name, and it carries no colour. The scale is filled in by the page script from the trace's `meta`.
+- A horizontal-bar chart's height grows with its rows, so a long breakdown stays readable.
 
 ---
 

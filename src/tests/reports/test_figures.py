@@ -259,3 +259,171 @@ def test_the_builder_reproduces_the_hand_checked_figures(
     figures = {f.key: f for f in wambatic.reports.figures.build_figures(org_result)}
     for key, expected in tests.fixtures.reports.ORG_MONTH_FIGURES.items():
         assert dataclasses.asdict(figures[key]) == expected
+
+
+def test_the_range_figures_are_the_top_contributors_and_the_breakdowns(
+    org_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = wambatic.reports.figures.build_range_figures(org_total_result)
+    assert [f.key for f in figures] == [
+        'activity-top-contributors',
+        'activity-by-repository',
+        'activity-by-author',
+    ]
+    top, repos, authors = (f.data[0] for f in figures)
+    assert top['y'] == [row['login'] for row in fixture.ORG_TOP_CONTRIBUTORS]
+    assert top['x'] == [row['commits'] for row in fixture.ORG_TOP_CONTRIBUTORS]
+    assert dict(zip(repos['y'], repos['x'], strict=True)) == {fixture.ALPHA: 6, fixture.BETA: 4}  # type: ignore[call-overload]
+    assert list(zip(authors['y'], authors['x'], strict=True)) == [  # type: ignore[call-overload]
+        ('Octocat', 4),
+        ('hubot', 3),
+        ('dependabot[bot]', 1),
+        ('monalisa', 1),
+        ('unattributed', 1),
+    ]
+    for figure in figures:
+        assert figure.data[0]['orientation'] == 'h'
+        assert figure.layout['yaxis']['autorange'] == 'reversed'  # type: ignore[index]
+
+
+def test_the_breakdown_bars_equal_the_tables_rows(
+    org_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = {f.key: f for f in wambatic.reports.figures.build_range_figures(org_total_result)}
+    rows = wambatic.reports.rows.breakdown_rows(org_total_result, 'author')
+    assert rows is not None
+    data = figures['activity-by-author'].data[0]
+    assert data['y'] == [row.name for row in rows]
+    assert data['x'] == [row.commits for row in rows]
+
+
+def test_a_repo_has_no_by_repository_figure(
+    repo_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    keys = [f.key for f in wambatic.reports.figures.build_range_figures(repo_total_result)]
+    assert 'activity-by-repository' not in keys
+    assert 'activity-by-author' not in keys
+
+
+def test_twenty_five_top_contributors_give_twenty_bars(
+    org_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    many = [{**fixture.ORG_TOP_CONTRIBUTORS[0], 'login': f'person{n:02d}'} for n in range(25)]
+    result = dataclasses.replace(
+        org_total_result, tables={**org_total_result.tables, 'top_contributors': many}
+    )
+    top = wambatic.reports.figures.build_range_figures(result)[0]
+    assert top.key == 'activity-top-contributors'
+    assert top.data[0]['y'] == [f'person{n:02d}' for n in range(20)]
+
+
+def test_range_figures_without_activity_series_are_empty(
+    org_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    flow_only = dataclasses.replace(
+        org_total_result,
+        series=[s for s in org_total_result.series if s.metric.startswith(('prs', 'issues'))],
+    )
+    assert wambatic.reports.figures.build_range_figures(flow_only) == []
+
+
+def test_range_figures_need_a_total_result(org_result: wambatic.stats.base.StatsResult) -> None:
+    with pytest.raises(ValueError, match='TOTAL'):
+        wambatic.reports.figures.build_range_figures(org_result)
+
+
+def calendar_cells(
+    figure: wambatic.reports.figures.Figure,
+) -> dict[str, int | None]:
+    """Each cell's day (from the hover text) with its value."""
+    trace = figure.data[0]
+    return {
+        day: value
+        for z_row, text_row in zip(trace['z'], trace['text'], strict=True)  # type: ignore[call-overload]
+        for value, day in zip(z_row, text_row, strict=True)
+    }
+
+
+def test_the_calendar_puts_each_days_commits_in_its_week_and_weekday_cell(
+    org_day_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figure = wambatic.reports.figures.build_calendar(org_day_result)
+    assert figure is not None
+    assert figure.key == 'activity-calendar'
+    trace: dict[str, typing.Any] = figure.data[0]
+    assert trace['y'] == ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    assert trace['x'][0] == '2026-09-28'
+    assert trace['x'][-1] == '2027-01-25'
+    cells = calendar_cells(figure)
+    expected = {
+        '2026-10-05': 2,
+        '2026-10-20': 2,
+        '2026-10-21': 1,
+        '2026-10-25': 1,
+        '2026-10-26': 1,
+        '2026-12-31': 1,
+        '2027-01-01': 1,
+        '2027-01-15': 1,
+    }
+    for day, commits in expected.items():
+        assert cells[day] == commits
+    assert cells['2026-10-06'] == 0
+    week = trace['x'].index('2026-10-19')
+    assert [trace['z'][weekday][week] for weekday in range(7)] == [0, 2, 1, 0, 0, 0, 1]
+
+
+def test_the_calendars_cells_sum_to_the_commits_total(
+    org_day_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figure = wambatic.reports.figures.build_calendar(org_day_result)
+    assert figure is not None
+    total = sum(value for value in calendar_cells(figure).values() if value is not None)
+    assert total == fixture.ORG_TOTAL_UTC['commits']
+
+
+def test_days_outside_the_range_are_blank(org_day_result: wambatic.stats.base.StatsResult) -> None:
+    figure = wambatic.reports.figures.build_calendar(org_day_result)
+    assert figure is not None
+    cells = calendar_cells(figure)
+    for day in ('2026-09-28', '2026-09-30'):  # the Monday to Wednesday before `since`
+        assert cells[day] is None
+    assert cells['2026-10-01'] == 0
+    assert cells['2027-01-31'] == 0
+    assert all(day not in cells for day in ('2027-02-01',))
+    assert figure.data[0]['meta'] == {'scale': 'sequential'}
+
+
+def test_days_after_until_are_blank(org_day_result: wambatic.stats.base.StatsResult) -> None:
+    short = dataclasses.replace(org_day_result, until=fixture.UNTIL.replace(day=29))
+    figure = wambatic.reports.figures.build_calendar(short)
+    assert figure is not None
+    cells = calendar_cells(figure)
+    assert cells['2027-01-29'] == 0
+    assert cells['2027-01-30'] is None
+    assert cells['2027-01-31'] is None
+
+
+def test_the_calendar_needs_a_day_result_and_activity_series(
+    org_result: wambatic.stats.base.StatsResult,
+    org_day_result: wambatic.stats.base.StatsResult,
+) -> None:
+    with pytest.raises(ValueError, match='DAY'):
+        wambatic.reports.figures.build_calendar(org_result)
+    flow_only = dataclasses.replace(
+        org_day_result,
+        series=[s for s in org_day_result.series if s.metric.startswith(('prs', 'issues'))],
+    )
+    assert wambatic.reports.figures.build_calendar(flow_only) is None
+
+
+def test_the_range_and_calendar_figures_are_valid_plotly_and_colourless(
+    org_total_result: wambatic.stats.base.StatsResult,
+    org_day_result: wambatic.stats.base.StatsResult,
+) -> None:
+    calendar = wambatic.reports.figures.build_calendar(org_day_result)
+    assert calendar is not None
+    for figure in [*wambatic.reports.figures.build_range_figures(org_total_result), calendar]:
+        plotly.graph_objects.Figure(data=figure.data, layout=figure.layout)
+        assert json.loads(json.dumps(figure.data)) == figure.data
+        found = keys_in(figure.data) | keys_in(figure.layout)
+        assert not {key for key in found if 'color' in key.lower() and key != 'colorbar'}

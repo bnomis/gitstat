@@ -197,3 +197,28 @@ def repo_total_result(
     )
     subject = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
     return compute_stats(stats_fetcher, subject, request)
+
+
+@pytest.fixture
+def org_total_result(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org as one bucket with an author breakdown."""
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.TOTAL,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+        by_author=True,
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+@pytest.fixture
+def org_day_result(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org by day."""
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.DAY,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)

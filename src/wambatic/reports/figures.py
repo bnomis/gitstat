@@ -3,6 +3,7 @@
 and the page script fills in the colours of the active theme, so no figure is tied to one."""
 
 import dataclasses
+import datetime
 import typing
 
 import wambatic.reports.base
@@ -301,3 +302,136 @@ def build_figures(result: wambatic.stats.base.StatsResult) -> list[Figure]:
             )
         )
     return figures
+
+
+WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+BAR_ROW_HEIGHT = 28
+BAR_CHART_PADDING = 96
+
+
+def bars_layout(unit: str, rows: int) -> dict[str, object]:
+    """A horizontal bar chart's layout, tall enough for `rows` bars, the first at the top."""
+    return {
+        'height': max(HEIGHT // 2, BAR_ROW_HEIGHT * rows + BAR_CHART_PADDING),
+        'margin': {'l': 16, 'r': 24, 't': 16, 'b': 56},
+        'font': {'family': FONT},
+        'xaxis': {'title': {'text': unit}, 'automargin': True, 'zeroline': True},
+        'yaxis': {'type': 'category', 'autorange': 'reversed', 'automargin': True},
+        'hovermode': 'closest',
+        'showlegend': False,
+        'annotations': [],
+    }
+
+
+def commit_bars(
+    key: str, title: str, description: str, names: list[str], commits: list[float]
+) -> Figure:
+    trace: dict[str, object] = {
+        'type': 'bar',
+        'orientation': 'h',
+        'name': 'Commits',
+        'x': [int(value) for value in commits],
+        'y': names,
+        'meta': {'slot': 1},
+    }
+    return Figure(key, 'activity', title, description, [trace], bars_layout('commits', len(names)))
+
+
+def build_range_figures(total: wambatic.stats.base.StatsResult) -> list[Figure]:
+    """The whole-range charts of a TOTAL result, as horizontal bars of commits: the top
+    contributors, then each breakdown the result holds, with the tables' rows. `[]` without
+    activity series. Raises ValueError for any other granularity."""
+    if total.request.granularity is not wambatic.stats.base.Granularity.TOTAL:
+        raise ValueError(
+            f'build_range_figures needs a TOTAL result, not {total.request.granularity}'
+        )
+    if 'commits' not in wambatic.reports.rows.total_series(total):
+        return []
+    figures: list[Figure] = []
+    top = wambatic.reports.rows.top_contributors(
+        total, wambatic.reports.rows.TOP_CONTRIBUTORS_SHOWN
+    )
+    if top:
+        figures.append(
+            commit_bars(
+                'activity-top-contributors',
+                'Top contributors',
+                'Horizontal bars of the commits of the top contributors, the most at the top.',
+                [row.login for row in top],
+                [row.commits for row in top],
+            )
+        )
+    for kind, key, title, noun in (
+        ('repo', 'activity-by-repository', 'Commits by repository', 'repository'),
+        ('author', 'activity-by-author', 'Commits by author', 'author'),
+    ):
+        rows = wambatic.reports.rows.breakdown_rows(total, kind)
+        if rows:
+            figures.append(
+                commit_bars(
+                    key,
+                    title,
+                    f'Horizontal bars of the commits of each {noun}, the most at the top.',
+                    [row.name for row in rows],
+                    [row.commits for row in rows],
+                )
+            )
+    return figures
+
+
+def build_calendar(day: wambatic.stats.base.StatsResult) -> Figure | None:
+    """The commits-by-day heat-map of a DAY result: a column for each ISO week in the range
+    (x is its Monday) and a row for each weekday, Monday at the top, a day outside the range
+    `None` so it is blank. None without activity series. Raises ValueError for any other
+    granularity."""
+    if day.request.granularity is not wambatic.stats.base.Granularity.DAY:
+        raise ValueError(f'build_calendar needs a DAY result, not {day.request.granularity}')
+    series = wambatic.reports.rows.total_series(day)
+    if 'commits' not in series:
+        return None
+    commits = {bucket.start: value for bucket, value in series['commits']}
+    first = day.since - datetime.timedelta(days=day.since.weekday())
+    weeks = (day.until - first).days // 7 + 1
+    mondays = [first + datetime.timedelta(weeks=week) for week in range(weeks)]
+    z: list[list[int | None]] = []
+    text: list[list[str]] = []
+    for weekday in range(len(WEEKDAYS)):
+        cells = [monday + datetime.timedelta(days=weekday) for monday in mondays]
+        z.append(
+            [
+                int(commits.get(cell, 0)) if day.since <= cell <= day.until else None
+                for cell in cells
+            ]
+        )
+        text.append([cell.isoformat() for cell in cells])
+    trace: dict[str, object] = {
+        'type': 'heatmap',
+        'x': [monday.isoformat() for monday in mondays],
+        'y': list(WEEKDAYS),
+        'z': z,
+        'text': text,
+        'hovertemplate': '%{text}: %{z} commits<extra></extra>',
+        'hoverongaps': False,
+        'xgap': 2,
+        'ygap': 2,
+        'zmin': 0,
+        'colorbar': {'title': {'text': 'commits'}},
+        'meta': {'scale': 'sequential'},
+    }
+    layout: dict[str, object] = {
+        'height': HEIGHT // 2 + 40,
+        'margin': {'l': 48, 'r': 16, 't': 16, 'b': 72},
+        'font': {'family': FONT},
+        'xaxis': {'type': 'category', 'title': {'text': 'week starting'}, 'automargin': True},
+        'yaxis': {'type': 'category', 'autorange': 'reversed', 'automargin': True},
+        'hovermode': 'closest',
+        'annotations': [],
+    }
+    return Figure(
+        'activity-calendar',
+        'activity',
+        'Commits by day',
+        'A calendar heat-map of the commits on each day, a column for each week.',
+        [trace],
+        layout,
+    )
