@@ -143,6 +143,11 @@ def tokens(theme: wambatic.reports.figures.Theme) -> str:
     return '\n  '.join(f'--{name}: {colour};' for name, colour in declarations.items())
 
 
+def theme_attribute(theme: Theme) -> str:
+    """The `<html>` attribute that fixes a theme; `auto` leaves the choice to the viewer."""
+    return '' if theme == 'auto' else f' data-theme="{theme}"'
+
+
 def stylesheet() -> str:
     palette = wambatic.reports.figures.PALETTE
     return string.Template(read_template('report.css')).substitute(
@@ -492,7 +497,7 @@ def html_document(report: HtmlReport, theme: Theme) -> str:
     check_report(report)
     title = f'wambatic: {wambatic.reports.rows.subject_text(report.total)}'
     return string.Template(read_template('report.html')).substitute(
-        theme_attribute='' if theme == 'auto' else f' data-theme="{theme}"',
+        theme_attribute=theme_attribute(theme),
         title=escape(title),
         style=stylesheet(),
         header=header_html(report),
