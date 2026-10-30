@@ -398,15 +398,20 @@ class Cache:
         columns: str,
         repo: str,
         since: datetime.datetime | None,
+        until: datetime.datetime | None = None,
         *,
         time_column: str,
         order: str,
     ) -> list[tuple[object, ...]]:
+        """The repo's rows with `since <= time_column < until`, each bound optional."""
         query = f'SELECT {columns} FROM {table} WHERE repo = ?'
         params: list[str] = [repo]
         if since is not None:
             query += f' AND {time_column} >= ?'
             params.append(to_text(since))
+        if until is not None:
+            query += f' AND {time_column} < ?'
+            params.append(to_text(until))
         with self.lock:
             return self.connection.execute(f'{query} ORDER BY {order}', params).fetchall()
 
@@ -500,19 +505,15 @@ class Cache:
     def read_commits(
         self, repo: str, since: datetime.datetime | None, until: datetime.datetime | None
     ) -> list[wambatic.fetch.base.Commit]:
-        query = (
-            'SELECT oid, authored_at, author_login, additions, deletions, is_merge '
-            'FROM commits WHERE repo = ?'
+        rows = self.read_rows(
+            'commits',
+            ', '.join(COMMIT_COLUMNS[1:]),
+            repo,
+            since,
+            until,
+            time_column='authored_at',
+            order='authored_at, oid',
         )
-        params: list[str] = [repo]
-        if since is not None:
-            query += ' AND authored_at >= ?'
-            params.append(to_text(since))
-        if until is not None:
-            query += ' AND authored_at < ?'
-            params.append(to_text(until))
-        with self.lock:
-            rows = self.connection.execute(query + ' ORDER BY authored_at, oid', params).fetchall()
         return [commit_from_row(repo, row) for row in rows]
 
     def read_pull_requests(

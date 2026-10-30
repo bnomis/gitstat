@@ -18,14 +18,7 @@ BREAKDOWN_TITLES = (('repo', 'By repository'), ('author', 'By author'))
 SIGNED_METRICS = frozenset({'lines_net'})
 FLOW_COUNTS = wambatic.stats.flow.COUNT_METRICS
 TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS)
-FLOW_TIMES = (
-    'time_to_first_review_p50',
-    'time_to_first_review_p90',
-    'time_to_merge_p50',
-    'time_to_merge_p90',
-    'time_to_close_p50',
-    'time_to_close_p90',
-)
+FLOW_TIMES = wambatic.stats.flow.TIME_METRICS
 NO_DATA = '-'
 
 
@@ -105,6 +98,10 @@ def contributor_count(result: wambatic.stats.base.StatsResult) -> int:
     )
 
 
+def period_label(bucket: wambatic.stats.base.Bucket, partial: frozenset[str]) -> str:
+    return bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+
+
 def period_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
     series = total_series(result)
     partial = partial_labels(result)
@@ -122,7 +119,7 @@ def period_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
         ],
     )
     for index, bucket in enumerate(buckets):
-        label = bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+        label = period_label(bucket, partial)
         table.add_row(
             text_cell(label),
             *(
@@ -182,7 +179,7 @@ def flow_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
         ],
     )
     for index, bucket in enumerate(buckets):
-        label = bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+        label = period_label(bucket, partial)
         table.add_row(
             text_cell(label), *(format_number(series[metric][index][1]) for metric in FLOW_COUNTS)
         )
@@ -215,16 +212,18 @@ def flow_times_table(result: wambatic.stats.base.StatsResult) -> rich.table.Tabl
             ('PR size p50', True),
         ],
     )
-    points = {metric: dict(series[metric]) for metric in (*FLOW_TIMES, 'pr_size_p50')}
+    points = {
+        metric: dict(series[metric]) for metric in (*FLOW_TIMES, wambatic.stats.flow.SIZE_METRIC)
+    }
     for bucket in buckets:
-        label = bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+        label = period_label(bucket, partial)
         cells = [
             NO_DATA
             if bucket not in points[metric]
             else format_number(points[metric][bucket], decimals=1)
             for metric in FLOW_TIMES
         ]
-        size = points['pr_size_p50'].get(bucket)
+        size = points[wambatic.stats.flow.SIZE_METRIC].get(bucket)
         cells.append(NO_DATA if size is None else format_number(size))
         table.add_row(text_cell(label), *cells)
     note = partial_note(partial, buckets)

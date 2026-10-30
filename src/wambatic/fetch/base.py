@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import typing
@@ -372,6 +373,24 @@ class Fetcher:
             f'{login} is not a user or an organisation (type: {kind!r})'
         )
 
+    async def pages(
+        self,
+        query: str,
+        variables: collections.abc.Mapping[str, object],
+        connection_of: collections.abc.Callable[[dict[str, object]], dict[str, object]],
+    ) -> collections.abc.AsyncGenerator[tuple[list[object], datetime.datetime]]:
+        """The nodes of each page of a paged GraphQL connection, with the `Date` of the response
+        that carried it. `connection_of` finds the connection in a response's `data`."""
+        cursor: str | None = None
+        while True:
+            data, date = await self.client.graphql_dated(query, {**variables, 'cursor': cursor})
+            connection = connection_of(data)
+            yield sequence(connection.get('nodes'), 'nodes'), date
+            page = mapping(connection.get('pageInfo'), 'pageInfo')
+            if page.get('hasNextPage') is not True:
+                return
+            cursor = text(page.get('endCursor'), 'endCursor')
+
     async def list_repos(self, subject: Subject) -> list[Repo]:
         """The subject's repositories from GitHub, after the fork and archived filters."""
         if subject.kind == 'repo':
@@ -382,23 +401,21 @@ class Fetcher:
                 raise wambatic.fetch.errors.NotFoundError(f'{subject.full_name} not found')
             return [parse_repo(data['repository'])]
         repos: list[Repo] = []
-        cursor: str | None = None
-        while True:
-            data = await self.client.graphql(
-                wambatic.fetch.queries.OWNER_REPOSITORIES,
-                {'login': subject.login, 'cursor': cursor},
-            )
+
+        def repositories(data: dict[str, object]) -> dict[str, object]:
             if data.get('repositoryOwner') is None:
                 raise wambatic.fetch.errors.NotFoundError(f'{subject.login} not found')
-            connection = mapping(
-                mapping(data['repositoryOwner'], 'repositoryOwner').get('repositories'),
-                'repositories',
+            owner = mapping(data['repositoryOwner'], 'repositoryOwner')
+            return mapping(owner.get('repositories'), 'repositories')
+
+        async with contextlib.aclosing(
+            self.pages(
+                wambatic.fetch.queries.OWNER_REPOSITORIES, {'login': subject.login}, repositories
             )
-            repos.extend(parse_repo(node) for node in sequence(connection.get('nodes'), 'nodes'))
-            page = mapping(connection.get('pageInfo'), 'pageInfo')
-            if page.get('hasNextPage') is not True:
-                return self.filter_repos(repos)
-            cursor = text(page.get('endCursor'), 'endCursor')
+        ) as pages:
+            async for nodes, _ in pages:
+                repos.extend(parse_repo(node) for node in nodes)
+        return self.filter_repos(repos)
 
     def filter_repos(self, repos: list[Repo]) -> list[Repo]:
         return [
@@ -486,24 +503,20 @@ class Fetcher:
         commits: list[Commit] = []
         if repo.default_branch is not None:
             owner, name = split_name(repo.name_with_owner)
-            cursor: str | None = None
-            while True:
-                data = await self.client.graphql(
-                    wambatic.fetch.queries.COMMIT_HISTORY,
-                    {'owner': owner, 'name': name, 'cursor': cursor},
-                )
+
+            def history(data: dict[str, object]) -> dict[str, object]:
                 repository = mapping(data.get('repository'), 'repository')
                 branch = mapping(repository.get('defaultBranchRef'), 'defaultBranchRef')
                 target = mapping(branch.get('target'), 'target')
-                history = mapping(target.get('history'), 'history')
-                commits.extend(
-                    parse_history_node(repo.name_with_owner, node)
-                    for node in sequence(history.get('nodes'), 'nodes')
+                return mapping(target.get('history'), 'history')
+
+            async with contextlib.aclosing(
+                self.pages(
+                    wambatic.fetch.queries.COMMIT_HISTORY, {'owner': owner, 'name': name}, history
                 )
-                page = mapping(history.get('pageInfo'), 'pageInfo')
-                if page.get('hasNextPage') is not True:
-                    break
-                cursor = text(page.get('endCursor'), 'endCursor')
+            ) as pages:
+                async for nodes, _ in pages:
+                    commits.extend(parse_history_node(repo.name_with_owner, node) for node in nodes)
         state = self.new_state(repo, 'commits', None)
         return await self.db(
             self.cache.write_commits, repo.name_with_owner, commits, state, replace=True
@@ -619,23 +632,24 @@ class Fetcher:
         )
         found: list[R] = []
         watermark: datetime.datetime | None = None
-        cursor: str | None = None
-        while True:
-            data, date = await self.client.graphql_dated(
-                read.query, {'owner': owner, 'name': name, 'cursor': cursor}
-            )
-            watermark = watermark or date
+
+        def connection(data: dict[str, object]) -> dict[str, object]:
             repository = mapping(data.get('repository'), 'repository')
-            connection = mapping(repository.get(read.connection), read.connection)
-            for node in sequence(connection.get('nodes'), 'nodes'):
-                record = read.parse(repo.name_with_owner, node)
-                if cutoff is not None and record.updated_at < cutoff:
-                    return found, watermark
-                found.append(record)
-            page = mapping(connection.get('pageInfo'), 'pageInfo')
-            if page.get('hasNextPage') is not True:
-                return found, watermark
-            cursor = text(page.get('endCursor'), 'endCursor')
+            return mapping(repository.get(read.connection), read.connection)
+
+        async with contextlib.aclosing(
+            self.pages(read.query, {'owner': owner, 'name': name}, connection)
+        ) as pages:
+            async for nodes, date in pages:
+                watermark = watermark or date
+                for node in nodes:
+                    record = read.parse(repo.name_with_owner, node)
+                    if cutoff is not None and record.updated_at < cutoff:
+                        return found, watermark
+                    found.append(record)
+        if watermark is None:
+            raise malformed('no page was read')
+        return found, watermark
 
     async def sync_updated(self, repo: Repo, resource: str, full_refresh: bool) -> int:
         """Bring the repo's pull requests or issues up to date and return the rows written:

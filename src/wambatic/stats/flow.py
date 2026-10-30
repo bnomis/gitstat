@@ -6,8 +6,6 @@ import wambatic.fetch.base
 import wambatic.stats.base
 import wambatic.stats.buckets
 
-COUNT_METRICS = ('prs_opened', 'prs_merged', 'issues_opened', 'issues_closed')
-DURATIONS = ('time_to_first_review', 'time_to_merge', 'time_to_close')
 FLOW_METRICS = (
     ('prs_opened', 'count'),
     ('prs_merged', 'count'),
@@ -21,6 +19,10 @@ FLOW_METRICS = (
     ('time_to_close_p90', 'hours'),
     ('pr_size_p50', 'lines'),
 )
+COUNT_METRICS = tuple(name for name, unit in FLOW_METRICS if unit == 'count')
+TIME_METRICS = tuple(name for name, unit in FLOW_METRICS if unit == 'hours')
+SIZE_METRIC = 'pr_size_p50'
+DURATIONS = tuple(dict.fromkeys(name.rpartition('_')[0] for name in TIME_METRICS))
 SECONDS_PER_HOUR = 3600
 
 
@@ -105,7 +107,7 @@ def aggregate(
             )
             series.append(wambatic.stats.base.Series(name, unit, points))
             continue
-        if name == 'pr_size_p50':
+        if name == SIZE_METRIC:
             values, summary = sizes, statistics.median_low
         else:
             base, _, percentile = name.rpartition('_')

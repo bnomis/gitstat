@@ -71,3 +71,13 @@ def test_reports_names_are_exported(name: str) -> None:
 def test_the_command_line_entry_points_are_callable() -> None:
     assert callable(wambatic.cli.main)
     assert callable(wambatic.cli.run)
+
+
+@pytest.mark.parametrize('name', ['Issue', 'PullRequest'])
+def test_the_step_6_fetch_records_are_exported(name: str) -> None:
+    assert name in wambatic.fetch.__all__
+    assert getattr(wambatic.fetch, name)
+
+
+def test_the_built_resources_include_issues_and_pull_requests() -> None:
+    assert {'issues', 'pull_requests'} <= wambatic.fetch.BUILT_RESOURCES
