@@ -277,7 +277,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 6: The page script and `render_html`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`render_html`); Static HTML (Granularity switch, Palette and themes, Labels and hover); Error handling (`--out` atomic write); Settings (`report.html_theme`); review-2.md choices 4, 7 and 11
@@ -308,6 +308,8 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 - Depends on Task 5
 - Key files: `src/wambatic/reports/templates/report.js`, `src/wambatic/reports/html.py`, `src/tests/reports/test_html.py`
+- `render_html` sets the file's mode to 0644 before the move: `NamedTemporaryFile` creates 0600, which would leave a report meant to be hosted or attached unreadable to others.
+- Looked at once in headless Chromium (screenshot of the org report): no console errors, every chart drawn; the browser test of Task 8 makes that a check.
 - plotly.js: [`Plotly.newPlot` and `Plotly.react`](https://plotly.com/javascript/plotlyjs-function-reference/); [`matchMedia` change events](https://developer.mozilla.org/en-US/docs/Web/API/MediaQueryList/change_event); Python [`os.replace`](https://docs.python.org/3.14/library/os.html#os.replace) is atomic on POSIX within one file system, which the same-directory temporary file guarantees.
 
 ---

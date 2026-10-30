@@ -5,8 +5,11 @@ import dataclasses
 import html
 import importlib.resources
 import json
+import os
+import pathlib
 import re
 import string
+import tempfile
 import typing
 
 import plotly.offline
@@ -20,6 +23,7 @@ Granularity = wambatic.stats.base.Granularity
 Theme = typing.Literal['auto', 'dark', 'light']
 PERIODS = (Granularity.YEAR, Granularity.MONTH, Granularity.WEEK, Granularity.DAY)
 SAFE_FILENAME = re.compile(r'[^A-Za-z0-9._-]')
+FILE_MODE = 0o644
 JSON_ESCAPES = {'<': '\\u003c', '>': '\\u003e', '&': '\\u0026'}
 
 
@@ -439,3 +443,24 @@ def html_document(report: HtmlReport, theme: Theme) -> str:
         plotlyjs=str(plotly.offline.get_plotlyjs()),
         script=read_template('report.js'),
     )
+
+
+def render_html(report: HtmlReport, out: pathlib.Path, theme: Theme) -> pathlib.Path:
+    """Write `html_document(report, theme)` to `out` and return it. The file is written to a
+    temporary file beside `out` and moved into place, so a failed write leaves `out` as it was
+    and no temporary file behind. Missing parent directories are created."""
+    document = html_document(report, theme)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        'w', encoding='utf-8', dir=out.parent, suffix='.tmp', delete=False
+    ) as handle:
+        temporary = pathlib.Path(handle.name)
+        try:
+            handle.write(document)
+            handle.flush()
+            temporary.chmod(FILE_MODE)
+            os.replace(temporary, out)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    return out

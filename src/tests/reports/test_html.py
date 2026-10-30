@@ -2,7 +2,11 @@ import dataclasses
 import html.parser
 import importlib.resources
 import json
+import os
+import pathlib
 import re
+import stat
+import string
 import typing
 
 import pytest
@@ -428,3 +432,83 @@ def test_the_report_names_the_range_the_timezone_and_the_provenance(
     assert 'ignore-cache-version' in wambatic.reports.html.html_document(
         dataclasses.replace(org_report, total=warned), 'auto'
     )
+
+
+def test_render_html_writes_the_document_and_returns_the_path(
+    org_report: wambatic.reports.html.HtmlReport, tmp_path: pathlib.Path
+) -> None:
+    out = tmp_path / 'out' / 'report.html'
+    assert wambatic.reports.html.render_html(org_report, out, 'light') is out
+    assert out.read_text(encoding='utf-8') == wambatic.reports.html.html_document(
+        org_report, 'light'
+    )
+    assert sorted(path.name for path in out.parent.iterdir()) == ['report.html']
+    assert stat.S_IMODE(out.stat().st_mode) == 0o644
+
+
+def test_a_second_render_replaces_the_file(
+    org_report: wambatic.reports.html.HtmlReport,
+    repo_report: wambatic.reports.html.HtmlReport,
+    tmp_path: pathlib.Path,
+) -> None:
+    out = tmp_path / 'report.html'
+    wambatic.reports.html.render_html(org_report, out, 'auto')
+    wambatic.reports.html.render_html(repo_report, out, 'dark')
+    text = out.read_text(encoding='utf-8')
+    assert 'repo octo-org/alpha' in text
+    assert 'org octo-org' not in text
+    assert 'data-theme="dark"' in text
+
+
+def test_missing_parent_directories_are_created(
+    org_report: wambatic.reports.html.HtmlReport, tmp_path: pathlib.Path
+) -> None:
+    out = tmp_path / 'a' / 'b' / 'report.html'
+    wambatic.reports.html.render_html(org_report, out, 'auto')
+    assert out.is_file()
+
+
+def test_a_failed_move_leaves_the_file_as_it_was_and_no_temporary_file(
+    org_report: wambatic.reports.html.HtmlReport,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / 'out'
+    out = directory / 'report.html'
+
+    def refuse(source: object, destination: object) -> None:
+        raise OSError('no space left')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'replace', refuse)
+        with pytest.raises(OSError, match='no space left'):
+            wambatic.reports.html.render_html(org_report, out, 'auto')
+    assert list(directory.iterdir()) == []
+    out.write_text('earlier')
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'replace', refuse)
+        with pytest.raises(OSError, match='no space left'):
+            wambatic.reports.html.render_html(org_report, out, 'auto')
+    assert out.read_text() == 'earlier'
+    assert [path.name for path in directory.iterdir()] == ['report.html']
+
+
+def test_a_bad_report_writes_nothing(
+    org_report: wambatic.reports.html.HtmlReport, tmp_path: pathlib.Path
+) -> None:
+    bad = dataclasses.replace(org_report, initial=Granularity.TOTAL)
+    out = tmp_path / 'sub' / 'report.html'
+    with pytest.raises(ValueError, match='initial'):
+        wambatic.reports.html.render_html(bad, out, 'auto')
+    assert not out.parent.exists()
+
+
+def test_the_script_has_no_dollar_that_string_template_would_read() -> None:
+    script = (importlib.resources.files('wambatic.reports') / 'templates' / 'report.js').read_text(
+        encoding='utf-8'
+    )
+    assert script
+    template = string.Template(script)
+    assert template.is_valid()
+    assert template.get_identifiers() == []
+    assert '$' not in script
