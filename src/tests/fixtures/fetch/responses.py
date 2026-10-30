@@ -6,6 +6,11 @@ reach api.github.com/graphql (it answers 403 to Claude Code sessions). Replace t
 OWNER_REPOSITORIES_OK, REPOSITORY_OK, COMMIT_HISTORY_OK, COMPARE_AHEAD, COMMIT_NODES_OK and REPO
 stand-ins with recordings from the live API (spec, Testing) when a session with network access
 is available. Their commit ids are synthetic.
+
+The step 6 stand-ins to re-record are the listing probe fields of OWNER_REPOSITORIES_OK and
+REPOSITORY_OK, PULL_REQUESTS_OK and ISSUES_OK. The recording should confirm that an automatic
+reviewer such as Copilot has the `Bot` type, and that GraphQL gives a bot's login without the
+`[bot]` suffix.
 """
 
 import datetime
@@ -38,6 +43,8 @@ def repo_node(
     branch: str = 'main',
     is_fork: bool = False,
     is_archived: bool = False,
+    pull_requests_updated_at: datetime.datetime | None = None,
+    issues_updated_at: datetime.datetime | None = None,
 ) -> dict[str, object]:
     """A repository node as `OWNER_REPOSITORIES` and `REPOSITORY` select it."""
     return {
@@ -47,7 +54,14 @@ def repo_node(
         'pushedAt': None if pushed_at is None else iso(pushed_at),
         'updatedAt': iso(updated_at),
         'defaultBranchRef': None if head is None else {'name': branch, 'target': {'oid': head}},
+        'pullRequests': probe_connection(pull_requests_updated_at),
+        'issues': probe_connection(issues_updated_at),
     }
+
+
+def probe_connection(updated_at: datetime.datetime | None) -> dict[str, object]:
+    """The newest-item connection a listing selects: no nodes when there is no item."""
+    return {'nodes': [] if updated_at is None else [{'updatedAt': iso(updated_at)}]}
 
 
 # https://docs.github.com/en/graphql/reference/objects#repositoryconnection
@@ -68,6 +82,101 @@ def owner_page(repos: list[dict[str, object]], has_next: bool, cursor: str) -> d
 # https://docs.github.com/en/graphql/reference/queries#repository
 def repository_response(node: dict[str, object] | None) -> dict[str, object]:
     return {'data': {'repository': node, 'rateLimit': RATE_LIMIT}}
+
+
+def actor(login: str | None, *, bot: bool = False) -> dict[str, object] | None:
+    """An `Actor` as `author` selects it; GraphQL gives a bot's login without `[bot]`."""
+    return None if login is None else {'__typename': 'Bot' if bot else 'User', 'login': login}
+
+
+# https://docs.github.com/en/graphql/reference/objects#pullrequestreview
+def review_node(
+    submitted_at: datetime.datetime | None, login: str | None, *, bot: bool = False
+) -> dict[str, object]:
+    return {
+        'submittedAt': None if submitted_at is None else iso(submitted_at),
+        'author': actor(login, bot=bot),
+    }
+
+
+# https://docs.github.com/en/graphql/reference/objects#pullrequest
+def pull_request_node(
+    number: int,
+    *,
+    state: str = 'OPEN',
+    created_at: datetime.datetime = NOW,
+    updated_at: datetime.datetime = NOW,
+    merged_at: datetime.datetime | None = None,
+    closed_at: datetime.datetime | None = None,
+    additions: int = 5,
+    deletions: int = 2,
+    login: str | None = 'octocat',
+    bot: bool = False,
+    reviews: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """A node of `Repository.pullRequests` as `PULL_REQUESTS` selects it."""
+    return {
+        'number': number,
+        'state': state,
+        'createdAt': iso(created_at),
+        'updatedAt': iso(updated_at),
+        'mergedAt': None if merged_at is None else iso(merged_at),
+        'closedAt': None if closed_at is None else iso(closed_at),
+        'additions': additions,
+        'deletions': deletions,
+        'author': actor(login, bot=bot),
+        'reviews': {'nodes': reviews or []},
+    }
+
+
+# https://docs.github.com/en/graphql/reference/objects#issue
+def issue_node(
+    number: int,
+    *,
+    state: str = 'OPEN',
+    created_at: datetime.datetime = NOW,
+    updated_at: datetime.datetime = NOW,
+    closed_at: datetime.datetime | None = None,
+    login: str | None = 'octocat',
+    bot: bool = False,
+) -> dict[str, object]:
+    """A node of `Repository.issues` as `ISSUES` selects it."""
+    return {
+        'number': number,
+        'state': state,
+        'createdAt': iso(created_at),
+        'updatedAt': iso(updated_at),
+        'closedAt': None if closed_at is None else iso(closed_at),
+        'author': actor(login, bot=bot),
+    }
+
+
+# https://docs.github.com/en/graphql/reference/objects#pullrequestconnection
+def pull_requests_page(
+    nodes: list[dict[str, object]], has_next: bool, cursor: str
+) -> dict[str, object]:
+    return connection_page('pullRequests', nodes, has_next, cursor)
+
+
+# https://docs.github.com/en/graphql/reference/objects#issueconnection
+def issues_page(nodes: list[dict[str, object]], has_next: bool, cursor: str) -> dict[str, object]:
+    return connection_page('issues', nodes, has_next, cursor)
+
+
+def connection_page(
+    name: str, nodes: list[dict[str, object]], has_next: bool, cursor: str
+) -> dict[str, object]:
+    return {
+        'data': {
+            'repository': {
+                name: {
+                    'pageInfo': {'hasNextPage': has_next, 'endCursor': cursor},
+                    'nodes': nodes,
+                }
+            },
+            'rateLimit': RATE_LIMIT,
+        }
+    }
 
 
 def history_node(
@@ -146,12 +255,15 @@ HELLO_OLD = 'a' * 40
 HELLO_NEW = 'b' * 40
 HELLO_PUSHED_AT = datetime.datetime(2026, 10, 20, 9, 0, tzinfo=datetime.UTC)
 HELLO_UPDATED_AT = datetime.datetime(2026, 10, 21, 9, 0, tzinfo=datetime.UTC)
+HELLO_PULL_REQUESTS_UPDATED_AT = datetime.datetime(2026, 10, 19, 9, 0, tzinfo=datetime.UTC)
 HELLO_NODE = repo_node(
     'octocat/Hello-World',
     head=HELLO_NEW,
     pushed_at=HELLO_PUSHED_AT,
     updated_at=HELLO_UPDATED_AT,
     branch='master',
+    pull_requests_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+    issues_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
 )
 SPOON_NODE = repo_node(
     'octocat/Spoon-Knife',
@@ -166,6 +278,37 @@ COMMIT_HISTORY_OK = history_page(
     [
         history_node(HELLO_NEW, HELLO_PUSHED_AT, 'octocat', 3, 1),
         history_node(HELLO_OLD, HELLO_PUSHED_AT - datetime.timedelta(days=2), None, 5, 0),
+    ],
+    False,
+    'Y3Vyc29yOjI=',
+)
+PULL_REQUESTS_OK = pull_requests_page(
+    [
+        pull_request_node(
+            2,
+            state='MERGED',
+            created_at=HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=2),
+            updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+            merged_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+            closed_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+            reviews=[
+                review_node(HELLO_PULL_REQUESTS_UPDATED_AT - datetime.timedelta(days=1), 'hubot')
+            ],
+        ),
+        pull_request_node(1, state='OPEN', login='dependabot', bot=True),
+    ],
+    False,
+    'Y3Vyc29yOjI=',
+)
+ISSUES_OK = issues_page(
+    [
+        issue_node(
+            3,
+            state='CLOSED',
+            updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+            closed_at=HELLO_PULL_REQUESTS_UPDATED_AT,
+        ),
+        issue_node(1, state='OPEN', login=None),
     ],
     False,
     'Y3Vyc29yOjI=',

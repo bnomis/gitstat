@@ -27,6 +27,7 @@ UNBUILT_RESOURCE_STEPS = {
     'workflow_runs': 8,
 }
 PAGE_SIZE = 100
+BOT_SUFFIX = '[bot]'
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -166,6 +167,14 @@ def timestamp(value: object, what: str) -> datetime.datetime:
     return parsed.astimezone(datetime.UTC)
 
 
+def probe(fields: dict[str, object], name: str) -> datetime.datetime | None:
+    """The `updatedAt` of the one node a listing selects from the connection `name`."""
+    nodes = sequence(mapping(fields.get(name), name).get('nodes'), f'{name}.nodes')
+    if not nodes:
+        return None
+    return timestamp(mapping(nodes[0], f'{name} node').get('updatedAt'), f'{name}.updatedAt')
+
+
 def parse_repo(node: object) -> Repo:
     fields = mapping(node, 'repository')
     branch = fields.get('defaultBranchRef')
@@ -177,6 +186,8 @@ def parse_repo(node: object) -> Repo:
         target = mapping(branch_fields.get('target'), 'defaultBranchRef.target')
         head_oid = text(target.get('oid'), 'defaultBranchRef.target.oid')
     pushed_at = fields.get('pushedAt')
+    pulls_at = probe(fields, 'pullRequests')
+    issues_at = probe(fields, 'issues')
     return Repo(
         name_with_owner=text(fields.get('nameWithOwner'), 'nameWithOwner'),
         default_branch=default_branch,
@@ -185,6 +196,76 @@ def parse_repo(node: object) -> Repo:
         is_fork=fields.get('isFork') is True,
         pushed_at=None if pushed_at is None else timestamp(pushed_at, 'pushedAt'),
         updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        pull_requests_updated_at=pulls_at,
+        issues_updated_at=issues_at,
+    )
+
+
+def actor_login(value: object, what: str) -> str | None:
+    """The REST form of an author: `login`, `login[bot]` for a bot, None for a deleted account."""
+    if value is None:
+        return None
+    fields = mapping(value, what)
+    login = text(fields.get('login'), f'{what}.login')
+    return f'{login}{BOT_SUFFIX}' if fields.get('__typename') == 'Bot' else login
+
+
+def optional_timestamp(value: object, what: str) -> datetime.datetime | None:
+    return None if value is None else timestamp(value, what)
+
+
+def first_review_at(reviews: object, author: str | None) -> datetime.datetime | None:
+    """The earliest submitted review by anyone but the pull request's author and bots."""
+    found: list[datetime.datetime] = []
+    for node in sequence(mapping(reviews, 'reviews').get('nodes'), 'reviews.nodes'):
+        fields = mapping(node, 'review')
+        submitted = optional_timestamp(fields.get('submittedAt'), 'review.submittedAt')
+        if submitted is None:
+            continue
+        reviewer = actor_login(fields.get('author'), 'review.author')
+        if reviewer is not None and (
+            reviewer.endswith(BOT_SUFFIX)
+            or (author is not None and reviewer.casefold() == author.casefold())
+        ):
+            continue
+        found.append(submitted)
+    return min(found, default=None)
+
+
+def parse_pull_request(repo: str, node: object) -> PullRequest:
+    fields = mapping(node, 'pull request')
+    state = text(fields.get('state'), 'state')
+    author = actor_login(fields.get('author'), 'author')
+    return PullRequest(
+        repo=repo,
+        number=integer(fields.get('number'), 'number'),
+        author_login=author,
+        created_at=timestamp(fields.get('createdAt'), 'createdAt'),
+        updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        merged_at=optional_timestamp(fields.get('mergedAt'), 'mergedAt')
+        if state == 'MERGED'
+        else None,
+        closed_at=optional_timestamp(fields.get('closedAt'), 'closedAt')
+        if state != 'OPEN'
+        else None,
+        first_review_at=first_review_at(fields.get('reviews'), author),
+        additions=integer(fields.get('additions'), 'additions'),
+        deletions=integer(fields.get('deletions'), 'deletions'),
+    )
+
+
+def parse_issue(repo: str, node: object) -> Issue:
+    fields = mapping(node, 'issue')
+    state = text(fields.get('state'), 'state')
+    return Issue(
+        repo=repo,
+        number=integer(fields.get('number'), 'number'),
+        author_login=actor_login(fields.get('author'), 'author'),
+        created_at=timestamp(fields.get('createdAt'), 'createdAt'),
+        updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        closed_at=optional_timestamp(fields.get('closedAt'), 'closedAt')
+        if state == 'CLOSED'
+        else None,
     )
 
 

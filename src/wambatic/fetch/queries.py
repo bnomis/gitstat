@@ -9,6 +9,10 @@ query OwnerRepositories($login: String!, $cursor: String) {
       nodes {
         nameWithOwner isArchived isFork pushedAt updatedAt
         defaultBranchRef { name target { oid } }
+        pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+          nodes { updatedAt }
+        }
+        issues(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }
       }
     }
   }
@@ -21,6 +25,10 @@ query Repository($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner isArchived isFork pushedAt updatedAt
     defaultBranchRef { name target { oid } }
+    pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes { updatedAt }
+    }
+    issues(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }
   }
   rateLimit { cost remaining resetAt }
 }
@@ -50,6 +58,39 @@ query CommitHistory($owner: String!, $name: String!, $cursor: String) {
 COMMIT_NODES = """
 query CommitNodes($ids: [ID!]!) {
   nodes(ids: $ids) { ... on Commit { oid additions deletions } }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+PULL_REQUESTS = """
+query PullRequests($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number state createdAt updatedAt mergedAt closedAt additions deletions
+        author { __typename login }
+        reviews(first: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+          nodes { submittedAt author { __typename login } }
+        }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+ISSUES = """
+query Issues($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number state createdAt updatedAt closedAt
+        author { __typename login }
+      }
+    }
+  }
   rateLimit { cost remaining resetAt }
 }
 """
