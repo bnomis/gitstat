@@ -249,10 +249,10 @@ def needs_sync(
 
 
 def log_sync(report: wambatic.fetch.base.SyncReport) -> None:
-    written = sum(report.rows_written.values())
+    written = ', '.join(f'{name} {rows}' for name, rows in sorted(report.rows_written.items()))
     message = (
         f'Synced {report.repos_listed} repositories ({report.repos_skipped} unchanged), '
-        f'{written} commits written'
+        f'rows written: {written}'
     )
     if report.full_refetches:
         message += f'; read in full again: {", ".join(report.full_refetches)}'
@@ -346,6 +346,8 @@ def cache_info_table(info: wambatic.fetch.cache.CacheInfo) -> rich.table.Table:
     rows += [
         ('repositories', wambatic.reports.terminal.format_number(info.repos)),
         ('commits', wambatic.reports.terminal.format_number(info.commits)),
+        ('pull requests', wambatic.reports.terminal.format_number(info.pull_requests)),
+        ('issues', wambatic.reports.terminal.format_number(info.issues)),
         (
             'last synced',
             'never' if info.last_synced_at is None else info.last_synced_at.isoformat(),
