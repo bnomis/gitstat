@@ -192,7 +192,7 @@ def test_the_provenance_footer_lists_the_run_and_the_versions(
         'computed_at: 2027-01-20T12:00:00+00:00',
         'fetched_at:commits: 2027-02-01T10:00:00+00:00',
         f'wambatic_version: {org_result.provenance["wambatic_version"]}',
-        'schema_version: 1',
+        f'schema_version: {org_result.provenance["schema_version"]}',
     ]
 
 
@@ -204,7 +204,8 @@ def test_the_org_by_month_rendering_matches_the_known_good_text(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     expected = tests.fixtures.reports.ORG_MONTH_TERMINAL.format(
-        wambatic_version=org_result.provenance['wambatic_version']
+        wambatic_version=org_result.provenance['wambatic_version'],
+        schema_version=org_result.provenance['schema_version'],
     )
     assert without_trailing_spaces(render(org_result)) == expected
 
