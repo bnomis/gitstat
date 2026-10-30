@@ -112,16 +112,12 @@ def test_jobs_for_two_keys_run_one_after_the_other() -> None:
         assert first.state == 'done'
         return events
 
-    assert (
-        asyncio.run(scenario())
-        == [
-            'start org:octo-org',
-            'start org:other',
-            'end org:octo-org',
-            'end org:other',
-        ]
-        or True
-    )
+    assert asyncio.run(scenario()) == [
+        'start org:octo-org',
+        'end org:octo-org',
+        'start org:other',
+        'end org:other',
+    ]
 
 
 def test_a_failing_job_records_the_mapped_status_and_a_redacted_message(
