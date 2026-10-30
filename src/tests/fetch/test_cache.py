@@ -18,6 +18,8 @@ UTC = datetime.UTC
 T0 = datetime.datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 HELLO = 'octocat/Hello-World'
 SPOON = 'octocat/Spoon-Knife'
+CURRENT_SCHEMA_VERSION = wambatic.fetch.cache.SCHEMA_VERSION
+NEXT_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION + 1
 
 
 @pytest.fixture
@@ -62,12 +64,49 @@ def commit(
     return wambatic.fetch.base.Commit(**fields)  # type: ignore[arg-type]
 
 
+def pull_request(
+    number: int, hours: int = 0, repo_name: str = HELLO, **changes: object
+) -> wambatic.fetch.base.PullRequest:
+    fields: dict[str, object] = {
+        'repo': repo_name,
+        'number': number,
+        'author_login': 'octocat',
+        'created_at': T0,
+        'updated_at': T0 + datetime.timedelta(hours=hours),
+        'merged_at': T0 + datetime.timedelta(hours=hours),
+        'closed_at': T0 + datetime.timedelta(hours=hours),
+        'first_review_at': T0 + datetime.timedelta(minutes=30),
+        'additions': 10,
+        'deletions': 2,
+    }
+    fields.update(changes)
+    return wambatic.fetch.base.PullRequest(**fields)  # type: ignore[arg-type]
+
+
+def issue(
+    number: int, hours: int = 0, repo_name: str = HELLO, **changes: object
+) -> wambatic.fetch.base.Issue:
+    fields: dict[str, object] = {
+        'repo': repo_name,
+        'number': number,
+        'author_login': 'octocat',
+        'created_at': T0,
+        'updated_at': T0 + datetime.timedelta(hours=hours),
+        'closed_at': None,
+    }
+    fields.update(changes)
+    return wambatic.fetch.base.Issue(**fields)  # type: ignore[arg-type]
+
+
 def state(
-    repo_name: str = HELLO, head: str | None = 'a' * 40, hours: int = 0
+    repo_name: str = HELLO,
+    head: str | None = 'a' * 40,
+    hours: int = 0,
+    resource: str = 'commits',
 ) -> wambatic.fetch.base.SyncState:
     return wambatic.fetch.base.SyncState(
         repo=repo_name,
-        resource='commits',
+        resource=resource,
         watermark=None,
         head_oid=head,
         pushed_at=T0,
@@ -122,11 +161,16 @@ def test_changed_schema_version_raises(
     cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', NEXT_SCHEMA_VERSION)
     with pytest.raises(wambatic.fetch.errors.CacheVersionError) as caught:
         wambatic.fetch.cache.Cache.open(cache_path)
-    assert caught.value.differences == {'schema_version': ('1', '2')}
-    assert 'schema_version: cache has 1, this wambatic has 2' in str(caught.value)
+    assert caught.value.differences == {
+        'schema_version': (str(CURRENT_SCHEMA_VERSION), str(NEXT_SCHEMA_VERSION))
+    }
+    assert (
+        f'schema_version: cache has {CURRENT_SCHEMA_VERSION}, '
+        f'this wambatic has {NEXT_SCHEMA_VERSION}'
+    ) in str(caught.value)
     assert 'wambatic cache clear' in str(caught.value)
     assert '--ignore-cache-version' in str(caught.value)
 
@@ -182,7 +226,7 @@ def test_a_mismatch_closes_the_connection(
     cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', NEXT_SCHEMA_VERSION)
     connections: list[sqlite3.Connection] = []
     connect = sqlite3.connect
 
@@ -202,11 +246,11 @@ def test_ignore_version_opens_and_records_the_override(
     cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', NEXT_SCHEMA_VERSION)
     opened = wambatic.fetch.cache.Cache.open(cache_path, ignore_version=True)
     try:
         assert 'version_override_at' not in opened.identity()
-        assert opened.identity()['schema_version'] == '1'
+        assert opened.identity()['schema_version'] == str(CURRENT_SCHEMA_VERSION)
     finally:
         opened.close()
     keys = {row[0] for row in table_rows(cache_path, 'meta')}
@@ -231,7 +275,7 @@ def test_version_override_at_is_the_recorded_time_after_an_override(
     cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', NEXT_SCHEMA_VERSION)
     before = datetime.datetime.now(UTC)
     opened = wambatic.fetch.cache.Cache.open(cache_path, ignore_version=True)
     try:
@@ -433,6 +477,172 @@ def test_write_then_read_keeps_the_last_commit_per_oid(
         opened.close()
 
 
+# Pull requests and issues
+
+
+def test_pull_requests_round_trip_with_none_times_and_a_non_ascii_login(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    pulls = [
+        pull_request(1, 2),
+        pull_request(
+            2,
+            3,
+            author_login='zoë-ü',
+            merged_at=None,
+            closed_at=None,
+            first_review_at=None,
+        ),
+        pull_request(3, 4, author_login=None),
+    ]
+    assert (
+        cache.write_pull_requests(HELLO, pulls, state(resource='pull_requests'), replace=False) == 3
+    )
+    assert cache.read_pull_requests(HELLO, None) == pulls
+
+
+def test_issues_round_trip_with_none_times_and_a_non_ascii_login(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    issues = [
+        issue(1, 2, closed_at=T0 + datetime.timedelta(hours=2)),
+        issue(2, 3, author_login='zoë-ü'),
+        issue(3, 4, author_login=None),
+    ]
+    assert cache.write_issues(HELLO, issues, state(resource='issues'), replace=False) == 3
+    assert cache.read_issues(HELLO, None) == issues
+
+
+def test_replace_removes_pull_requests_and_issues_not_in_the_new_list(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    pulls_state = state(resource='pull_requests')
+    issues_state = state(resource='issues')
+    cache.write_pull_requests(HELLO, [pull_request(1), pull_request(2)], pulls_state, replace=False)
+    cache.write_issues(HELLO, [issue(1), issue(2)], issues_state, replace=False)
+    cache.write_pull_requests(HELLO, [pull_request(2)], pulls_state, replace=False)
+    cache.write_issues(HELLO, [issue(2)], issues_state, replace=False)
+    assert [pull.number for pull in cache.read_pull_requests(HELLO, None)] == [1, 2]
+    assert [item.number for item in cache.read_issues(HELLO, None)] == [1, 2]
+    cache.write_pull_requests(HELLO, [pull_request(2)], pulls_state, replace=True)
+    cache.write_issues(HELLO, [issue(2)], issues_state, replace=True)
+    assert [pull.number for pull in cache.read_pull_requests(HELLO, None)] == [2]
+    assert [item.number for item in cache.read_issues(HELLO, None)] == [2]
+
+
+def test_replace_leaves_another_repos_pull_requests_alone(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_pull_requests(
+        SPOON,
+        [pull_request(1, repo_name=SPOON)],
+        state(SPOON, resource='pull_requests'),
+        replace=False,
+    )
+    cache.write_pull_requests(HELLO, [], state(resource='pull_requests'), replace=True)
+    assert len(cache.read_pull_requests(SPOON, None)) == 1
+
+
+def test_upserting_a_changed_pull_request_replaces_its_fields_and_keeps_the_row_count(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    pulls_state = state(resource='pull_requests')
+    cache.write_pull_requests(
+        HELLO, [pull_request(1, 1, merged_at=None)], pulls_state, replace=False
+    )
+    changed = pull_request(1, 5, additions=99)
+    cache.write_pull_requests(HELLO, [changed], pulls_state, replace=False)
+    assert cache.read_pull_requests(HELLO, None) == [changed]
+    assert len(table_rows(cache_path, 'pull_requests')) == 1
+
+
+def test_upserting_a_changed_issue_replaces_its_fields_and_keeps_the_row_count(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    issues_state = state(resource='issues')
+    cache.write_issues(HELLO, [issue(1, 1)], issues_state, replace=False)
+    changed = issue(1, 5, closed_at=T0 + datetime.timedelta(hours=5))
+    cache.write_issues(HELLO, [changed], issues_state, replace=False)
+    assert cache.read_issues(HELLO, None) == [changed]
+    assert len(table_rows(cache_path, 'issues')) == 1
+
+
+def test_reads_with_since_keep_exactly_the_rows_updated_at_or_after_it(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_pull_requests(
+        HELLO,
+        [pull_request(3, 5), pull_request(1, 1), pull_request(2, 3)],
+        state(resource='pull_requests'),
+        replace=False,
+    )
+    cache.write_issues(
+        HELLO, [issue(3, 5), issue(1, 1), issue(2, 3)], state(resource='issues'), replace=False
+    )
+    since = T0 + datetime.timedelta(hours=3)
+    assert [pull.number for pull in cache.read_pull_requests(HELLO, since)] == [2, 3]
+    assert [item.number for item in cache.read_issues(HELLO, since)] == [2, 3]
+    assert [pull.number for pull in cache.read_pull_requests(HELLO, None)] == [1, 2, 3]
+    assert [item.number for item in cache.read_issues(HELLO, None)] == [1, 2, 3]
+
+
+def test_a_pull_request_or_state_for_another_repo_raises_and_writes_nothing(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    pulls_state = state(resource='pull_requests')
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_pull_requests(
+            HELLO, [pull_request(1), pull_request(2, repo_name=SPOON)], pulls_state, replace=False
+        )
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_pull_requests(
+            HELLO, [pull_request(1)], state(SPOON, resource='pull_requests'), replace=False
+        )
+    assert table_rows(cache_path, 'pull_requests') == []
+    assert cache.sync_state(HELLO, 'pull_requests') is None
+    assert cache.sync_state(SPOON, 'pull_requests') is None
+
+
+def test_an_issue_or_state_for_another_repo_raises_and_writes_nothing(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    issues_state = state(resource='issues')
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_issues(
+            HELLO, [issue(1), issue(2, repo_name=SPOON)], issues_state, replace=False
+        )
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_issues(HELLO, [issue(1)], state(SPOON, resource='issues'), replace=False)
+    assert table_rows(cache_path, 'issues') == []
+    assert cache.sync_state(HELLO, 'issues') is None
+    assert cache.sync_state(SPOON, 'issues') is None
+
+
+def test_the_repo_probe_fields_round_trip_through_upsert_and_read(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    probed = repo(
+        pull_requests_updated_at=T0 + datetime.timedelta(hours=2),
+        issues_updated_at=T0 + datetime.timedelta(hours=3),
+    )
+    cache.upsert_repos('octocat', [probed, repo(SPOON)], complete=True)
+    rows = cache.read_repos(wambatic.fetch.base.Subject('user', 'octocat'))
+    assert rows == [probed, repo(SPOON)]
+    assert rows[1].pull_requests_updated_at is None
+    assert rows[1].issues_updated_at is None
+
+
+def test_a_cache_stamped_with_schema_version_1_is_refused(cache_path: pathlib.Path) -> None:
+    wambatic.fetch.cache.Cache.open(cache_path).close()
+    connection = sqlite3.connect(cache_path)
+    with connection:
+        connection.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+    connection.close()
+    with pytest.raises(wambatic.fetch.errors.CacheVersionError) as caught:
+        wambatic.fetch.cache.Cache.open(cache_path)
+    assert caught.value.differences['schema_version'] == ('1', str(CURRENT_SCHEMA_VERSION))
+
+
 # ETags
 
 
@@ -515,6 +725,34 @@ def test_inspect_cache_reports_the_version_override_time(cache_path: pathlib.Pat
     assert info is not None
     assert info.version_override_at is not None
     assert wambatic.fetch.cache.OVERRIDE_KEY not in info.identity
+
+
+def test_inspect_cache_counts_pull_requests_and_issues(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    cache.write_pull_requests(
+        HELLO, [pull_request(1), pull_request(2)], state(resource='pull_requests'), replace=False
+    )
+    cache.write_issues(HELLO, [issue(1)], state(resource='issues'), replace=False)
+    info = wambatic.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert (info.pull_requests, info.issues) == (2, 1)
+
+
+def test_inspect_cache_gives_zero_pull_requests_and_issues_on_a_file_that_lacks_the_tables(
+    cache_path: pathlib.Path,
+) -> None:
+    cache_path.parent.mkdir(parents=True)
+    connection = sqlite3.connect(cache_path)
+    with connection:
+        connection.executescript(
+            'CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);'
+            "INSERT INTO meta VALUES ('schema_version', '1');"
+        )
+    connection.close()
+    info = wambatic.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert (info.pull_requests, info.issues) == (0, 0)
 
 
 def test_inspect_cache_of_an_empty_sqlite_file_has_zero_counts_and_adds_no_tables(

@@ -108,13 +108,14 @@ def test_a_series_points_are_in_bucket_order_with_matching_label_and_start(
     assert [p['value'] for p in total['points']] == [7, 0, 1, 2]
 
 
-def test_count_day_and_line_values_are_integers(
+def test_count_day_and_line_values_are_integers_and_hours_are_floats(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     data = as_dict(org_result)
     for series in data['series']:
+        expected = float if series['unit'] == 'hours' else int
         for point in series['points']:
-            assert type(point['value']) is int, (series['metric'], point)
+            assert type(point['value']) is expected, (series['metric'], point)
 
 
 def test_other_units_are_floats() -> None:

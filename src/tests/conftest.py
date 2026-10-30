@@ -113,9 +113,33 @@ def store_commits(
     cache.write_commits(repo.name_with_owner, commits, state, replace=True)
 
 
+def store_flow(
+    cache: wambatic.fetch.cache.Cache, repo: wambatic.fetch.base.Repo, synced_at: datetime.datetime
+) -> None:
+    """Write the repo's fixture pull requests and issues with a sync state for each."""
+
+    def state(resource: str) -> wambatic.fetch.base.SyncState:
+        return wambatic.fetch.base.SyncState(
+            repo=repo.name_with_owner,
+            resource=resource,
+            watermark=synced_at,
+            head_oid=None,
+            pushed_at=repo.pushed_at,
+            updated_at=repo.updated_at,
+            synced_at=synced_at,
+            full_synced_at=synced_at,
+        )
+
+    name = repo.name_with_owner
+    pulls = [p for p in tests.fixtures.stats.PULL_REQUESTS if p.repo == name]
+    issues = [i for i in tests.fixtures.stats.ISSUES if i.repo == name]
+    cache.write_pull_requests(name, pulls, state('pull_requests'), replace=True)
+    cache.write_issues(name, issues, state('issues'), replace=True)
+
+
 @pytest.fixture
 def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.Cache]:
-    """A cache holding the stats fixture's repositories and commits."""
+    """A cache holding the stats fixture's repositories, commits, pull requests and issues."""
     fixture = tests.fixtures.stats
     cache = wambatic.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
     alpha, beta, gamma = fixture.REPOS
@@ -124,6 +148,9 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.
     store_commits(cache, alpha, fixture.ALPHA_SYNCED_AT)
     store_commits(cache, beta, fixture.BETA_SYNCED_AT)
     store_commits(cache, gamma, fixture.GAMMA_SYNCED_AT)
+    store_flow(cache, alpha, fixture.ALPHA_SYNCED_AT)
+    store_flow(cache, beta, fixture.BETA_SYNCED_AT)
+    store_flow(cache, gamma, fixture.GAMMA_SYNCED_AT)
     yield cache
     cache.close()
 

@@ -2,6 +2,7 @@ import asyncio
 import collections.abc
 import dataclasses
 import datetime
+import email.utils
 import random
 import re
 
@@ -60,6 +61,21 @@ def error_types(data: object) -> list[tuple[str, str]]:
     ]
 
 
+def response_date(response: Response) -> datetime.datetime:
+    """The `Date` header as an aware UTC datetime; `GraphQLError` (`MALFORMED`) when it is
+    missing or unparseable."""
+    value = response.headers.get('Date')
+    try:
+        parsed = None if value is None else email.utils.parsedate_to_datetime(value)
+    except TypeError, ValueError:
+        parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise wambatic.fetch.errors.GraphQLError(
+            [('MALFORMED', 'response has no parseable Date header')]
+        )
+    return parsed.astimezone(datetime.UTC)
+
+
 class GitHubClient:
     def __init__(
         self,
@@ -115,6 +131,13 @@ class GitHubClient:
         self, query: str, variables: collections.abc.Mapping[str, object]
     ) -> dict[str, object]:
         """POST `{api_url}/graphql`; returns `data`; raises the typed errors."""
+        return (await self.graphql_dated(query, variables))[0]
+
+    async def graphql_dated(
+        self, query: str, variables: collections.abc.Mapping[str, object]
+    ) -> tuple[dict[str, object], datetime.datetime]:
+        """As `graphql`, with the response's `Date` header as an aware UTC datetime: GitHub's
+        clock, for a watermark that does not depend on this machine's."""
         response = await self.request(
             'graphql', 'POST', '/graphql', json={'query': query, 'variables': dict(variables)}
         )
@@ -128,7 +151,7 @@ class GitHubClient:
             raise wambatic.fetch.errors.GraphQLError(
                 [('MALFORMED', 'response has no data or lacks rateLimit')]
             )
-        return data
+        return data, response_date(response)
 
     async def rest_get(
         self,

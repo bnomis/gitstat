@@ -191,8 +191,10 @@ def test_the_provenance_footer_lists_the_run_and_the_versions(
     assert footer == [
         'computed_at: 2027-01-20T12:00:00+00:00',
         'fetched_at:commits: 2027-02-01T10:00:00+00:00',
+        'fetched_at:issues: 2027-02-01T10:00:00+00:00',
+        'fetched_at:pull_requests: 2027-02-01T10:00:00+00:00',
         f'wambatic_version: {org_result.provenance["wambatic_version"]}',
-        'schema_version: 1',
+        f'schema_version: {org_result.provenance["schema_version"]}',
     ]
 
 
@@ -204,7 +206,8 @@ def test_the_org_by_month_rendering_matches_the_known_good_text(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     expected = tests.fixtures.reports.ORG_MONTH_TERMINAL.format(
-        wambatic_version=org_result.provenance['wambatic_version']
+        wambatic_version=org_result.provenance['wambatic_version'],
+        schema_version=org_result.provenance['schema_version'],
     )
     assert without_trailing_spaces(render(org_result)) == expected
 
@@ -309,13 +312,14 @@ def test_exactly_twenty_top_contributors_have_no_more_line(
     assert ' more' not in output
 
 
-def test_unavailable_lists_flow_and_the_unbuilt_activity_metrics(
+def test_unavailable_lists_the_unbuilt_activity_metrics_and_no_longer_flow(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
     output = render(org_result)
     assert 'Unavailable' in output
-    for metric in ('flow', 'stars', 'forks', 'watchers', 'languages'):
+    for metric in ('stars', 'forks', 'watchers', 'languages'):
         assert re.search(rf'^\s+{metric}\s+\S', output, re.MULTILINE), metric
+    assert not re.search(r'^\s+flow\s+\S', output, re.MULTILINE)
 
 
 def test_unavailable_is_absent_when_the_table_is_empty(
@@ -325,3 +329,104 @@ def test_unavailable_is_absent_when_the_table_is_empty(
         dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': []})
     )
     assert 'Unavailable' not in output
+
+
+# Flow tables
+
+
+def flow_only_result(
+    fetcher: wambatic.fetch.base.Fetcher, **changes: object
+) -> wambatic.stats.base.StatsResult:
+    return recompute(fetcher, groups=frozenset({'flow'}), **changes)
+
+
+def table_lines(output: str, title: str) -> list[str]:
+    """The lines of the table headed `title`, up to its blank line or the next heading."""
+    lines = [line.rstrip() for line in output.splitlines()]
+    first = lines.index(title)
+    found: list[str] = []
+    for line in lines[first + 1 :]:
+        if not line.strip():
+            if found:
+                break
+            continue
+        found.append(line)
+    return found
+
+
+def test_a_flow_only_result_prints_the_flow_tables_and_trends_but_no_activity_tables(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = render(flow_only_result(stats_fetcher))
+    for title in ('Flow by period', 'Flow times by period', 'Trends'):
+        assert title in [line.rstrip() for line in output.splitlines()], title
+    for title in ('Activity by period', 'By repository', 'By author', 'Top contributors'):
+        assert title not in output
+    trend = output.split('Trends')[1].split('\n\n')[0]
+    assert {line.split()[0] for line in trend.strip().splitlines()} == {
+        'prs_opened',
+        'prs_merged',
+        'issues_opened',
+        'issues_closed',
+    }
+
+
+def test_an_activity_only_result_prints_no_flow_tables(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = render(recompute(stats_fetcher, groups=frozenset({'activity'})))
+    assert 'Flow' not in output
+    assert 'prs_opened' not in output
+    assert 'Activity by period' in output
+
+
+def test_an_absent_duration_point_shows_a_dash_and_a_value_one_decimal(
+    org_result: wambatic.stats.base.StatsResult,
+) -> None:
+    rows = {
+        line.split()[0]: line.split()[1:]
+        for line in table_lines(render(org_result), 'Flow times by period')[2:]
+        if line.split()[0].startswith('20')
+    }
+    assert rows['2026-11'] == ['-', '-', '-', '-', '12.0', '12.0', '-']
+    assert rows['2026-12'] == ['2.0', '2.0', '37.5', '37.5', '-', '-', '5']
+    assert rows['2026-10'][:2] == ['12.0', '21.6']
+
+
+def test_the_flow_times_caption_says_hours_and_no_data_and_has_no_total_row(
+    org_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(org_result)
+    assert 'hours; - no data' in output
+    assert not any(
+        line.split()[:1] == ['Total'] for line in table_lines(output, 'Flow times by period')
+    )
+    assert any(line.split()[:1] == ['Total'] for line in table_lines(output, 'Flow by period'))
+
+
+def test_a_single_bucket_has_no_total_row_in_flow_by_period(
+    repo_total_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(repo_total_result)
+    assert 'Flow by period' in output
+    assert not any(line.split()[:1] == ['Total'] for line in table_lines(output, 'Flow by period'))
+    assert 'Trends' not in output
+
+
+def test_a_partial_bucket_is_marked_in_both_flow_tables_and_the_caption_says_so(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = flow_only_result(stats_fetcher, since=datetime.date(2026, 10, 15))
+    output = render(result)
+    for title in ('Flow by period', 'Flow times by period'):
+        assert any(line.split()[:2] == ['2026-10', '*'] for line in table_lines(output, title))
+    assert '* partial period; hours; - no data' in output
+
+
+def test_the_flow_trend_lines_fit_at_width_40(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = render(flow_only_result(stats_fetcher), width=40)
+    trend = output.split('Trends')[1].split('\n\n')[0].strip().splitlines()
+    assert len(trend) == 4
+    assert all(len(line) <= 40 for line in trend)

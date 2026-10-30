@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import datetime
+import email.utils
 import pathlib
 import sqlite3
 import threading
@@ -20,6 +21,8 @@ import wambatic.settings
 
 Canned = tests.fixtures.fetch.server.Canned
 FakeCommit = tests.fixtures.fetch.upstream.FakeCommit
+FakeIssue = tests.fixtures.fetch.upstream.FakeIssue
+FakePull = tests.fixtures.fetch.upstream.FakePull
 FakeRepo = tests.fixtures.fetch.upstream.FakeRepo
 Upstream = tests.fixtures.fetch.upstream.Upstream
 
@@ -342,7 +345,7 @@ def test_unchanged_compares_the_listed_values_with_the_stored_ones(
 
     async def scenario() -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server, cache=run.cache).unchanged(changed, COMMITS)
+            return await make_fetcher(server, cache=run.cache).unchanged(changed, 'commits')
 
     assert asyncio.run(scenario()) is expected
 
@@ -352,25 +355,22 @@ def test_unchanged_is_false_with_no_state(make_fetcher: tests.conftest.MakeFetch
 
     async def scenario() -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server).unchanged(listed(upstream), COMMITS)
+            return await make_fetcher(server).unchanged(listed(upstream), 'commits')
 
     assert asyncio.run(scenario()) is False
 
 
-def test_unchanged_needs_every_requested_resource_synced(
-    make_fetcher: tests.conftest.MakeFetcher,
-) -> None:
+def test_unchanged_is_decided_per_resource(make_fetcher: tests.conftest.MakeFetcher) -> None:
     upstream = Upstream([hello()])
     run = sync_once(make_fetcher, upstream)
 
-    async def scenario(resources: frozenset[str]) -> bool:
+    async def scenario(resource: str) -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server, cache=run.cache).unchanged(
-                listed(upstream), resources
-            )
+            return await make_fetcher(server, cache=run.cache).unchanged(listed(upstream), resource)
 
-    assert asyncio.run(scenario(COMMITS)) is True
-    assert asyncio.run(scenario(frozenset({'commits', 'issues'}))) is False
+    assert asyncio.run(scenario('commits')) is True
+    assert asyncio.run(scenario('issues')) is False
+    assert asyncio.run(scenario('pull_requests')) is False
 
 
 def test_a_repo_subject_that_does_not_exist_raises_not_found(
@@ -541,7 +541,9 @@ def test_provenance_holds_the_identity_and_the_override(
 ) -> None:
     path = tmp_path / 'prov.sqlite3'
     wambatic.fetch.cache.Cache.open(path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(
+        wambatic.fetch.cache, 'SCHEMA_VERSION', wambatic.fetch.cache.SCHEMA_VERSION + 1
+    )
     cache = wambatic.fetch.cache.Cache.open(path, ignore_version=True)
     try:
         result, _ = provenance_of(make_fetcher, cache)
@@ -1022,8 +1024,6 @@ def test_an_unknown_resource_raises_before_any_request(
 @pytest.mark.parametrize(
     ('resource', 'step'),
     [
-        ('issues', 6),
-        ('pull_requests', 6),
         ('releases', 8),
         ('star_events', 8),
         ('workflow_runs', 8),
@@ -1145,3 +1145,459 @@ def test_owner_kind_names_the_login_and_type_in_its_error(
 
     with pytest.raises(wambatic.fetch.errors.NotFoundError, match="robot.*'Bot'"):
         asyncio.run(scenario())
+
+
+# Pull requests and issues of one repo
+
+SERVER_DATE = datetime.datetime(2026, 10, 29, 12, 34, 56, tzinfo=datetime.UTC)
+CLOCK = tests.fixtures.fetch.responses.NOW
+
+
+@dataclasses.dataclass
+class FlowRun:
+    written: int
+    kinds: list[str]
+    cache: wambatic.fetch.cache.Cache
+
+
+def flow_repo(pulls: int = 3, issues: int = 3) -> FakeRepo:
+    return FakeRepo(
+        HELLO,
+        history('h', 1),
+        pulls=[FakePull(n, at(n)) for n in range(1, pulls + 1)],
+        issues=[FakeIssue(n, at(n)) for n in range(1, issues + 1)],
+    )
+
+
+def flow_upstream(**repo_changes: int) -> Upstream:
+    upstream = Upstream([flow_repo(**repo_changes)])
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def sync_flow(
+    make_fetcher: tests.conftest.MakeFetcher,
+    upstream: Upstream,
+    resource: str,
+    *,
+    full_refresh: bool = False,
+    cache: wambatic.fetch.cache.Cache | None = None,
+    **kwargs: object,
+) -> FlowRun:
+    async def scenario() -> FlowRun:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server, cache=cache, **kwargs)
+            async with fetcher:
+                written = await fetcher.sync_updated(listed(upstream), resource, full_refresh)
+            return FlowRun(written, upstream.requests(server), fetcher.cache)
+
+    return asyncio.run(scenario())
+
+
+def numbers(run: FlowRun, resource: str) -> list[int]:
+    read = run.cache.read_pull_requests if resource == 'pull_requests' else run.cache.read_issues
+    return [record.number for record in read(HELLO, None)]
+
+
+def age_full_sync(cache: wambatic.fetch.cache.Cache, resource: str, days: int) -> None:
+    with cache.connection:
+        cache.connection.execute(
+            'UPDATE sync_state SET full_synced_at = ? WHERE repo = ? AND resource = ?',
+            (wambatic.fetch.cache.to_text(CLOCK - datetime.timedelta(days=days)), HELLO, resource),
+        )
+
+
+def test_a_first_sync_reads_every_page_and_stores_the_first_pages_date(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    upstream.flow_page_size = 2
+    run = sync_flow(make_fetcher, upstream, 'pull_requests')
+    assert run.kinds == ['pull_requests', 'pull_requests']
+    assert run.written == 3
+    assert numbers(run, 'pull_requests') == [1, 2, 3]
+    state = run.cache.sync_state(HELLO, 'pull_requests')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+    assert state.watermark != CLOCK
+    assert state.head_oid is None
+    assert state.full_synced_at == CLOCK
+
+
+def test_the_watermark_is_the_date_of_the_first_page_not_a_later_one(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    upstream.flow_page_size = 2
+    dates = iter([SERVER_DATE, SERVER_DATE + datetime.timedelta(minutes=5)])
+    respond = upstream.respond
+
+    def later(received: tests.fixtures.fetch.server.Received) -> Canned:
+        canned = respond(received)
+        date = email.utils.format_datetime(next(dates), usegmt=True)
+        return dataclasses.replace(canned, headers={**canned.headers, 'Date': date})
+
+    async def scenario() -> wambatic.fetch.cache.Cache:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=later) as server:
+            fetcher = make_fetcher(server)
+            async with fetcher:
+                await fetcher.sync_updated(listed(upstream), 'issues', False)
+            return fetcher.cache
+
+    state = asyncio.run(scenario()).sync_state(HELLO, 'issues')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+
+
+def test_a_changed_pull_request_is_updated_and_unchanged_ones_are_untouched(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    upstream.flow_page_size = 2
+    first = sync_flow(make_fetcher, upstream, 'pull_requests')
+    before = {pull.number: pull for pull in first.cache.read_pull_requests(HELLO, None)}
+    changed = upstream.repos[HELLO].pulls[1]
+    changed.state = 'MERGED'
+    changed.merged_at = changed.closed_at = SERVER_DATE - datetime.timedelta(minutes=10)
+    changed.updated_at = SERVER_DATE - datetime.timedelta(minutes=10)
+    second = sync_flow(make_fetcher, upstream, 'pull_requests', cache=first.cache)
+    assert second.kinds == ['pull_requests']
+    assert second.written == 1
+    after = {pull.number: pull for pull in second.cache.read_pull_requests(HELLO, None)}
+    assert after[2].merged_at == changed.merged_at
+    assert after[1] == before[1]
+    assert after[3] == before[3]
+    assert sorted(after) == [1, 2, 3]
+
+
+def test_an_item_inside_the_overlap_is_read_again_and_rewritten_harmlessly(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    inside = SERVER_DATE - datetime.timedelta(minutes=30)
+    upstream.repos[HELLO].issues.append(FakeIssue(4, inside))
+    first = sync_flow(make_fetcher, upstream, 'issues')
+    before = first.cache.read_issues(HELLO, None)
+    second = sync_flow(make_fetcher, upstream, 'issues', cache=first.cache)
+    assert second.written == 1
+    assert second.cache.read_issues(HELLO, None) == before
+
+
+def test_a_failing_second_page_leaves_the_old_rows_and_state(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    first = sync_flow(make_fetcher, upstream, 'pull_requests')
+    state = first.cache.sync_state(HELLO, 'pull_requests')
+    before = first.cache.read_pull_requests(HELLO, None)
+    upstream.repos[HELLO].pulls.append(FakePull(9, at(9)))
+    upstream.flow_page_size = 2
+    upstream.failing_flow_cursors = {'2'}
+    upstream.now = SERVER_DATE + datetime.timedelta(hours=3)
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_flow(make_fetcher, upstream, 'pull_requests', full_refresh=True, cache=first.cache)
+    assert first.cache.read_pull_requests(HELLO, None) == before
+    assert first.cache.sync_state(HELLO, 'pull_requests') == state
+
+
+def test_the_full_refresh_interval_removes_a_deleted_issue(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    first = sync_flow(make_fetcher, upstream, 'issues')
+    assert numbers(first, 'issues') == [1, 2, 3]
+    del upstream.repos[HELLO].issues[1]
+    incremental = sync_flow(make_fetcher, upstream, 'issues', cache=first.cache)
+    assert numbers(incremental, 'issues') == [1, 2, 3]
+    age_full_sync(first.cache, 'issues', 31)
+    upstream.flow_page_size = 1
+    full = sync_flow(make_fetcher, upstream, 'issues', cache=first.cache)
+    assert full.kinds == ['issues', 'issues']
+    assert numbers(full, 'issues') == [1, 3]
+    state = full.cache.sync_state(HELLO, 'issues')
+    assert state is not None
+    assert state.full_synced_at == CLOCK
+
+
+def test_full_refresh_reads_everything_and_replaces_the_rows_at_once(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    first = sync_flow(make_fetcher, upstream, 'pull_requests')
+    del upstream.repos[HELLO].pulls[0]
+    forced = sync_flow(
+        make_fetcher, upstream, 'pull_requests', full_refresh=True, cache=first.cache
+    )
+    assert numbers(forced, 'pull_requests') == [2, 3]
+    assert forced.written == 2
+
+
+def test_an_incremental_sync_keeps_the_stored_full_sync_time(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    first = sync_flow(make_fetcher, upstream, 'issues')
+    age_full_sync(first.cache, 'issues', 3)
+    sync_flow(make_fetcher, upstream, 'issues', cache=first.cache)
+    state = first.cache.sync_state(HELLO, 'issues')
+    assert state is not None
+    assert state.full_synced_at == CLOCK - datetime.timedelta(days=3)
+    assert state.synced_at == CLOCK
+
+
+def test_a_state_with_no_watermark_is_read_in_full(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    first = sync_flow(make_fetcher, upstream, 'issues')
+    with first.cache.connection:
+        first.cache.connection.execute('UPDATE sync_state SET watermark = NULL')
+    upstream.flow_page_size = 1
+    again = sync_flow(make_fetcher, upstream, 'issues', cache=first.cache)
+    assert again.kinds == ['issues'] * 3
+    assert again.written == 3
+
+
+@pytest.mark.parametrize(
+    ('days', 'expected'),
+    [(29, False), (30, False), (31, True)],
+)
+def test_full_read_due_is_true_after_the_refresh_interval(
+    make_fetcher: tests.conftest.MakeFetcher, days: int, expected: bool
+) -> None:
+    run = sync_flow(make_fetcher, flow_upstream(), 'issues')
+    age_full_sync(run.cache, 'issues', days)
+    state = run.cache.sync_state(HELLO, 'issues')
+
+    async def scenario() -> tuple[bool, bool]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=run.cache)
+            return fetcher.full_read_due(state, CLOCK), fetcher.full_read_due(None, CLOCK)
+
+    assert asyncio.run(scenario()) == (expected, True)
+
+
+def test_the_read_methods_return_the_cached_rows_from_since(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = flow_upstream()
+    run = sync_flow(make_fetcher, upstream, 'pull_requests')
+    sync_flow(make_fetcher, upstream, 'issues', cache=run.cache)
+
+    async def scenario() -> tuple[list[int], list[int], list[int], list[int]]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=run.cache)
+            repo = listed(upstream)
+            since = at(2)
+            return (
+                [pull.number async for pull in fetcher.pull_requests(repo, since)],
+                [item.number async for item in fetcher.issues(repo, since)],
+                [pull.number async for pull in fetcher.pull_requests(repo, None)],
+                [item.number async for item in fetcher.issues(repo, None)],
+            )
+
+    assert asyncio.run(scenario()) == ([2, 3], [2, 3], [1, 2, 3], [1, 2, 3])
+
+
+# Syncing pull requests and issues for a subject
+
+FLOW = frozenset({'commits', 'issues', 'pull_requests'})
+HOUR = datetime.timedelta(hours=1)
+
+
+def two_repo_upstream() -> Upstream:
+    upstream = Upstream(
+        [
+            FakeRepo(
+                HELLO,
+                history('h', 2),
+                pulls=[FakePull(1, at(1)), FakePull(2, at(2))],
+                issues=[FakeIssue(1, at(1))],
+            ),
+            FakeRepo(
+                SPOON,
+                history('s', 2),
+                pulls=[FakePull(1, at(1))],
+                issues=[FakeIssue(1, at(1)), FakeIssue(2, at(2))],
+            ),
+        ]
+    )
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def requests_of(
+    make_fetcher: tests.conftest.MakeFetcher,
+    upstream: Upstream,
+    cache: wambatic.fetch.cache.Cache,
+    **kwargs: object,
+) -> tuple[wambatic.fetch.base.SyncReport, list[tuple[str, str]]]:
+    """Sync `FLOW` once more and return the report and each per-repo request as (kind, repo)."""
+
+    async def scenario() -> tuple[wambatic.fetch.base.SyncReport, list[tuple[str, str]]]:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server, cache=cache)
+            async with fetcher:
+                report = await fetcher.sync(OWNER, FLOW, **kwargs)  # type: ignore[arg-type]
+            kinds = upstream.requests(server)
+            repos = [
+                f'{r.json["variables"]["owner"]}/{r.json["variables"]["name"]}'  # type: ignore[index]
+                if kind != 'listing'
+                else ''
+                for kind, r in zip(kinds, server.received, strict=True)
+            ]
+            return report, [pair for pair in zip(kinds, repos, strict=True) if pair[0] != 'listing']
+
+    return asyncio.run(scenario())
+
+
+def test_syncing_all_three_resources_backfills_each_and_reports_rows_for_each(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    run = sync_once(make_fetcher, two_repo_upstream(), resources=FLOW)
+    assert run.report == wambatic.fetch.base.SyncReport(
+        2, 0, {'commits': 4, 'issues': 3, 'pull_requests': 3}, (HELLO, SPOON)
+    )
+    assert run.kinds.count('pull_requests') == 2
+    assert run.kinds.count('issues') == 2
+
+
+def test_a_second_sync_with_nothing_newer_sends_only_the_listing_query(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    second = sync_once(make_fetcher, upstream, resources=FLOW, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report == wambatic.fetch.base.SyncReport(
+        2, 2, {'commits': 0, 'issues': 0, 'pull_requests': 0}, ()
+    )
+
+
+def test_a_newer_probe_on_one_repo_syncs_only_that_resource_of_that_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    upstream.repos[SPOON].issues.append(FakeIssue(3, SERVER_DATE - datetime.timedelta(minutes=5)))
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == [('issues', SPOON)]
+    assert report.rows_written == {'commits': 0, 'issues': 1, 'pull_requests': 0}
+    assert (report.repos_listed, report.repos_skipped) == (2, 1)
+
+
+def test_a_repo_with_no_pull_requests_and_a_state_is_skipped_for_them(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    upstream.repos[HELLO].pulls.clear()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    assert first.cache.sync_state(HELLO, 'pull_requests') is not None
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == []
+    assert report.repos_skipped == 2
+
+
+def test_full_refresh_reads_every_resource_of_every_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    report, requests = requests_of(make_fetcher, upstream, first.cache, full_refresh=True)
+    assert sorted(requests) == sorted(
+        (kind, name) for name in (HELLO, SPOON) for kind in ('history', 'issues', 'pull_requests')
+    )
+    assert report.repos_skipped == 0
+
+
+def test_a_due_full_read_makes_flow_changed_even_with_an_old_probe(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    age_full_sync(first.cache, 'issues', 31)
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == [('issues', HELLO)]
+    assert report.rows_written['issues'] == 1
+
+
+def test_no_more_than_workers_repos_run_when_each_repo_syncs_three_resources(
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
+) -> None:
+    upstream = Upstream(
+        [
+            FakeRepo(f'octocat/r{n}', history(f'r{n}-', 2), pulls=[FakePull(1, at(1))])
+            for n in range(4)
+        ]
+    )
+    upstream.history_delay = 0.05
+    run = sync_once(
+        make_fetcher,
+        upstream,
+        resources=FLOW,
+        settings=settings_with(fetch_settings, workers=2),
+    )
+    assert run.kinds.count('pull_requests') == 4
+    assert run.max_in_flight == 2
+
+
+def unchanged_for(
+    make_fetcher: tests.conftest.MakeFetcher,
+    cache: wambatic.fetch.cache.Cache,
+    repo: wambatic.fetch.base.Repo,
+    resource: str,
+) -> bool:
+    async def scenario() -> bool:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            return await make_fetcher(server, cache=cache).unchanged(repo, resource)
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('resource', ['issues', 'pull_requests'])
+def test_unchanged_for_a_flow_resource_follows_the_probe_the_state_and_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher, resource: str
+) -> None:
+    upstream = two_repo_upstream()
+    run = sync_once(make_fetcher, upstream, resources=FLOW)
+    repo = listed(upstream)
+    probe = f'{resource}_updated_at'
+    cutoff = SERVER_DATE - HOUR
+
+    def check(**changes: datetime.datetime | None) -> bool:
+        changed = dataclasses.replace(repo, **changes)  # type: ignore[arg-type]
+        return unchanged_for(make_fetcher, run.cache, changed, resource)
+
+    assert check() is True
+    assert check(**{probe: None}) is True
+    assert check(**{probe: cutoff - datetime.timedelta(seconds=1)}) is True
+    assert check(**{probe: cutoff}) is False
+    assert check(**{probe: SERVER_DATE}) is False
+    age_full_sync(run.cache, resource, 31)
+    assert check(**{probe: None}) is False
+    assert (
+        unchanged_for(
+            make_fetcher,
+            run.cache,
+            dataclasses.replace(repo, name_with_owner='octocat/none'),
+            resource,
+        )
+        is False
+    )
+    with run.cache.connection:
+        run.cache.connection.execute('UPDATE sync_state SET watermark = NULL')
+    age_full_sync(run.cache, resource, 0)
+    assert check(**{probe: None}) is False
+
+
+@pytest.mark.parametrize('resource', ['releases', 'star_events', 'workflow_runs'])
+def test_the_later_step_resources_still_raise_not_implemented(
+    make_fetcher: tests.conftest.MakeFetcher, resource: str
+) -> None:
+    async def scenario() -> None:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            async with make_fetcher(server) as fetcher:
+                with pytest.raises(NotImplementedError, match='step 8'):
+                    await fetcher.sync(OWNER, frozenset({'issues', resource}))
+
+    asyncio.run(scenario())

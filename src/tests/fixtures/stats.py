@@ -1,8 +1,12 @@
-"""A small set of commits with every statistic worked out by hand.
+"""A small set of commits, pull requests and issues with every statistic worked out by hand.
 
 Commits are named for their repo (`a` alpha, `b` beta, `g` gamma) and listed oldest first within
 each repo. The expected figures below are literals: each comment shows the sum it came from, so
 nothing here is computed by the code under test. Merge commits are left out of line counts.
+
+Pull requests are `p1`, `p2`, ... and issues `i1`, `i2`, ... in the comments, in the numbering
+order of their repo's list; `g1` and `gi1` are gamma's. Pull request times are written
+`created / first review / merged` as UTC instants.
 """
 
 import datetime
@@ -243,3 +247,241 @@ ORG_TOP_CONTRIBUTORS: list[dict[str, typing.Any]] = [
         'active_days': 1,  # 10-26
     },
 ]
+
+
+def moment(when: str) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(when).replace(tzinfo=UTC)
+
+
+def pull(
+    repo_name: str,
+    number: int,
+    login: str | None,
+    created: str,
+    *,
+    review: str | None = None,
+    merged: str | None = None,
+    closed: str | None = None,
+    updated: str | None = None,
+    size: tuple[int, int] = (1, 1),
+) -> wambatic.fetch.base.PullRequest:
+    """A pull request; `closed` defaults to `merged`, and `updated` to its last event."""
+    events = [created, review, merged, closed]
+    last = max(event for event in events if event is not None)
+    return wambatic.fetch.base.PullRequest(
+        repo=repo_name,
+        number=number,
+        author_login=login,
+        created_at=moment(created),
+        updated_at=moment(updated or last),
+        merged_at=None if merged is None else moment(merged),
+        closed_at=None if (closed or merged) is None else moment(str(closed or merged)),
+        first_review_at=None if review is None else moment(review),
+        additions=size[0],
+        deletions=size[1],
+    )
+
+
+def issue(
+    repo_name: str,
+    number: int,
+    login: str | None,
+    created: str,
+    closed: str | None = None,
+) -> wambatic.fetch.base.Issue:
+    return wambatic.fetch.base.Issue(
+        repo=repo_name,
+        number=number,
+        author_login=login,
+        created_at=moment(created),
+        updated_at=moment(closed or created),
+        closed_at=None if closed is None else moment(closed),
+    )
+
+
+PULL_REQUESTS = [
+    # alpha
+    pull(
+        ALPHA,
+        1,
+        'hubot',
+        '2026-10-05T10:00',
+        review='2026-10-05T14:00',
+        merged='2026-10-06T10:00',
+        size=(10, 5),
+    ),  # review 4h, merge 24h, size 15
+    pull(
+        ALPHA,
+        2,
+        'Octocat',
+        '2026-10-10T08:00',
+        review='2026-10-10T20:00',
+        merged='2026-10-12T08:00',
+        size=(30, 10),
+    ),  # review 12h, merge 48h, size 40
+    pull(
+        ALPHA,
+        3,
+        'hubot',
+        '2026-10-20T09:00',
+        review='2026-10-21T09:00',
+        merged='2026-10-23T09:00',
+        size=(8, 2),
+    ),  # review 24h, merge 72h, size 10
+    pull(ALPHA, 4, 'octocat', '2026-10-25T09:00', closed='2026-10-26T09:00'),  # closed unmerged
+    # created in September: merged in October, but reviewed (and created) outside the range
+    pull(
+        ALPHA,
+        5,
+        'monalisa',
+        '2026-09-28T12:00',
+        review='2026-09-29T12:00',
+        merged='2026-10-02T12:00',
+        size=(50, 50),
+    ),  # merge 96h, size 100
+    pull(ALPHA, 6, 'hubot', '2026-11-10T09:00'),  # open all through November
+    # merged at 23:30 UTC on 12-31, which is 00:30 on 01-01 in Berlin
+    pull(
+        ALPHA,
+        7,
+        'hubot',
+        '2026-12-30T10:00',
+        review='2026-12-30T12:00',
+        merged='2026-12-31T23:30',
+        size=(4, 1),
+    ),  # review 2h, merge 37.5h, size 5
+    pull(ALPHA, 8, 'dependabot[bot]', '2027-01-10T09:00'),  # open, a bot's
+    # fully before the range, so never read
+    pull(
+        ALPHA, 9, 'hubot', '2026-08-01T09:00', review='2026-08-02T09:00', merged='2026-08-05T09:00'
+    ),
+    # beta
+    pull(
+        BETA, 1, None, '2026-10-15T09:00', merged='2026-10-15T15:00', size=(3, 1)
+    ),  # no review; 6h
+    pull(
+        BETA,
+        2,
+        'octocat',
+        '2027-01-12T09:00',
+        review='2027-01-12T10:00',
+        merged='2027-01-13T09:00',
+        size=(12, 3),
+    ),  # review 1h, merge 24h, size 15
+    # created and reviewed inside the range, merged the day after it ends
+    pull(
+        BETA,
+        3,
+        'hubot',
+        '2027-01-30T09:00',
+        review='2027-01-31T09:00',
+        merged='2027-02-01T08:00',
+        size=(7, 7),
+    ),  # review 24h
+    # gamma, owned by the user octocat
+    pull(
+        GAMMA,
+        1,
+        'Octocat',
+        '2026-10-10T09:00',
+        review='2026-10-10T11:00',
+        merged='2026-10-11T09:00',
+        size=(6, 4),
+    ),  # review 2h, merge 24h, size 10
+    pull(
+        GAMMA,
+        2,
+        'monalisa',
+        '2026-10-12T09:00',
+        review='2026-10-13T09:00',
+        merged='2026-10-14T09:00',
+        size=(20, 5),
+    ),  # review 24h, merge 48h, size 25
+]
+
+ISSUES = [
+    # alpha
+    issue(ALPHA, 1, 'octocat', '2026-10-03T09:00', '2026-10-04T09:00'),  # close 24h
+    issue(ALPHA, 2, 'hubot', '2026-10-07T09:00'),  # closed and reopened: open
+    issue(ALPHA, 3, 'monalisa', '2026-10-08T09:00', '2026-10-18T09:00'),  # close 240h
+    # beta
+    issue(BETA, 1, 'octocat', '2026-11-02T10:00', '2026-11-02T22:00'),  # close 12h
+    issue(BETA, 2, None, '2026-09-30T12:00', '2026-10-02T12:00'),  # opened in September; close 48h
+    issue(BETA, 3, 'hubot', '2027-01-05T09:00'),
+    # gamma
+    issue(GAMMA, 1, 'octocat', '2026-11-05T09:00', '2026-11-08T09:00'),  # close 72h
+    issue(GAMMA, 2, 'monalisa', '2026-10-15T09:00'),
+]
+
+FLOW_METRICS = (
+    'prs_opened',
+    'prs_merged',
+    'issues_opened',
+    'issues_closed',
+    'time_to_first_review_p50',
+    'time_to_first_review_p90',
+    'time_to_merge_p50',
+    'time_to_merge_p90',
+    'time_to_close_p50',
+    'time_to_close_p90',
+    'pr_size_p50',
+)
+
+# The org (alpha and beta) by month in UTC: metric -> label -> value, a month with no value left
+# out. Checked by hand on 2026-10-30. Percentiles are statistics.median and
+# statistics.quantiles(n=10, method='inclusive')[8], which for sorted values v0..vk (m = k) is
+# (v[j] * (10 - d) + v[j + 1] * d) / 10 with j, d = divmod(9 * m, 10).
+ORG_FLOW_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    # opened by creation date. Oct: p1 p2 p3 p4 beta-p1 (alpha-p5 was created in September).
+    # Nov: alpha-p6. Dec: alpha-p7. Jan: alpha-p8, beta-p2, beta-p3 (alpha-p9 is in August)
+    'prs_opened': {'2026-10': 5, '2026-11': 1, '2026-12': 1, '2027-01': 3},
+    # merged by merge date. Oct: p1 p2 p3 p5 beta-p1. Dec: alpha-p7 (23:30 on 12-31).
+    # Jan: beta-p2 (beta-p3 merges on 02-01, after the range)
+    'prs_merged': {'2026-10': 5, '2026-11': 0, '2026-12': 1, '2027-01': 1},
+    # Oct: alpha-i1 i2 i3. Nov: beta-i1. Jan: beta-i3 (beta-i2 was opened in September)
+    'issues_opened': {'2026-10': 3, '2026-11': 1, '2026-12': 0, '2027-01': 1},
+    # Oct: alpha-i1 i3 beta-i2 (alpha-i2 was reopened). Nov: beta-i1
+    'issues_closed': {'2026-10': 3, '2026-11': 1, '2026-12': 0, '2027-01': 0},
+    # by review date. Oct values [4, 12, 24]: p50 12, p90 (12 * 2 + 24 * 8) / 10 = 21.6
+    # (alpha-p5 was reviewed in September; beta-p1 has no review).
+    # Dec: alpha-p7 2. Jan values [1, 24] (beta-p2, beta-p3): p50 (1 + 24) / 2 = 12.5,
+    # p90 (1 * 1 + 24 * 9) / 10 = 21.7
+    'time_to_first_review_p50': {'2026-10': 12.0, '2026-12': 2.0, '2027-01': 12.5},
+    'time_to_first_review_p90': {'2026-10': 21.6, '2026-12': 2.0, '2027-01': 21.7},
+    # by merge date. Oct values [6, 24, 48, 72, 96]: p50 48, p90 (72 * 4 + 96 * 6) / 10 = 86.4.
+    # Dec: 37.5 (23:30 on 12-31 less 10:00 on 12-30). Jan: 24 (beta-p2)
+    'time_to_merge_p50': {'2026-10': 48.0, '2026-12': 37.5, '2027-01': 24.0},
+    'time_to_merge_p90': {'2026-10': 86.4, '2026-12': 37.5, '2027-01': 24.0},
+    # by close date, issues. Oct values [24, 48, 240]: p50 48, p90 (48 * 2 + 240 * 8) / 10 = 201.6.
+    # Nov: 12
+    'time_to_close_p50': {'2026-10': 48.0, '2026-11': 12.0},
+    'time_to_close_p90': {'2026-10': 201.6, '2026-11': 12.0},
+    # merged sizes. Oct [4, 10, 15, 40, 100]: median_low 15. Dec [5]. Jan [15]
+    'pr_size_p50': {'2026-10': 15, '2026-12': 5, '2027-01': 15},
+}
+
+# In Europe/Berlin alpha-p7's merge (23:30 UTC on 12-31) is on 2027-01-01, so only the series
+# built on the merge date move. Jan merge values [24, 37.5]: p50 (24 + 37.5) / 2 = 30.75,
+# p90 (24 * 1 + 37.5 * 9) / 10 = 36.15; sizes [5, 15]: median_low 5. December has no merge.
+ORG_FLOW_BY_MONTH_BERLIN: dict[str, dict[str, float]] = {
+    'prs_merged': {'2026-10': 5, '2026-11': 0, '2026-12': 0, '2027-01': 2},
+    'time_to_merge_p50': {'2026-10': 48.0, '2027-01': 30.75},
+    'time_to_merge_p90': {'2026-10': 86.4, '2027-01': 36.15},
+    'pr_size_p50': {'2026-10': 15, '2027-01': 5},
+}
+
+# The user octocat's own items in gamma as one bucket: gamma-p1 (authored 'Octocat') and
+# gamma-i1; gamma-p2 and gamma-i2 are other people's. Times as the comments above.
+USER_FLOW_TOTAL_UTC: dict[str, float] = {
+    'prs_opened': 1,
+    'prs_merged': 1,
+    'issues_opened': 1,
+    'issues_closed': 1,
+    'time_to_first_review_p50': 2.0,
+    'time_to_first_review_p90': 2.0,
+    'time_to_merge_p50': 24.0,
+    'time_to_merge_p90': 24.0,
+    'time_to_close_p50': 72.0,
+    'time_to_close_p90': 72.0,
+    'pr_size_p50': 10,
+}

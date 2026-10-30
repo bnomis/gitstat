@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import typing
@@ -18,15 +19,14 @@ if typing.TYPE_CHECKING:
 RESOURCES = frozenset(
     {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
-BUILT_RESOURCES = frozenset({'commits'})
+BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests'})
 UNBUILT_RESOURCE_STEPS = {
-    'issues': 6,
-    'pull_requests': 6,
     'releases': 8,
     'star_events': 8,
     'workflow_runs': 8,
 }
 PAGE_SIZE = 100
+BOT_SUFFIX = '[bot]'
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -57,6 +57,8 @@ class Repo:
     is_fork: bool
     pushed_at: datetime.datetime | None
     updated_at: datetime.datetime
+    pull_requests_updated_at: datetime.datetime | None = None
+    issues_updated_at: datetime.datetime | None = None
     missing: bool = False
 
 
@@ -69,6 +71,30 @@ class Commit:
     additions: int
     deletions: int
     is_merge: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PullRequest:
+    repo: str
+    number: int
+    author_login: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    merged_at: datetime.datetime | None
+    closed_at: datetime.datetime | None
+    first_review_at: datetime.datetime | None
+    additions: int
+    deletions: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Issue:
+    repo: str
+    number: int
+    author_login: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    closed_at: datetime.datetime | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -140,6 +166,14 @@ def timestamp(value: object, what: str) -> datetime.datetime:
     return parsed.astimezone(datetime.UTC)
 
 
+def probe(fields: dict[str, object], name: str) -> datetime.datetime | None:
+    """The `updatedAt` of the one node a listing selects from the connection `name`."""
+    nodes = sequence(mapping(fields.get(name), name).get('nodes'), f'{name}.nodes')
+    if not nodes:
+        return None
+    return timestamp(mapping(nodes[0], f'{name} node').get('updatedAt'), f'{name}.updatedAt')
+
+
 def parse_repo(node: object) -> Repo:
     fields = mapping(node, 'repository')
     branch = fields.get('defaultBranchRef')
@@ -151,6 +185,8 @@ def parse_repo(node: object) -> Repo:
         target = mapping(branch_fields.get('target'), 'defaultBranchRef.target')
         head_oid = text(target.get('oid'), 'defaultBranchRef.target.oid')
     pushed_at = fields.get('pushedAt')
+    pulls_at = probe(fields, 'pullRequests')
+    issues_at = probe(fields, 'issues')
     return Repo(
         name_with_owner=text(fields.get('nameWithOwner'), 'nameWithOwner'),
         default_branch=default_branch,
@@ -159,6 +195,76 @@ def parse_repo(node: object) -> Repo:
         is_fork=fields.get('isFork') is True,
         pushed_at=None if pushed_at is None else timestamp(pushed_at, 'pushedAt'),
         updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        pull_requests_updated_at=pulls_at,
+        issues_updated_at=issues_at,
+    )
+
+
+def actor_login(value: object, what: str) -> str | None:
+    """The REST form of an author: `login`, `login[bot]` for a bot, None for a deleted account."""
+    if value is None:
+        return None
+    fields = mapping(value, what)
+    login = text(fields.get('login'), f'{what}.login')
+    return f'{login}{BOT_SUFFIX}' if fields.get('__typename') == 'Bot' else login
+
+
+def optional_timestamp(value: object, what: str) -> datetime.datetime | None:
+    return None if value is None else timestamp(value, what)
+
+
+def first_review_at(reviews: object, author: str | None) -> datetime.datetime | None:
+    """The earliest submitted review by anyone but the pull request's author and bots."""
+    found: list[datetime.datetime] = []
+    for node in sequence(mapping(reviews, 'reviews').get('nodes'), 'reviews.nodes'):
+        fields = mapping(node, 'review')
+        submitted = optional_timestamp(fields.get('submittedAt'), 'review.submittedAt')
+        if submitted is None:
+            continue
+        reviewer = actor_login(fields.get('author'), 'review.author')
+        if reviewer is not None and (
+            reviewer.endswith(BOT_SUFFIX)
+            or (author is not None and reviewer.casefold() == author.casefold())
+        ):
+            continue
+        found.append(submitted)
+    return min(found, default=None)
+
+
+def parse_pull_request(repo: str, node: object) -> PullRequest:
+    fields = mapping(node, 'pull request')
+    state = text(fields.get('state'), 'state')
+    author = actor_login(fields.get('author'), 'author')
+    return PullRequest(
+        repo=repo,
+        number=integer(fields.get('number'), 'number'),
+        author_login=author,
+        created_at=timestamp(fields.get('createdAt'), 'createdAt'),
+        updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        merged_at=optional_timestamp(fields.get('mergedAt'), 'mergedAt')
+        if state == 'MERGED'
+        else None,
+        closed_at=optional_timestamp(fields.get('closedAt'), 'closedAt')
+        if state != 'OPEN'
+        else None,
+        first_review_at=first_review_at(fields.get('reviews'), author),
+        additions=integer(fields.get('additions'), 'additions'),
+        deletions=integer(fields.get('deletions'), 'deletions'),
+    )
+
+
+def parse_issue(repo: str, node: object) -> Issue:
+    fields = mapping(node, 'issue')
+    state = text(fields.get('state'), 'state')
+    return Issue(
+        repo=repo,
+        number=integer(fields.get('number'), 'number'),
+        author_login=actor_login(fields.get('author'), 'author'),
+        created_at=timestamp(fields.get('createdAt'), 'createdAt'),
+        updated_at=timestamp(fields.get('updatedAt'), 'updatedAt'),
+        closed_at=optional_timestamp(fields.get('closedAt'), 'closedAt')
+        if state == 'CLOSED'
+        else None,
     )
 
 
@@ -192,6 +298,15 @@ def parse_compare_commit(node: object) -> NewCommit:
         author_login=None if login is None else text(login, 'author.login'),
         is_merge=len(sequence(fields.get('parents'), 'parents')) > 1,
     )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class UpdatedRead[R: PullRequest | Issue]:
+    """How to page a mutable resource: its query, the connection the query selects, its parser."""
+
+    query: str
+    connection: str
+    parse: collections.abc.Callable[[str, object], R]
 
 
 def split_name(name_with_owner: str) -> tuple[str, str]:
@@ -258,6 +373,24 @@ class Fetcher:
             f'{login} is not a user or an organisation (type: {kind!r})'
         )
 
+    async def pages(
+        self,
+        query: str,
+        variables: collections.abc.Mapping[str, object],
+        connection_of: collections.abc.Callable[[dict[str, object]], dict[str, object]],
+    ) -> collections.abc.AsyncGenerator[tuple[list[object], datetime.datetime]]:
+        """The nodes of each page of a paged GraphQL connection, with the `Date` of the response
+        that carried it. `connection_of` finds the connection in a response's `data`."""
+        cursor: str | None = None
+        while True:
+            data, date = await self.client.graphql_dated(query, {**variables, 'cursor': cursor})
+            connection = connection_of(data)
+            yield sequence(connection.get('nodes'), 'nodes'), date
+            page = mapping(connection.get('pageInfo'), 'pageInfo')
+            if page.get('hasNextPage') is not True:
+                return
+            cursor = text(page.get('endCursor'), 'endCursor')
+
     async def list_repos(self, subject: Subject) -> list[Repo]:
         """The subject's repositories from GitHub, after the fork and archived filters."""
         if subject.kind == 'repo':
@@ -268,23 +401,21 @@ class Fetcher:
                 raise wambatic.fetch.errors.NotFoundError(f'{subject.full_name} not found')
             return [parse_repo(data['repository'])]
         repos: list[Repo] = []
-        cursor: str | None = None
-        while True:
-            data = await self.client.graphql(
-                wambatic.fetch.queries.OWNER_REPOSITORIES,
-                {'login': subject.login, 'cursor': cursor},
-            )
+
+        def repositories(data: dict[str, object]) -> dict[str, object]:
             if data.get('repositoryOwner') is None:
                 raise wambatic.fetch.errors.NotFoundError(f'{subject.login} not found')
-            connection = mapping(
-                mapping(data['repositoryOwner'], 'repositoryOwner').get('repositories'),
-                'repositories',
+            owner = mapping(data['repositoryOwner'], 'repositoryOwner')
+            return mapping(owner.get('repositories'), 'repositories')
+
+        async with contextlib.aclosing(
+            self.pages(
+                wambatic.fetch.queries.OWNER_REPOSITORIES, {'login': subject.login}, repositories
             )
-            repos.extend(parse_repo(node) for node in sequence(connection.get('nodes'), 'nodes'))
-            page = mapping(connection.get('pageInfo'), 'pageInfo')
-            if page.get('hasNextPage') is not True:
-                return self.filter_repos(repos)
-            cursor = text(page.get('endCursor'), 'endCursor')
+        ) as pages:
+            async for nodes, _ in pages:
+                repos.extend(parse_repo(node) for node in nodes)
+        return self.filter_repos(repos)
 
     def filter_repos(self, repos: list[Repo]) -> list[Repo]:
         return [
@@ -294,17 +425,24 @@ class Fetcher:
             and (self.settings.include_archived or not repo.is_archived)
         ]
 
-    async def unchanged(self, repo: Repo, resources: collections.abc.Iterable[str]) -> bool:
-        """True when every resource was last synced against this listed `pushedAt`/`updatedAt`."""
-        for resource in resources:
-            state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
-            if (
-                state is None
-                or state.pushed_at != repo.pushed_at
-                or state.updated_at != repo.updated_at
-            ):
-                return False
-        return True
+    async def unchanged(self, repo: Repo, resource: str) -> bool:
+        """True when `resource` needs no request for this listed repo.
+
+        `commits` were last synced against this `pushedAt` and `updatedAt`. `issues` and
+        `pull_requests` have a watermark, no full read is due and the listed newest `updatedAt`
+        is absent or before the point at which paging would stop on its first item.
+        """
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
+        if state is None:
+            return False
+        if resource == 'commits':
+            return state.pushed_at == repo.pushed_at and state.updated_at == repo.updated_at
+        if state.watermark is None or self.full_read_due(state, self.client.clock()):
+            return False
+        newest = (
+            repo.pull_requests_updated_at if resource == 'pull_requests' else repo.issues_updated_at
+        )
+        return newest is None or newest < state.watermark - self.settings.overlap
 
     async def repos(self, subject: Subject) -> list[Repo]:
         """From the cache: repositories owned by a user or org, excluding missing ones and
@@ -365,24 +503,20 @@ class Fetcher:
         commits: list[Commit] = []
         if repo.default_branch is not None:
             owner, name = split_name(repo.name_with_owner)
-            cursor: str | None = None
-            while True:
-                data = await self.client.graphql(
-                    wambatic.fetch.queries.COMMIT_HISTORY,
-                    {'owner': owner, 'name': name, 'cursor': cursor},
-                )
+
+            def history(data: dict[str, object]) -> dict[str, object]:
                 repository = mapping(data.get('repository'), 'repository')
                 branch = mapping(repository.get('defaultBranchRef'), 'defaultBranchRef')
                 target = mapping(branch.get('target'), 'target')
-                history = mapping(target.get('history'), 'history')
-                commits.extend(
-                    parse_history_node(repo.name_with_owner, node)
-                    for node in sequence(history.get('nodes'), 'nodes')
+                return mapping(target.get('history'), 'history')
+
+            async with contextlib.aclosing(
+                self.pages(
+                    wambatic.fetch.queries.COMMIT_HISTORY, {'owner': owner, 'name': name}, history
                 )
-                page = mapping(history.get('pageInfo'), 'pageInfo')
-                if page.get('hasNextPage') is not True:
-                    break
-                cursor = text(page.get('endCursor'), 'endCursor')
+            ) as pages:
+                async for nodes, _ in pages:
+                    commits.extend(parse_history_node(repo.name_with_owner, node) for node in nodes)
         state = self.new_state(repo, 'commits', None)
         return await self.db(
             self.cache.write_commits, repo.name_with_owner, commits, state, replace=True
@@ -479,6 +613,118 @@ class Fetcher:
         loguru.logger.info(f'Reading all commits of {repo.name_with_owner}: {reason}')
         return await self.backfill_commits(repo), True
 
+    def full_read_due(self, state: SyncState | None, now: datetime.datetime) -> bool:
+        """Whether a time-windowed resource must be read from scratch: it never was, or not for
+        longer than `fetch.full_refresh_after`, the only way a deleted item leaves the cache."""
+        return state is None or now - state.full_synced_at > self.settings.full_refresh_after
+
+    async def read_updated[R: PullRequest | Issue](
+        self, repo: Repo, read: UpdatedRead[R], state: SyncState | None, full: bool
+    ) -> tuple[list[R], datetime.datetime]:
+        """The repo's pull requests or issues, newest update first, and the watermark for them:
+        the `Date` of the first page's response. Paging stops at the first item last updated
+        before `state.watermark - fetch.overlap`, unless `full` or there is no watermark."""
+        owner, name = split_name(repo.name_with_owner)
+        cutoff = (
+            None
+            if full or state is None or state.watermark is None
+            else state.watermark - self.settings.overlap
+        )
+        found: list[R] = []
+        watermark: datetime.datetime | None = None
+
+        def connection(data: dict[str, object]) -> dict[str, object]:
+            repository = mapping(data.get('repository'), 'repository')
+            return mapping(repository.get(read.connection), read.connection)
+
+        async with contextlib.aclosing(
+            self.pages(read.query, {'owner': owner, 'name': name}, connection)
+        ) as pages:
+            async for nodes, date in pages:
+                watermark = watermark or date
+                for node in nodes:
+                    record = read.parse(repo.name_with_owner, node)
+                    if cutoff is not None and record.updated_at < cutoff:
+                        return found, watermark
+                    found.append(record)
+        if watermark is None:
+            raise malformed('no page was read')
+        return found, watermark
+
+    async def sync_updated(self, repo: Repo, resource: str, full_refresh: bool) -> int:
+        """Bring the repo's pull requests or issues up to date and return the rows written:
+        everything on the first sync, on a full refresh or when a full read is due, else the
+        items changed since the watermark. The rows and the new state go in one transaction."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
+        if state is None:
+            reason = 'no previous sync'
+        elif full_refresh:
+            reason = 'full refresh requested'
+        elif self.full_read_due(state, self.client.clock()):
+            reason = 'full refresh interval passed'
+        else:
+            reason = ''
+        full = bool(reason)
+        if full:
+            loguru.logger.info(f'Reading all {resource} of {repo.name_with_owner}: {reason}')
+        full_synced_at = None if full or state is None else state.full_synced_at
+        if resource == 'pull_requests':
+            pulls, watermark = await self.read_updated(
+                repo,
+                UpdatedRead(
+                    wambatic.fetch.queries.PULL_REQUESTS, 'pullRequests', parse_pull_request
+                ),
+                state,
+                full,
+            )
+            return await self.db(
+                self.cache.write_pull_requests,
+                repo.name_with_owner,
+                pulls,
+                self.flow_state(repo, resource, watermark, full_synced_at),
+                replace=full,
+            )
+        issues, watermark = await self.read_updated(
+            repo,
+            UpdatedRead(wambatic.fetch.queries.ISSUES, 'issues', parse_issue),
+            state,
+            full,
+        )
+        return await self.db(
+            self.cache.write_issues,
+            repo.name_with_owner,
+            issues,
+            self.flow_state(repo, resource, watermark, full_synced_at),
+            replace=full,
+        )
+
+    def flow_state(
+        self,
+        repo: Repo,
+        resource: str,
+        watermark: datetime.datetime,
+        full_synced_at: datetime.datetime | None,
+    ) -> SyncState:
+        return dataclasses.replace(
+            self.new_state(repo, resource, full_synced_at), watermark=watermark, head_oid=None
+        )
+
+    async def pull_requests(
+        self, repo: Repo, since: datetime.datetime | None
+    ) -> collections.abc.AsyncIterator[PullRequest]:
+        """From the cache: the repo's pull requests with `updated_at >= since` (all when None),
+        by number. Every event of a pull request is at or before its `updated_at`, so this
+        holds every one with an event since `since`."""
+        for pull in await self.db(self.cache.read_pull_requests, repo.name_with_owner, since):
+            yield pull
+
+    async def issues(
+        self, repo: Repo, since: datetime.datetime | None
+    ) -> collections.abc.AsyncIterator[Issue]:
+        """From the cache, as `pull_requests`."""
+        for issue in await self.db(self.cache.read_issues, repo.name_with_owner, since):
+            yield issue
+
     async def sync(
         self, subject: Subject, resources: frozenset[str], full_refresh: bool = False
     ) -> SyncReport:
@@ -495,30 +741,39 @@ class Fetcher:
         await self.db(
             self.cache.upsert_repos, subject.login, listed, complete=subject.kind != 'repo'
         )
-        pending: list[Repo] = []
+        ordered = sorted(resources)
+        pending: list[tuple[Repo, list[str]]] = []
         for repo in listed:
-            if full_refresh or not await self.unchanged(repo, resources):
-                pending.append(repo)
-        rows = 0
+            needed = [
+                resource
+                for resource in ordered
+                if full_refresh or not await self.unchanged(repo, resource)
+            ]
+            if needed:
+                pending.append((repo, needed))
+        rows = dict.fromkeys(ordered, 0)
         refetched: list[str] = []
 
-        async def sync_one(repo: Repo) -> None:
-            nonlocal rows
+        async def sync_one(repo: Repo, needed: list[str]) -> None:
             async with self.semaphore:
-                written, full = await self.sync_commits(repo, full_refresh)
-            rows += written
-            if full:
-                refetched.append(repo.name_with_owner)
+                for resource in needed:
+                    if resource == 'commits':
+                        written, full = await self.sync_commits(repo, full_refresh)
+                        if full:
+                            refetched.append(repo.name_with_owner)
+                    else:
+                        written = await self.sync_updated(repo, resource, full_refresh)
+                    rows[resource] += written
 
         try:
             async with asyncio.TaskGroup() as group:
-                for repo in pending:
-                    group.create_task(sync_one(repo))
+                for repo, needed in pending:
+                    group.create_task(sync_one(repo, needed))
         except ExceptionGroup as errors:
             raise errors.exceptions[0] from errors
         return SyncReport(
             repos_listed=len(listed),
             repos_skipped=len(listed) - len(pending),
-            rows_written={'commits': rows} if 'commits' in resources else {},
+            rows_written=rows,
             full_refetches=tuple(sorted(refetched)),
         )

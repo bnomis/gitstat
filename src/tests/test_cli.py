@@ -39,6 +39,7 @@ Subject = wambatic.fetch.base.Subject
 UsageError = wambatic.reports.errors.UsageError
 SettingsError = wambatic.settings.SettingsError
 COMMITS = frozenset({'commits'})
+BUILT = frozenset({'commits', 'issues', 'pull_requests'})
 LOGINS = st.from_regex(r'[A-Za-z0-9-]{1,39}', fullmatch=True)
 REPO_NAMES = st.from_regex(r'[A-Za-z0-9._-]{1,100}', fullmatch=True)
 
@@ -377,6 +378,7 @@ class Ran:
     stdout: str
     paths: list[str]
     syncs: list[tuple[wambatic.fetch.base.Subject, frozenset[str], bool]]
+    queries: list[str]
 
 
 def alpha_upstream() -> tests.fixtures.fetch.upstream.Upstream:
@@ -443,10 +445,9 @@ def run_report(
     console = io.StringIO()
     stdout = io.StringIO()
 
-    async def scenario() -> list[str]:
-        server = tests.fixtures.fetch.server.ReplayServer(
-            routes or {}, (upstream or alpha_upstream()).respond
-        )
+    async def scenario() -> tuple[list[str], list[str]]:
+        fake = upstream or alpha_upstream()
+        server = tests.fixtures.fetch.server.ReplayServer(routes or {}, fake.respond)
         async with server:
 
             def factory(
@@ -471,10 +472,16 @@ def run_report(
                 stdout,
                 clock=lambda: clock,
             )
-            return [received.path for received in server.received]
+            kinds = fake.requests(server)
+            queries = [
+                kind
+                for kind, received in zip(kinds, server.received, strict=True)
+                if received.path == '/graphql'
+            ]
+            return [received.path for received in server.received], queries
 
-    paths = asyncio.run(scenario())
-    return Ran(console.getvalue(), stdout.getvalue(), paths, syncs)
+    paths, queries = asyncio.run(scenario())
+    return Ran(console.getvalue(), stdout.getvalue(), paths, syncs, queries)
 
 
 def test_a_warm_cache_with_no_fetch_reports_without_a_token_or_a_session(
@@ -491,6 +498,8 @@ def test_a_warm_cache_with_no_fetch_reports_without_a_token_or_a_session(
         online=False,
     )
     assert 'Activity by period' in ran.console
+    assert 'Flow by period' in ran.console
+    assert 'Flow times by period' in ran.console
     assert 'repo octo-org/alpha, 2026-10-01 to 2027-01-31, by month, UTC' in ran.console
     assert ran.syncs == []
     assert ran.paths == []
@@ -528,9 +537,46 @@ def test_a_cache_older_than_max_age_syncs_through_the_server(
         clock=SYNCED + datetime.timedelta(days=31),
         upstream=upstream,
     )
-    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, False)]
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), BUILT, False)]
     assert ran.paths == ['/graphql']
     assert 'Activity by period' in ran.console
+
+
+def test_the_sync_log_line_names_the_rows_written_for_each_resource() -> None:
+    messages: list[str] = []
+    sink = loguru.logger.add(lambda message: messages.append(message.record['message']))
+    try:
+        wambatic.cli.log_sync(
+            wambatic.fetch.base.SyncReport(
+                3, 1, {'pull_requests': 5, 'commits': 12, 'issues': 3}, (tests.fixtures.stats.BETA,)
+            )
+        )
+    finally:
+        loguru.logger.remove(sink)
+    assert messages == [
+        'Synced 3 repositories (1 unchanged), rows written: '
+        f'commits 12, issues 3, pull_requests 5; read in full again: {tests.fixtures.stats.BETA}'
+    ]
+
+
+def test_a_max_age_report_with_every_resource_fresh_makes_no_request(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['org:octo-org', '--max-age', '30d', *ALPHA_FLAGS],
+        clock=tests.fixtures.stats.ALPHA_SYNCED_AT + datetime.timedelta(days=1),
+        online=False,
+    )
+    assert ran.syncs == []
+    assert ran.paths == []
+    assert 'Flow by period' in ran.console
+    assert 'fetched_at:issues: 2027-02-01T10:00:00+00:00' in ran.console
+    assert 'fetched_at:pull_requests: 2027-02-01T10:00:00+00:00' in ran.console
 
 
 def test_a_sync_with_no_token_fails_with_an_auth_error(
@@ -566,23 +612,35 @@ def test_full_refresh_syncs_a_fresh_cache_and_reads_the_history_again(
         ['repo:octo-org/alpha', '--max-age', '30d', '--full-refresh', *ALPHA_FLAGS],
         upstream=upstream,
     )
-    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, True)]
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), BUILT, True)]
+    assert ran.queries == ['repository', 'history', 'issues', 'pull_requests']
     assert 'Activity by period' in ran.console
 
 
-def test_the_default_groups_sync_only_commits_and_list_flow_as_unavailable(
+def test_the_default_groups_sync_commits_issues_and_pull_requests_and_flow_is_not_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,
     stats_cache_path: pathlib.Path,
 ) -> None:
     monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    upstream = alpha_upstream()
+    alpha = upstream.repos[tests.fixtures.stats.ALPHA]
+    newer = SYNCED + datetime.timedelta(minutes=30)
+    alpha.pulls.append(tests.fixtures.fetch.upstream.FakePull(40, newer))
+    alpha.issues.append(tests.fixtures.fetch.upstream.FakeIssue(41, newer))
     ran = run_report(
-        monkeypatch, make_client, stats_cache_path, ['repo:octo-org/alpha', *ALPHA_FLAGS]
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', *ALPHA_FLAGS],
+        upstream=upstream,
     )
-    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), COMMITS, False)]
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), BUILT, False)]
+    assert ran.queries == ['repository', 'issues', 'pull_requests']
     assert wambatic.stats.base.StatsRequest().groups == frozenset({'activity', 'flow'})
     assert 'Unavailable' in ran.console
-    assert re.search(r'^\s+flow\s+the flow group', ran.console, re.MULTILINE)
+    assert not re.search(r'^\s+flow\s+the flow group', ran.console, re.MULTILINE)
+    assert 'Flow by period' in ran.console
 
 
 def test_only_built_resources_are_ever_synced(
@@ -620,7 +678,7 @@ def test_a_bare_name_is_resolved_through_the_users_endpoint(
         routes=routes,
     )
     assert ran.paths[0] == '/users/octocat'
-    assert ran.syncs == [(Subject('user', 'octocat'), COMMITS, False)]
+    assert ran.syncs == [(Subject('user', 'octocat'), BUILT, False)]
     assert ran.console.startswith('user octocat, 2026-10-01 to 2027-01-31, total, UTC')
 
 
@@ -724,19 +782,37 @@ def test_ignore_cache_version_reports_a_refused_cache_with_a_warning(
     assert '--ignore-cache-version' in warning
 
 
-def test_a_group_that_needs_no_resource_syncs_nothing_and_finds_nothing_to_report(
+def test_a_group_that_needs_no_built_resource_syncs_nothing_and_finds_nothing_to_report(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,
     stats_cache_path: pathlib.Path,
 ) -> None:
-    with pytest.raises(wambatic.stats.EmptySubjectError, match='no requested group is built'):
+    with pytest.raises(wambatic.stats.EmptySubjectError, match=r'delivery \(step 8\)'):
         run_report(
             monkeypatch,
             make_client,
             stats_cache_path,
-            ['repo:octo-org/alpha', '--groups', 'flow'],
+            ['repo:octo-org/alpha', '--groups', 'delivery'],
             online=False,
         )
+
+
+def test_the_flow_group_alone_prints_the_flow_tables_from_the_cache_with_no_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--groups', 'flow', '--no-fetch', *ALPHA_FLAGS],
+        online=False,
+    )
+    assert 'Flow by period' in ran.console
+    assert 'Flow times by period' in ran.console
+    assert 'Activity by period' not in ran.console
+    assert ran.syncs == []
 
 
 def test_an_unknown_group_is_rejected_before_the_cache_is_opened(
@@ -869,9 +945,11 @@ def test_cache_info_lists_the_counts_and_no_differences(stats_cache_path: pathli
     rows = {line.split()[0]: line.split()[1:] for line in output.splitlines() if line.strip()}
     assert rows['repositories'] == ['3']
     assert rows['commits'] == [str(len(tests.fixtures.stats.COMMITS))]
+    assert rows['pull'] == ['requests', str(len(tests.fixtures.stats.PULL_REQUESTS))]
+    assert rows['issues'] == [str(len(tests.fixtures.stats.ISSUES))]
     assert rows['differences'] == ['none']
     assert rows['last'] == ['synced', tests.fixtures.stats.BETA_SYNCED_AT.isoformat()]
-    assert rows['schema_version'] == ['1']
+    assert rows['schema_version'] == [str(wambatic.fetch.cache.SCHEMA_VERSION)]
     assert str(stats_cache_path) in output
     assert 'differs' not in output
 
@@ -891,7 +969,7 @@ def test_cache_info_shows_why_a_cache_is_refused_and_leaves_it_alone(
     before = meta()
     output, _ = run_cache('info', stats_cache_path)
     assert 'differs: schema_version' in output
-    assert '0 -> 1' in output
+    assert f'0 -> {wambatic.fetch.cache.SCHEMA_VERSION}' in output
     assert meta() == before
 
 
@@ -940,7 +1018,9 @@ RESET = datetime.datetime(2027, 3, 1, 13, 0, tzinfo=UTC)
 ERROR_STATUSES = [
     (wambatic.fetch.errors.AuthError('No GitHub token found: set GITHUB_TOKEN'), 1),
     (
-        wambatic.fetch.errors.CacheVersionError({'schema_version': ('0', '1')}),
+        wambatic.fetch.errors.CacheVersionError(
+            {'schema_version': ('0', str(wambatic.fetch.cache.SCHEMA_VERSION))}
+        ),
         1,
     ),
     (wambatic.fetch.errors.GraphQLError([('NOT_FOUND', 'no such thing')]), 1),
