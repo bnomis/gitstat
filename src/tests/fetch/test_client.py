@@ -244,6 +244,66 @@ def test_graphql_requires_rate_limit(make_client: tests.conftest.MakeClient) -> 
         run_graphql({GRAPHQL: [Canned(200, responses.GRAPHQL_NO_RATE_LIMIT)]}, make_client)
 
 
+def test_graphql_dated_returns_the_data_and_the_servers_date_in_utc(
+    make_client: tests.conftest.MakeClient,
+) -> None:
+    headers = {**responses.RATE_HEADERS, 'Date': 'Thu, 29 Oct 2026 12:00:00 GMT'}
+
+    async def scenario() -> tuple[dict[str, object], datetime.datetime, dict[str, object]]:
+        canned = [Canned(200, responses.OWNER_REPOSITORIES_OK, headers)] * 2
+        async with server_module.ReplayServer({GRAPHQL: canned}) as server:
+            async with make_client(server) as client:
+                query = wambatic.fetch.queries.OWNER_REPOSITORIES
+                data, date = await client.graphql_dated(query, VARIABLES)
+                return data, date, await client.graphql(query, VARIABLES)
+
+    data, date, plain = asyncio.run(scenario())
+    assert date == datetime.datetime(2026, 10, 29, 12, 0, tzinfo=datetime.UTC)
+    assert date.utcoffset() == datetime.timedelta(0)
+    assert data == plain == responses.OWNER_REPOSITORIES_OK['data']
+
+
+def test_graphql_dated_with_an_unparseable_date_is_malformed(
+    make_client: tests.conftest.MakeClient,
+) -> None:
+    headers = {**responses.RATE_HEADERS, 'Date': 'not a date'}
+
+    async def scenario() -> None:
+        async with server_module.ReplayServer(
+            {GRAPHQL: [Canned(200, responses.OWNER_REPOSITORIES_OK, headers)]}
+        ) as server:
+            async with make_client(server) as client:
+                await client.graphql_dated(wambatic.fetch.queries.OWNER_REPOSITORIES, VARIABLES)
+
+    with pytest.raises(wambatic.fetch.errors.GraphQLError) as info:
+        asyncio.run(scenario())
+    assert info.value.errors[0][0] == 'MALFORMED'
+
+
+@pytest.mark.parametrize(
+    'headers',
+    [{}, {'Date': ''}, {'Date': 'Thu, 29 Oct 2026 12:00:00 -0000'}],
+    ids=['missing', 'empty', 'naive'],
+)
+def test_response_date_refuses_a_missing_or_naive_date(headers: dict[str, str]) -> None:
+    response = wambatic.fetch.client.Response(200, headers, None, None)  # type: ignore[arg-type]
+    with pytest.raises(wambatic.fetch.errors.GraphQLError) as info:
+        wambatic.fetch.client.response_date(response)
+    assert info.value.errors[0][0] == 'MALFORMED'
+
+
+def test_response_date_converts_an_offset_to_utc() -> None:
+    response = wambatic.fetch.client.Response(
+        200,
+        {'Date': 'Thu, 29 Oct 2026 14:00:00 +0200'},
+        None,
+        None,  # type: ignore[arg-type]
+    )
+    assert wambatic.fetch.client.response_date(response) == datetime.datetime(
+        2026, 10, 29, 12, 0, tzinfo=datetime.UTC
+    )
+
+
 # REST
 
 
