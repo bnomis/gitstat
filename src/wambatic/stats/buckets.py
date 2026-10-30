@@ -4,6 +4,8 @@ import datetime
 
 import wambatic.stats.base
 
+ONE_DAY = datetime.timedelta(days=1)
+
 
 def bucket_start(day: datetime.date, granularity: wambatic.stats.base.Granularity) -> datetime.date:
     """First local date of the bucket holding `day`."""
@@ -33,7 +35,7 @@ def next_start(start: datetime.date, granularity: wambatic.stats.base.Granularit
         case wambatic.stats.base.Granularity.WEEK:
             return start + datetime.timedelta(days=7)
         case wambatic.stats.base.Granularity.DAY:
-            return start + datetime.timedelta(days=1)
+            return start + ONE_DAY
         case _:
             raise ValueError(f'{granularity} has no next bucket')
 
@@ -93,7 +95,7 @@ def partial_buckets(
     if since > buckets[0].start:
         partial.append(buckets[0])
     last = buckets[-1]
-    if until < next_start(last.start, granularity) - datetime.timedelta(days=1) and (
+    if until < next_start(last.start, granularity) - ONE_DAY and (
         not partial or last is not partial[0]
     ):
         partial.append(last)

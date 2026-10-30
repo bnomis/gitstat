@@ -25,7 +25,7 @@ The order in which wambatic is built, with what each step delivers, what it depe
 | 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | done: [tasks-1](../tasks/reports/tasks-1.md) |
 | 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | done: [tasks-2](../tasks/stats/tasks-2.md) |
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | done: [tasks-2](../tasks/reports/tasks-2.md) |
-| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats, reports | 6, 7 | not started: [tasks-3](../tasks/stats/tasks-3.md) |
+| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats, reports | 6, 7 | done: [tasks-3](../tasks/stats/tasks-3.md) |
 | 9 | Local web app | [reports](reports/spec.md) | 7 | not started |
 | 10 | Popularity data and stats (stars, forks, watchers, languages) | fetch-and-cache, stats, reports | 7 | not specified |
 

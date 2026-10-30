@@ -23,7 +23,6 @@ UNBUILT_ACTIVITY_METRICS = (
     ('watchers', 'watchers has no fetch resource yet; step 10 specifies and fetches it'),
     ('languages', 'languages has no fetch resource yet; step 10 specifies and fetches it'),
 )
-ONE_DAY = datetime.timedelta(days=1)
 
 
 def resources_for(groups: frozenset[str]) -> frozenset[str]:
@@ -62,8 +61,17 @@ async def read_commits(
 ) -> list[wambatic.fetch.base.Commit]:
     """The cached commits whose local date is inside the requested bounds, from the subject's
     own authors only for a user subject."""
-    lo = None if request.since is None else utc_midnight(request.since) - ONE_DAY
-    hi = None if request.until is None else utc_midnight(request.until + ONE_DAY) + ONE_DAY
+    lo = (
+        None
+        if request.since is None
+        else utc_midnight(request.since) - wambatic.stats.buckets.ONE_DAY
+    )
+    hi = (
+        None
+        if request.until is None
+        else utc_midnight(request.until + wambatic.stats.buckets.ONE_DAY)
+        + wambatic.stats.buckets.ONE_DAY
+    )
     login = subject.login.casefold()
     kept: list[wambatic.fetch.base.Commit] = []
     for repo in repos:
@@ -88,7 +96,11 @@ async def read_flow(
     """The cached pull requests and issues updated since a day before the requested start (every
     event of an item is at or before its `updated_at`), from the subject's own items only for a
     user subject. The flow aggregation keeps the events whose local date is in the range."""
-    lo = None if request.since is None else utc_midnight(request.since) - ONE_DAY
+    lo = (
+        None
+        if request.since is None
+        else utc_midnight(request.since) - wambatic.stats.buckets.ONE_DAY
+    )
     login = subject.login.casefold()
 
     def wanted(author: str | None) -> bool:
@@ -118,7 +130,7 @@ async def read_delivery(
     lo = (
         None
         if request.since is None or request.settings.deploy_workflow is not None
-        else utc_midnight(request.since) - ONE_DAY
+        else utc_midnight(request.since) - wambatic.stats.buckets.ONE_DAY
     )
     runs: list[wambatic.fetch.base.WorkflowRun] = []
     releases: list[wambatic.fetch.base.Release] = []

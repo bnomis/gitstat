@@ -35,15 +35,9 @@ DORA_METRICS = tuple(
 ACTIONS_RELEASE_METRICS = tuple(name for name, _ in DELIVERY_METRICS if name not in DORA_METRICS)
 UNITS = dict(DELIVERY_METRICS)
 OUTCOMES = frozenset({'failure', 'startup_failure', 'success', 'timed_out'})
-SECONDS_PER_MINUTE = 60
 NO_RELEASES = 'no releases in the cache and stats.deploy_workflow is not set'
 NO_DEPLOY_RUNS = 'no successful run of the workflow named by stats.deploy_workflow'
 NO_HOTFIX = 'no pull request in the cache has a label in stats.hotfix_labels'
-ONE_DAY = datetime.timedelta(days=1)
-
-
-def minutes(start: datetime.datetime, end: datetime.datetime) -> float:
-    return (end - start).total_seconds() / SECONDS_PER_MINUTE
 
 
 def has_event_in_range(
@@ -152,7 +146,9 @@ def aggregate(
             outcomes[index] += 1
             successes[index] += run.conclusion == 'success'
         if run.run_started_at is not None:
-            values['duration'][index].append(minutes(run.run_started_at, run.updated_at))
+            values['duration'][index].append(
+                wambatic.stats.percentile.minutes(run.run_started_at, run.updated_at)
+            )
 
     previous: dict[str, datetime.datetime] = {}
     for release in sorted(releases, key=lambda r: (r.published_at, r.tag_name)):
@@ -168,7 +164,9 @@ def aggregate(
     has_deployments = any(by_repo.values())
     has_hotfix = bool(hotfix)
     window = settings.failure_window
-    horizon = datetime.datetime.combine(until + ONE_DAY, datetime.time(), tzinfo=tz)
+    horizon = datetime.datetime.combine(
+        until + wambatic.stats.buckets.ONE_DAY, datetime.time(), tzinfo=tz
+    )
     hotfix_opened: dict[str, list[datetime.datetime]] = collections.defaultdict(list)
     for pull in hotfix:
         hotfix_opened[pull.repo].append(pull.created_at)

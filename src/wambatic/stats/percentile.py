@@ -2,8 +2,13 @@ import collections.abc
 import datetime
 import statistics
 
+SECONDS_PER_MINUTE = 60
 SECONDS_PER_HOUR = 3600
 Summary = collections.abc.Callable[[collections.abc.Sequence[float]], float]
+
+
+def minutes(start: datetime.datetime, end: datetime.datetime) -> float:
+    return (end - start).total_seconds() / SECONDS_PER_MINUTE
 
 
 def hours(start: datetime.datetime, end: datetime.datetime) -> float:
