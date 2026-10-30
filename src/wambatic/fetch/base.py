@@ -19,12 +19,8 @@ if typing.TYPE_CHECKING:
 RESOURCES = frozenset(
     {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
-BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests'})
-UNBUILT_RESOURCE_STEPS = {
-    'releases': 8,
-    'star_events': 8,
-    'workflow_runs': 8,
-}
+BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'workflow_runs'})
+UNBUILT_RESOURCE_STEPS = {'star_events': 10}
 PAGE_SIZE = 100
 BOT_SUFFIX = '[bot]'
 
@@ -416,6 +412,18 @@ class UpdatedRead[R: PullRequest | Issue]:
     parse: collections.abc.Callable[[str, object], R]
 
 
+def repository_connection(
+    name: str,
+) -> collections.abc.Callable[[dict[str, object]], dict[str, object]]:
+    """Finds the connection `name` of `repository` in a response's `data`."""
+
+    def connection(data: dict[str, object]) -> dict[str, object]:
+        repository = mapping(data.get('repository'), 'repository')
+        return mapping(repository.get(name), name)
+
+    return connection
+
+
 def split_name(name_with_owner: str) -> tuple[str, str]:
     owner, _, name = name_with_owner.partition('/')
     return owner, name
@@ -453,18 +461,21 @@ class Fetcher:
         """Run a `Cache` method on a worker thread so the event loop is never blocked."""
         return await asyncio.to_thread(function, *args, **kwargs)
 
-    async def rest_cached(self, path: str, params: collections.abc.Mapping[str, str]) -> object:
-        """GET revalidated with the stored ETag; a 304 returns the stored body."""
+    async def rest_cached(
+        self, path: str, params: collections.abc.Mapping[str, str]
+    ) -> tuple[object, datetime.datetime | None]:
+        """GET revalidated with the stored ETag; a 304 returns the stored body. Also returns the
+        `Date` of the response, a 304's own included."""
         url = f'{path}?{urllib.parse.urlencode(sorted(params.items()))}'
         stored = await self.db(self.cache.etag, url)
         response = await self.client.rest_get(
             path, params, etag=None if stored is None else stored[0]
         )
         if response.status == 304 and stored is not None:
-            return stored[1]
+            return stored[1], response.date
         if response.etag is not None:
             await self.db(self.cache.store_etag, url, response.etag, response.data)
-        return response.data
+        return response.data, response.date
 
     async def owner_kind(self, login: str) -> typing.Literal['user', 'org']:
         """Whether `login` is a user or an organisation, from GitHub's own `type` field; one
@@ -537,14 +548,23 @@ class Fetcher:
 
         `commits` were last synced against this `pushedAt` and `updatedAt`. `issues` and
         `pull_requests` have a watermark, no full read is due and the listed newest `updatedAt`
-        is absent or before the point at which paging would stop on its first item.
+        is absent or before the point at which paging would stop on its first item. `releases`
+        have no full read due and the listed release probe equals the stored one. `workflow_runs`
+        have no probe in GraphQL: their conditional request is the check, so they are never
+        unchanged.
         """
+        if resource == 'workflow_runs':
+            return False
         state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
         if state is None:
             return False
         if resource == 'commits':
             return state.pushed_at == repo.pushed_at and state.updated_at == repo.updated_at
-        if state.watermark is None or self.full_read_due(state, self.client.clock()):
+        if self.full_read_due(state, self.client.clock()):
+            return False
+        if resource == 'releases':
+            return state.probe == release_probe(repo)
+        if state.watermark is None:
             return False
         newest = (
             repo.pull_requests_updated_at if resource == 'pull_requests' else repo.issues_updated_at
@@ -637,7 +657,9 @@ class Fetcher:
         page = 1
         while True:
             try:
-                body = await self.rest_cached(path, {'per_page': str(PAGE_SIZE), 'page': str(page)})
+                body, _ = await self.rest_cached(
+                    path, {'per_page': str(PAGE_SIZE), 'page': str(page)}
+                )
             except wambatic.fetch.errors.NotFoundError:
                 return None
             fields = mapping(body, 'compare')
@@ -725,6 +747,17 @@ class Fetcher:
         longer than `fetch.full_refresh_after`, the only way a deleted item leaves the cache."""
         return state is None or now - state.full_synced_at > self.settings.full_refresh_after
 
+    def full_read_reason(self, state: SyncState | None, full_refresh: bool) -> str:
+        """Why a time-windowed resource is read from scratch, '' when an incremental read will
+        do; the reason is logged by the caller."""
+        if state is None:
+            return 'no previous sync'
+        if full_refresh:
+            return 'full refresh requested'
+        if self.full_read_due(state, self.client.clock()):
+            return 'full refresh interval passed'
+        return ''
+
     async def read_updated[R: PullRequest | Issue](
         self, repo: Repo, read: UpdatedRead[R], state: SyncState | None, full: bool
     ) -> tuple[list[R], datetime.datetime]:
@@ -740,12 +773,10 @@ class Fetcher:
         found: list[R] = []
         watermark: datetime.datetime | None = None
 
-        def connection(data: dict[str, object]) -> dict[str, object]:
-            repository = mapping(data.get('repository'), 'repository')
-            return mapping(repository.get(read.connection), read.connection)
-
         async with contextlib.aclosing(
-            self.pages(read.query, {'owner': owner, 'name': name}, connection)
+            self.pages(
+                read.query, {'owner': owner, 'name': name}, repository_connection(read.connection)
+            )
         ) as pages:
             async for nodes, date in pages:
                 watermark = watermark or date
@@ -763,18 +794,7 @@ class Fetcher:
         everything on the first sync, on a full refresh or when a full read is due, else the
         items changed since the watermark. The rows and the new state go in one transaction."""
         state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
-        if state is None:
-            reason = 'no previous sync'
-        elif full_refresh:
-            reason = 'full refresh requested'
-        elif self.full_read_due(state, self.client.clock()):
-            reason = 'full refresh interval passed'
-        else:
-            reason = ''
-        full = bool(reason)
-        if full:
-            loguru.logger.info(f'Reading all {resource} of {repo.name_with_owner}: {reason}')
-        full_synced_at = None if full or state is None else state.full_synced_at
+        full, full_synced_at = self.plan_full_read(repo, resource, state, full_refresh)
         if resource == 'pull_requests':
             pulls, watermark = await self.read_updated(
                 repo,
@@ -805,16 +825,145 @@ class Fetcher:
             replace=full,
         )
 
+    def plan_full_read(
+        self, repo: Repo, resource: str, state: SyncState | None, full_refresh: bool
+    ) -> tuple[bool, datetime.datetime | None]:
+        """Whether this read is a full one, logging why, and the `full_synced_at` the new state
+        keeps (None: now)."""
+        reason = self.full_read_reason(state, full_refresh)
+        if reason:
+            loguru.logger.info(f'Reading all {resource} of {repo.name_with_owner}: {reason}')
+        return bool(reason), None if reason or state is None else state.full_synced_at
+
     def flow_state(
         self,
         repo: Repo,
         resource: str,
-        watermark: datetime.datetime,
+        watermark: datetime.datetime | None,
         full_synced_at: datetime.datetime | None,
     ) -> SyncState:
         return dataclasses.replace(
             self.new_state(repo, resource, full_synced_at), watermark=watermark, head_oid=None
         )
+
+    async def sync_releases(self, repo: Repo, full_refresh: bool) -> int:
+        """Read every published release of the repo and replace its cached ones, in one
+        transaction with the listing's release probe. Every read is a full read."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, 'releases')
+        self.plan_full_read(repo, 'releases', state, full_refresh)
+        owner, name = split_name(repo.name_with_owner)
+        releases: list[Release] = []
+        async with contextlib.aclosing(
+            self.pages(
+                wambatic.fetch.queries.RELEASES,
+                {'owner': owner, 'name': name},
+                repository_connection('releases'),
+            )
+        ) as pages:
+            async for nodes, _ in pages:
+                for node in nodes:
+                    release = parse_release(repo.name_with_owner, node)
+                    if release is not None:
+                        releases.append(release)
+        new_state = dataclasses.replace(
+            self.new_state(repo, 'releases', None), head_oid=None, probe=release_probe(repo)
+        )
+        return await self.db(self.cache.write_releases, repo.name_with_owner, releases, new_state)
+
+    async def read_workflow_runs(
+        self, repo: Repo, cutoff: datetime.datetime | None
+    ) -> tuple[list[WorkflowRun], datetime.datetime | None]:
+        """The repo's runs, newest first, and the `Date` of the first page's response, which
+        is the watermark. The first page goes through the ETag store, so an unchanged repo costs
+        a 304. Paging stops at the first run created before `cutoff` (never when None) and at
+        a short page. A 404 on the first page is an empty list with no date."""
+        path = f'/repos/{repo.name_with_owner}/actions/runs'
+        found: list[WorkflowRun] = []
+        watermark: datetime.datetime | None = None
+        page = 1
+        while True:
+            params = {
+                'per_page': str(PAGE_SIZE),
+                'exclude_pull_requests': 'true',
+                'page': str(page),
+            }
+            if page == 1:
+                try:
+                    body, date = await self.rest_cached(path, params)
+                except wambatic.fetch.errors.NotFoundError:
+                    loguru.logger.debug(f'No workflow runs for {repo.name_with_owner}: not found')
+                    return found, None
+                watermark = wambatic.fetch.client.require_date(date)
+            else:
+                body = (await self.client.rest_get(path, params)).data
+            nodes = sequence(mapping(body, 'workflow runs').get('workflow_runs'), 'workflow_runs')
+            for node in nodes:
+                run = parse_workflow_run(repo.name_with_owner, node)
+                if cutoff is not None and run.created_at < cutoff:
+                    return found, watermark
+                found.append(run)
+            if len(nodes) < PAGE_SIZE:
+                return found, watermark
+            page += 1
+
+    async def reread_unfinished_runs(
+        self, repo: Repo, read: list[WorkflowRun]
+    ) -> tuple[list[WorkflowRun], list[int]]:
+        """Each cached run that is not `completed` and is not in `read`, read again by id, and
+        the ids GitHub no longer has."""
+        seen = {run.id for run in read}
+        again: list[WorkflowRun] = []
+        gone: list[int] = []
+        for run_id in await self.db(self.cache.unfinished_runs, repo.name_with_owner):
+            if run_id in seen:
+                continue
+            try:
+                response = await self.client.rest_get(
+                    f'/repos/{repo.name_with_owner}/actions/runs/{run_id}'
+                )
+            except wambatic.fetch.errors.NotFoundError:
+                gone.append(run_id)
+                continue
+            again.append(parse_workflow_run(repo.name_with_owner, response.data))
+        return again, gone
+
+    async def sync_workflow_runs(self, repo: Repo, full_refresh: bool) -> int:
+        """Bring the repo's Actions runs up to date and return the rows written: every run on
+        a full read, else the runs created since the watermark less `fetch.overlap`, plus every
+        cached unfinished run read again. Rows and state go in one transaction."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, 'workflow_runs')
+        full, full_synced_at = self.plan_full_read(repo, 'workflow_runs', state, full_refresh)
+        cutoff = (
+            None
+            if full or state is None or state.watermark is None
+            else state.watermark - self.settings.overlap
+        )
+        runs, watermark = await self.read_workflow_runs(repo, cutoff)
+        if watermark is None and state is not None:
+            watermark = state.watermark
+        again, gone = await self.reread_unfinished_runs(repo, runs)
+        return await self.db(
+            self.cache.write_workflow_runs,
+            repo.name_with_owner,
+            [*runs, *again],
+            self.flow_state(repo, 'workflow_runs', watermark, full_synced_at),
+            replace=full,
+            gone=gone,
+        )
+
+    async def releases(self, repo: Repo) -> collections.abc.AsyncIterator[Release]:
+        """From the cache: the repo's published releases, oldest first. All of them: an interval
+        and a lead time reach back before any range."""
+        for release in await self.db(self.cache.read_releases, repo.name_with_owner):
+            yield release
+
+    async def workflow_runs(
+        self, repo: Repo, since: datetime.datetime | None
+    ) -> collections.abc.AsyncIterator[WorkflowRun]:
+        """From the cache: the repo's runs with `created_at >= since` (all when None), oldest
+        first."""
+        for run in await self.db(self.cache.read_workflow_runs, repo.name_with_owner, since):
+            yield run
 
     async def pull_requests(
         self, repo: Repo, since: datetime.datetime | None
@@ -868,6 +1017,10 @@ class Fetcher:
                         written, full = await self.sync_commits(repo, full_refresh)
                         if full:
                             refetched.append(repo.name_with_owner)
+                    elif resource == 'releases':
+                        written = await self.sync_releases(repo, full_refresh)
+                    elif resource == 'workflow_runs':
+                        written = await self.sync_workflow_runs(repo, full_refresh)
                     else:
                         written = await self.sync_updated(repo, resource, full_refresh)
                     rows[resource] += written

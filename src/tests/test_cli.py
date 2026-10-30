@@ -813,7 +813,7 @@ def test_a_group_that_needs_no_built_resource_syncs_nothing_and_finds_nothing_to
             monkeypatch,
             make_client,
             stats_cache_path,
-            ['repo:octo-org/alpha', '--groups', 'delivery'],
+            ['repo:octo-org/alpha', '--groups', 'delivery', '--no-fetch'],
             online=False,
         )
 

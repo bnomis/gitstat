@@ -74,15 +74,19 @@ def header_date(response: Response) -> datetime.datetime | None:
     return parsed.astimezone(datetime.UTC)
 
 
-def response_date(response: Response) -> datetime.datetime:
-    """The `Date` header as an aware UTC datetime; `GraphQLError` (`MALFORMED`) when it is
-    missing or unparseable."""
-    parsed = header_date(response)
-    if parsed is None:
+def require_date(date: datetime.datetime | None) -> datetime.datetime:
+    """`date`, or `GraphQLError` (`MALFORMED`) when the response had no parseable `Date`."""
+    if date is None:
         raise wambatic.fetch.errors.GraphQLError(
             [('MALFORMED', 'response has no parseable Date header')]
         )
-    return parsed
+    return date
+
+
+def response_date(response: Response) -> datetime.datetime:
+    """The `Date` header as an aware UTC datetime; `GraphQLError` (`MALFORMED`) when it is
+    missing or unparseable."""
+    return require_date(header_date(response))
 
 
 class GitHubClient:
