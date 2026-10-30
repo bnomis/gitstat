@@ -1,4 +1,5 @@
 import bisect
+import collections.abc
 import datetime
 
 import wambatic.stats.base
@@ -124,3 +125,25 @@ def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date |
     if index < 0 or (end is not None and day >= end):
         raise ValueError(f'{day} is outside the buckets')
     return index
+
+
+def placer(
+    buckets: list[wambatic.stats.base.Bucket],
+    tz: datetime.tzinfo,
+    since: datetime.date,
+    until: datetime.date,
+) -> collections.abc.Callable[[datetime.datetime | None], int | None]:
+    """A function giving the index of the bucket holding a moment's local date in `tz`, or None
+    for no moment or a date outside `since` to `until` (the buckets may reach beyond it)."""
+    starts = [bucket.start for bucket in buckets]
+    end = bucket_end(buckets)
+
+    def place(moment: datetime.datetime | None) -> int | None:
+        if moment is None:
+            return None
+        day = moment.astimezone(tz).date()
+        if not since <= day <= until:
+            return None
+        return locate(day, starts, end)
+
+    return place

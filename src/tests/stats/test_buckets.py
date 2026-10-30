@@ -192,3 +192,35 @@ def test_bucket_for_contains_the_local_date(
     bucket = wambatic.stats.buckets.bucket_for(when, granularity, tz)
     local = when.astimezone(tz).date()
     assert bucket.start <= local < wambatic.stats.buckets.next_start(bucket.start, granularity)
+
+
+# placer
+
+
+def test_placer_gives_the_bucket_index_of_a_moments_local_date_or_none() -> None:
+    since, until = date('2026-10-01'), date('2026-12-31')
+    buckets = wambatic.stats.buckets.bucket_range(since, until, Granularity.MONTH)
+    place = wambatic.stats.buckets.placer(buckets, BERLIN, since, until)
+    assert place(utc(2026, 10, 1, 0, 30)) == 0  # 02:30 in Berlin
+    assert place(utc(2026, 11, 30, 23, 30)) == 2  # 00:30 on 12-01 in Berlin
+    assert place(utc(2026, 9, 30, 23, 0)) == 0  # 01:00 on 10-01 in Berlin
+    assert place(utc(2026, 9, 30, 21, 0)) is None  # 23:00 on 09-30 in Berlin
+    assert place(None) is None
+
+
+def test_placer_ignores_a_date_outside_the_range_even_inside_a_bucket() -> None:
+    since, until = date('2026-10-10'), date('2026-10-20')
+    buckets = wambatic.stats.buckets.bucket_range(since, until, Granularity.MONTH)
+    place = wambatic.stats.buckets.placer(buckets, UTC, since, until)
+    assert place(utc(2026, 10, 9)) is None
+    assert place(utc(2026, 10, 10)) == 0
+    assert place(utc(2026, 10, 20, 23, 59)) == 0
+    assert place(utc(2026, 10, 21)) is None
+
+
+def test_placer_puts_everything_in_range_in_the_one_total_bucket() -> None:
+    since, until = date('2026-10-10'), date('2026-12-20')
+    buckets = wambatic.stats.buckets.bucket_range(since, until, Granularity.TOTAL)
+    place = wambatic.stats.buckets.placer(buckets, UTC, since, until)
+    assert place(utc(2026, 11, 3)) == 0
+    assert place(utc(2027, 1, 3)) is None
