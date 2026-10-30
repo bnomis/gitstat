@@ -1,5 +1,7 @@
+import hashlib
 import re
 
+import tests.fixtures.fetch.recorded
 import wambatic.fetch.cache
 import wambatic.fetch.queries
 
@@ -121,3 +123,10 @@ def test_the_listing_queries_select_the_counts_and_the_largest_languages() -> No
 
 def test_the_cache_identity_has_a_hash_for_the_stargazers_query() -> None:
     assert 'query:STARGAZERS' in wambatic.fetch.cache.expected_identity()
+
+
+def test_the_recordings_were_made_with_the_current_queries() -> None:
+    queries = all_queries()
+    for name, digest in tests.fixtures.fetch.recorded.QUERY_SHA256.items():
+        current = hashlib.sha256(queries[name].encode()).hexdigest()
+        assert current == digest, f'{name} changed since the recording: run bin/record-fixtures.sh'
