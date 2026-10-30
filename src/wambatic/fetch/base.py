@@ -258,6 +258,9 @@ def fork_probe(repo: Repo) -> str:
     return str(repo.fork_count)
 
 
+PROBES = {'forks': fork_probe, 'releases': release_probe, 'star_events': star_probe}
+
+
 def parse_languages(languages: object) -> tuple[tuple[tuple[str, int], ...], int]:
     """The listed languages in GitHub's order (largest first) and `totalSize`; `null` is none."""
     if languages is None:
@@ -636,7 +639,8 @@ class Fetcher:
         `commits` were last synced against this `pushedAt` and `updatedAt`. `issues` and
         `pull_requests` have a watermark, no full read is due and the listed newest `updatedAt`
         is absent or before the point at which paging would stop on its first item. `releases`
-        have no full read due and the listed release probe equals the stored one. `workflow_runs`
+        have no full read due and the listed release probe equals the stored one, as do
+        `star_events` and `forks` with their listed counts. `workflow_runs`
         have no probe in GraphQL: their conditional request is the check, so they are never
         unchanged.
         """
@@ -649,8 +653,8 @@ class Fetcher:
             return state.pushed_at == repo.pushed_at and state.updated_at == repo.updated_at
         if self.full_read_due(state, self.client.clock()):
             return False
-        if resource == 'releases':
-            return state.probe == release_probe(repo)
+        if resource in PROBES:
+            return state.probe == PROBES[resource](repo)
         if state.watermark is None:
             return False
         newest = (
@@ -834,15 +838,20 @@ class Fetcher:
         longer than `fetch.full_refresh_after`, the only way a deleted item leaves the cache."""
         return state is None or now - state.full_synced_at > self.settings.full_refresh_after
 
-    def full_read_reason(self, state: SyncState | None, full_refresh: bool) -> str:
+    def full_read_reason(
+        self, state: SyncState | None, full_refresh: bool, listed: int | None = None
+    ) -> str:
         """Why a time-windowed resource is read from scratch, '' when an incremental read will
-        do; the reason is logged by the caller."""
+        do; the reason is logged by the caller. `listed` is the listed count of a resource probed
+        by its count: a count below the stored one means something was removed."""
         if state is None:
             return 'no previous sync'
         if full_refresh:
             return 'full refresh requested'
         if self.full_read_due(state, self.client.clock()):
             return 'full refresh interval passed'
+        if listed is not None and state.probe is not None and listed < int(state.probe):
+            return 'count fell'
         return ''
 
     async def read_updated[R: PullRequest | Issue](
@@ -852,11 +861,7 @@ class Fetcher:
         the `Date` of the first page's response. Paging stops at the first item last updated
         before `state.watermark - fetch.overlap`, unless `full` or there is no watermark."""
         owner, name = split_name(repo.name_with_owner)
-        cutoff = (
-            None
-            if full or state is None or state.watermark is None
-            else state.watermark - self.settings.overlap
-        )
+        cutoff = self.read_cutoff(state, full)
         found: list[R] = []
         watermark: datetime.datetime | None = None
 
@@ -913,11 +918,16 @@ class Fetcher:
         )
 
     def plan_full_read(
-        self, repo: Repo, resource: str, state: SyncState | None, full_refresh: bool
+        self,
+        repo: Repo,
+        resource: str,
+        state: SyncState | None,
+        full_refresh: bool,
+        listed: int | None = None,
     ) -> tuple[bool, datetime.datetime | None]:
         """Whether this read is a full one, logging why, and the `full_synced_at` the new state
         keeps (None: now)."""
-        reason = self.full_read_reason(state, full_refresh)
+        reason = self.full_read_reason(state, full_refresh, listed)
         if reason:
             loguru.logger.info(f'Reading all {resource} of {repo.name_with_owner}: {reason}')
         return bool(reason), None if reason or state is None else state.full_synced_at
@@ -928,10 +938,21 @@ class Fetcher:
         resource: str,
         watermark: datetime.datetime | None,
         full_synced_at: datetime.datetime | None,
+        probe: str | None = None,
     ) -> SyncState:
         return dataclasses.replace(
-            self.new_state(repo, resource, full_synced_at), watermark=watermark, head_oid=None
+            self.new_state(repo, resource, full_synced_at),
+            watermark=watermark,
+            head_oid=None,
+            probe=probe,
         )
+
+    def read_cutoff(self, state: SyncState | None, full: bool) -> datetime.datetime | None:
+        """Where an incremental read of a newest-first resource stops: the stored watermark less
+        `fetch.overlap`; None (read everything) for a full read or with no watermark."""
+        if full or state is None or state.watermark is None:
+            return None
+        return state.watermark - self.settings.overlap
 
     async def sync_releases(self, repo: Repo, full_refresh: bool) -> int:
         """Read every published release of the repo and replace its cached ones, in one
@@ -956,6 +977,52 @@ class Fetcher:
             self.new_state(repo, 'releases', None), head_oid=None, probe=release_probe(repo)
         )
         return await self.db(self.cache.write_releases, repo.name_with_owner, releases, new_state)
+
+    async def read_stars(
+        self, repo: Repo, cutoff: datetime.datetime | None
+    ) -> tuple[list[StarEvent], datetime.datetime]:
+        """The repo's stars, newest first, and the `Date` of the first page's response, which is
+        the watermark. Paging stops at the first star given before `cutoff` (never when None)."""
+        owner, name = split_name(repo.name_with_owner)
+        found: list[StarEvent] = []
+        watermark: datetime.datetime | None = None
+        async with contextlib.aclosing(
+            self.pages(
+                wambatic.fetch.queries.STARGAZERS,
+                {'owner': owner, 'name': name},
+                repository_connection('stargazers'),
+                'edges',
+            )
+        ) as pages:
+            async for edges, date in pages:
+                watermark = watermark or date
+                for edge in edges:
+                    star = parse_star_edge(repo.name_with_owner, edge)
+                    if cutoff is not None and star.starred_at < cutoff:
+                        return found, watermark
+                    found.append(star)
+        if watermark is None:
+            raise malformed('no page was read')
+        return found, watermark
+
+    async def sync_star_events(self, repo: Repo, full_refresh: bool) -> int:
+        """Bring the repo's stars up to date and return the rows written: every star on a full
+        read (a first sync, `--full-refresh`, a passed `fetch.full_refresh_after`, or a listed star
+        count below the stored one), else the stars given since the watermark less
+        `fetch.overlap`. Rows and state, with the listed count as its probe, go in one
+        transaction."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, 'star_events')
+        full, full_synced_at = self.plan_full_read(
+            repo, 'star_events', state, full_refresh, repo.stargazer_count
+        )
+        stars, watermark = await self.read_stars(repo, self.read_cutoff(state, full))
+        return await self.db(
+            self.cache.write_star_events,
+            repo.name_with_owner,
+            stars,
+            self.flow_state(repo, 'star_events', watermark, full_synced_at, star_probe(repo)),
+            replace=full,
+        )
 
     async def read_workflow_runs(
         self, repo: Repo, cutoff: datetime.datetime | None
@@ -1020,12 +1087,7 @@ class Fetcher:
         cached unfinished run read again. Rows and state go in one transaction."""
         state = await self.db(self.cache.sync_state, repo.name_with_owner, 'workflow_runs')
         full, full_synced_at = self.plan_full_read(repo, 'workflow_runs', state, full_refresh)
-        cutoff = (
-            None
-            if full or state is None or state.watermark is None
-            else state.watermark - self.settings.overlap
-        )
-        runs, watermark = await self.read_workflow_runs(repo, cutoff)
+        runs, watermark = await self.read_workflow_runs(repo, self.read_cutoff(state, full))
         if watermark is None and state is not None:
             watermark = state.watermark
         again, gone = await self.reread_unfinished_runs(repo, runs)
@@ -1037,6 +1099,12 @@ class Fetcher:
             replace=full,
             gone=gone,
         )
+
+    async def star_events(self, repo: Repo) -> collections.abc.AsyncIterator[StarEvent]:
+        """From the cache: every star of the repo, oldest first. All of them: a cumulative count
+        reaches back before any range."""
+        for star in await self.db(self.cache.read_star_events, repo.name_with_owner):
+            yield star
 
     async def releases(self, repo: Repo) -> collections.abc.AsyncIterator[Release]:
         """From the cache: the repo's published releases, oldest first. All of them: an interval
@@ -1116,6 +1184,8 @@ class Fetcher:
                         written = await self.sync_releases(repo, full_refresh)
                     elif resource == 'workflow_runs':
                         written = await self.sync_workflow_runs(repo, full_refresh)
+                    elif resource == 'star_events':
+                        written = await self.sync_star_events(repo, full_refresh)
                     else:
                         written = await self.sync_updated(repo, resource, full_refresh)
                     rows[resource] += written

@@ -63,6 +63,27 @@ def test_line_totals_match_code_frequency(tmp_path: pathlib.Path) -> None:
     assert summed == weekly
 
 
+@pytest.mark.live
+@pytest.mark.skipif(not TOKEN, reason='GITHUB_TOKEN is not set')
+def test_cached_stars_are_no_more_than_the_listed_count(tmp_path: pathlib.Path) -> None:
+    subject = wambatic.fetch.base.Subject('repo', 'octocat', 'Hello-World')
+
+    async def scenario() -> tuple[int, int]:
+        cache = wambatic.fetch.cache.Cache.open(tmp_path / 'cache.sqlite3')
+        try:
+            async with wambatic.fetch.base.Fetcher(
+                TOKEN, cache, wambatic.settings.FetchSettings()
+            ) as fetcher:
+                await fetcher.sync(subject, frozenset({'star_events'}))
+            (repo,) = cache.read_repos(subject)
+            return len(cache.read_star_events(subject.full_name)), repo.stargazer_count
+        finally:
+            cache.close()
+
+    stored, listed = asyncio.run(scenario())
+    assert 0 < stored <= listed
+
+
 def repository_names(data: dict[str, object]) -> list[str]:
     owner = data['repositoryOwner']
     assert isinstance(owner, dict)

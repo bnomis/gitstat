@@ -23,7 +23,9 @@ Canned = tests.fixtures.fetch.server.Canned
 FakeCommit = tests.fixtures.fetch.upstream.FakeCommit
 FakeIssue = tests.fixtures.fetch.upstream.FakeIssue
 FakePull = tests.fixtures.fetch.upstream.FakePull
+FakeFork = tests.fixtures.fetch.upstream.FakeFork
 FakeRepo = tests.fixtures.fetch.upstream.FakeRepo
+FakeStar = tests.fixtures.fetch.upstream.FakeStar
 Upstream = tests.fixtures.fetch.upstream.Upstream
 
 HELLO = 'octocat/Hello-World'
@@ -2031,3 +2033,184 @@ def test_releases_are_unchanged_only_for_an_equal_probe_inside_the_interval(
     assert unchanged_for(make_fetcher, first.cache, later, 'releases') is False
     age_full_sync(first.cache, 'releases', 31)
     assert unchanged_for(make_fetcher, first.cache, repo, 'releases') is False
+
+
+# Stars
+
+STARS = frozenset({'star_events'})
+DAY = datetime.timedelta(days=1)
+
+
+@pytest.fixture
+def popularity_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wambatic.fetch.base, 'BUILT_RESOURCES', wambatic.fetch.base.RESOURCES)
+
+
+def popularity_repo(stars: int = 5, forks: int = 0) -> FakeRepo:
+    return FakeRepo(
+        HELLO,
+        history('h', 1),
+        stars=[FakeStar(f'U_{n}', SERVER_DATE - n * DAY) for n in range(1, stars + 1)],
+        forks=[FakeFork(100 + n, SERVER_DATE - n * DAY) for n in range(1, forks + 1)],
+    )
+
+
+def popularity_upstream(**repo_changes: int) -> Upstream:
+    upstream = Upstream([popularity_repo(**repo_changes)])
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def star_ids(cache: wambatic.fetch.cache.Cache) -> list[str]:
+    return sorted(star.user_id for star in cache.read_star_events(HELLO))
+
+
+def test_a_first_star_sync_reads_every_page_and_stores_every_star(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    run = sync_once(make_fetcher, upstream, resources=STARS)
+    assert run.kinds == ['listing', 'stargazers', 'stargazers', 'stargazers']
+    assert run.report.rows_written == {'star_events': 5}
+    assert star_ids(run.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
+    state = run.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '5'
+    assert (state.watermark, state.head_oid, state.full_synced_at) == (SERVER_DATE, None, CLOCK)
+
+
+def test_an_unchanged_star_count_makes_no_stargazers_request(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report.repos_skipped == 1
+    assert star_ids(second.cache) == star_ids(first.cache)
+
+
+def test_a_higher_star_count_reads_the_first_page_and_stops_at_the_cutoff(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    upstream.repos[HELLO].stars.append(
+        FakeStar('U_new', SERVER_DATE - datetime.timedelta(minutes=10))
+    )
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers']
+    assert second.report.rows_written == {'star_events': 1}
+    assert star_ids(second.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5', 'U_new']
+    state = second.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '6'
+    assert state.full_synced_at == CLOCK
+
+
+def test_a_lower_star_count_reads_every_page_and_a_removed_star_leaves_the_cache(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    del upstream.repos[HELLO].stars[2]
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers', 'stargazers']
+    assert star_ids(second.cache) == ['U_1', 'U_2', 'U_4', 'U_5']
+
+
+def test_a_removed_and_an_added_star_leave_the_count_alone_until_the_full_read(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    stars = upstream.repos[HELLO].stars
+    del stars[4]
+    stars.append(FakeStar('U_new', SERVER_DATE - 2 * datetime.timedelta(hours=1)))
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing']
+    age_full_sync(first.cache, 'star_events', 31)
+    third = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert third.kinds == ['listing', 'stargazers']
+    assert star_ids(third.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_new']
+
+
+def test_a_passed_full_refresh_interval_reads_every_page_of_stars_with_an_equal_count(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    age_full_sync(first.cache, 'star_events', 31)
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers', 'stargazers', 'stargazers']
+    state = second.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.full_synced_at == CLOCK
+
+
+def test_full_refresh_reads_every_page_of_stars_of_an_unchanged_repo(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    second = sync_once(
+        make_fetcher, upstream, resources=STARS, cache=first.cache, full_refresh=True
+    )
+    assert second.kinds == ['listing', 'stargazers']
+
+
+def test_an_interrupted_star_read_leaves_the_old_rows_and_state(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    state = first.cache.sync_state(HELLO, 'star_events')
+    del upstream.repos[HELLO].stars[0]
+    upstream.star_page_size = 2
+    upstream.failing_star_cursors = {'2'}
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert star_ids(first.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
+    assert first.cache.sync_state(HELLO, 'star_events') == state
+
+
+def test_fetcher_star_events_reads_the_cache_oldest_first(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+
+    async def scenario() -> list[str]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=first.cache)
+            return [star.user_id async for star in fetcher.star_events(listed(upstream))]
+
+    assert asyncio.run(scenario()) == ['U_5', 'U_4', 'U_3', 'U_2', 'U_1']
+
+
+def test_a_star_is_stored_without_a_login(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    columns = [row[1] for row in first.cache.connection.execute('PRAGMA table_info(star_events)')]
+    assert columns == ['repo', 'user_id', 'starred_at']
+
+
+def test_star_events_are_unchanged_only_for_an_equal_count_inside_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher, popularity_built: None
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    repo = listed(upstream)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'star_events') is True
+    more = dataclasses.replace(repo, stargazer_count=repo.stargazer_count + 1)
+    assert unchanged_for(make_fetcher, first.cache, more, 'star_events') is False
+    fewer = dataclasses.replace(repo, stargazer_count=repo.stargazer_count - 1)
+    assert unchanged_for(make_fetcher, first.cache, fewer, 'star_events') is False
+    age_full_sync(first.cache, 'star_events', 31)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'star_events') is False
