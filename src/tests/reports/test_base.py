@@ -33,6 +33,11 @@ def as_dict(result: wambatic.stats.base.StatsResult) -> dict[str, typing.Any]:
     return wambatic.reports.base.result_to_dict(result)
 
 
+def series_points(data: dict[str, typing.Any], metric: str) -> list[dict[str, typing.Any]]:
+    (series,) = [s for s in data['series'] if s['metric'] == metric]
+    return typing.cast(list[dict[str, typing.Any]], series['points'])
+
+
 def render(result: wambatic.stats.base.StatsResult) -> str:
     stream = io.StringIO()
     wambatic.reports.base.render_json(result, stream)
@@ -116,6 +121,20 @@ def test_count_day_and_line_values_are_integers_and_hours_are_floats(
         expected = float if series['unit'] == 'hours' else int
         for point in series['points']:
             assert type(point['value']) is expected, (series['metric'], point)
+
+
+def test_delivery_values_are_integers_for_counts_and_days_and_floats_for_the_rest(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    data = as_dict(delivery_result)
+    units = {series['metric']: series['unit'] for series in data['series']}
+    assert {'count', 'ratio', 'minutes', 'days', 'hours'} <= set(units.values())
+    for series in data['series']:
+        expected = int if series['unit'] in ('count', 'days') else float
+        for point in series['points']:
+            assert type(point['value']) is expected, (series['metric'], point)
+    assert units['release_interval_p50'] == 'days'
+    assert [p['value'] for p in series_points(data, 'release_interval_p50')] == [14, 67, 90]
 
 
 def test_other_units_are_floats() -> None:

@@ -430,3 +430,92 @@ def test_the_flow_trend_lines_fit_at_width_40(
     trend = output.split('Trends')[1].split('\n\n')[0].strip().splitlines()
     assert len(trend) == 4
     assert all(len(line) <= 40 for line in trend)
+
+
+def test_a_delivery_only_result_prints_the_delivery_tables_and_trends_but_no_other_group(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(delivery_result)
+    lines = [line.rstrip() for line in output.splitlines()]
+    for title in ('Delivery by period', 'DORA proxies by period', 'Trends'):
+        assert title in lines, title
+    for title in ('Activity by period', 'Flow by period', 'Flow times by period', 'By repository'):
+        assert title not in output
+    trend = output.split('Trends')[1].split('\n\n')[0]
+    assert {line.split()[0] for line in trend.strip().splitlines()} == {
+        'workflow_runs',
+        'release_count',
+        'deployments',
+    }
+
+
+def test_the_delivery_table_shows_percentages_minutes_days_and_a_dash_for_no_value(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(delivery_result)
+    lines = table_lines(output, 'Delivery by period')
+    header, _, october, november, december, january, _, total, *_ = lines
+    assert header.split() == [
+        'Period',
+        'Runs',
+        'Success',
+        'Duration',
+        'p50',
+        'Duration',
+        'p90',
+        'Releases',
+        'Release',
+        'interval',
+        'p50',
+    ]
+    # 4 / 5 successes, minutes to one decimal place, whole days
+    assert october.split() == ['2026-10', '7', '80.0%', '6.0', '10.8', '4', '14']
+    assert november.split() == ['2026-11', '0', '-', '-', '-', '0', '-']
+    assert december.split()[:3] == ['2026-12', '1', '-']
+    assert january.split() == ['2027-01', '5', '50.0%', '20.0', '28.0', '1', '90']
+    assert total.split() == ['Total', '13', '-', '-', '-', '6', '-']
+    assert 'minutes and days; - no data' in output
+
+
+def test_the_dora_table_shows_percentages_hours_and_a_total_for_deployments_only(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(delivery_result)
+    lines = table_lines(output, 'DORA proxies by period')
+    _, _, october, *_, total = lines[:-1] if lines[-1].startswith('proxies') else lines
+    assert october.split() == ['2026-10', '3', '145.0', '303.6', '33.3%', '48.0', '48.0']
+    assert total.split() == ['Total', '5', '-', '-', '-', '-', '-']
+    assert 'proxies: see the README; hours; - no data' in output
+
+
+def test_a_partial_period_is_marked_in_the_delivery_tables_and_their_captions(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    partial = dataclasses.replace(
+        delivery_result, provenance={**delivery_result.provenance, 'partial_buckets': '2027-01'}
+    )
+    output = render(partial)
+    assert output.count('2027-01 *') == 2
+    assert '* partial period; minutes and days; - no data' in output
+    assert '* partial period; proxies: see the README; hours; - no data' in output
+
+
+def test_a_result_with_some_proxies_prints_only_their_columns(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    kept = [
+        s for s in delivery_result.series if not s.metric.startswith(('time_to_restore', 'change'))
+    ]
+    output = render(dataclasses.replace(delivery_result, series=kept))
+    header = table_lines(output, 'DORA proxies by period')[0]
+    assert 'Lead time p90' in header
+    assert 'Restore' not in header
+    assert 'Change failure' not in header
+
+
+def test_the_delivery_ratio_has_no_trend_line(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    trend = render(delivery_result).split('Trends')[1].split('\n\n')[0]
+    assert 'rate' not in trend
+    assert 'p50' not in trend

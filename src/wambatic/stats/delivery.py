@@ -27,6 +27,13 @@ DELIVERY_METRICS = (
 DEPLOYMENT_METRICS = frozenset({'deployments', 'lead_time_p50', 'lead_time_p90'})
 FAILURE_METRICS = frozenset({'change_failure_rate'})
 RESTORE_METRICS = frozenset({'time_to_restore_p50', 'time_to_restore_p90'})
+DORA_METRICS = tuple(
+    name
+    for name, _ in DELIVERY_METRICS
+    if name in DEPLOYMENT_METRICS | FAILURE_METRICS | RESTORE_METRICS
+)
+ACTIONS_RELEASE_METRICS = tuple(name for name, _ in DELIVERY_METRICS if name not in DORA_METRICS)
+UNITS = dict(DELIVERY_METRICS)
 OUTCOMES = frozenset({'failure', 'startup_failure', 'success', 'timed_out'})
 SECONDS_PER_MINUTE = 60
 NO_RELEASES = 'no releases in the cache and stats.deploy_workflow is not set'
