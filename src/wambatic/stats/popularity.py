@@ -57,6 +57,25 @@ def popularity_table(
     ]
 
 
+def hidden_star_gaps(
+    repos: collections.abc.Iterable[wambatic.fetch.base.Repo],
+) -> list[dict[str, typing.Any]]:
+    """An `unavailable` row for each repository whose stargazers the token could not see: GitHub
+    lists none to it, so the star series leave its stars out while its count stays in
+    `popularity`."""
+    return [
+        {
+            'metric': f'stars_added, stars_total: {repo.name_with_owner}',
+            'reason': (
+                f'GitHub did not list the stargazers of {repo.name_with_owner} to this token, so '
+                f"its star history is left out; its {repo.stargazer_count} stars are GitHub's "
+                'count under Popularity now'
+            ),
+        }
+        for repo in sorted(repos, key=lambda r: r.name_with_owner)
+    ]
+
+
 def languages_table(
     repos: collections.abc.Iterable[wambatic.fetch.base.Repo],
 ) -> list[dict[str, typing.Any]]:

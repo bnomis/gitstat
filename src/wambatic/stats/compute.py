@@ -122,15 +122,24 @@ async def read_delivery(
 
 async def read_popularity(
     fetcher: wambatic.fetch.base.Fetcher, repos: list[wambatic.fetch.base.Repo]
-) -> tuple[list[wambatic.fetch.base.StarEvent], list[wambatic.fetch.base.Fork]]:
+) -> tuple[
+    list[wambatic.fetch.base.StarEvent],
+    list[wambatic.fetch.base.Fork],
+    list[wambatic.fetch.base.Repo],
+]:
     """Every cached star and fork of the subject's repositories, since a cumulative count reaches
-    back before any range. No author filter: a star is given to a repository, not to an author."""
+    back before any range, and the repositories whose stargazers the token could not see (their
+    stars are left out). No author filter: a star is given to a repository, not to an author."""
     stars: list[wambatic.fetch.base.StarEvent] = []
     forks: list[wambatic.fetch.base.Fork] = []
+    hidden: list[wambatic.fetch.base.Repo] = []
     for repo in repos:
-        stars.extend([star async for star in fetcher.star_events(repo)])
+        if await fetcher.stars_hidden(repo):
+            hidden.append(repo)
+        else:
+            stars.extend([star async for star in fetcher.star_events(repo)])
         forks.extend([fork async for fork in fetcher.forks(repo)])
-    return stars, forks
+    return stars, forks, hidden
 
 
 async def compute(
@@ -168,6 +177,7 @@ async def compute(
     delivery_pulls: list[wambatic.fetch.base.PullRequest] = []
     stars: list[wambatic.fetch.base.StarEvent] = []
     forks: list[wambatic.fetch.base.Fork] = []
+    hidden: list[wambatic.fetch.base.Repo] = []
     if 'activity' in built:
         commits = await read_commits(subject, fetcher, repos, request)
     if 'flow' in built:
@@ -175,7 +185,7 @@ async def compute(
     if 'delivery' in built:
         runs, releases, delivery_pulls = await read_delivery(fetcher, repos, request)
     if 'popularity' in built:
-        stars, forks = await read_popularity(fetcher, repos)
+        stars, forks, hidden = await read_popularity(fetcher, repos)
     empty = wambatic.stats.errors.EmptySubjectError(
         f'no {" or ".join(sorted(built))} records in the cache for this range'
     )
@@ -236,6 +246,7 @@ async def compute(
         )
         series = [*series[:totals], *liked, *series[totals:]]
         tables.update(popular_tables)
+        gaps.extend(wambatic.stats.popularity.hidden_star_gaps(hidden))
     tables['unavailable'] = gaps
     provenance = await fetcher.provenance(subject, resources_for(built))
     provenance['computed_at'] = now.astimezone(datetime.UTC).isoformat()

@@ -78,14 +78,11 @@ def test_stars_and_forks_are_cached(tmp_path: pathlib.Path, resource: str) -> No
             async with wambatic.fetch.base.Fetcher(
                 TOKEN, cache, wambatic.settings.FetchSettings()
             ) as fetcher:
-                try:
-                    await fetcher.sync(subject, frozenset({resource}))
-                except wambatic.fetch.errors.GraphQLError as error:
-                    # The Actions token is an installation token, which GitHub refuses the
-                    # stargazers; a personal access token reads them.
-                    if resource == 'star_events' and 'FORBIDDEN' in str(error):
-                        pytest.skip('this token cannot read stargazers (FORBIDDEN)')
-                    raise
+                await fetcher.sync(subject, frozenset({resource}))
+            state = cache.sync_state(subject.full_name, resource)
+            if state is not None and state.probe == wambatic.fetch.base.STARS_HIDDEN:
+                # The Actions token is an installation token: GitHub lists it no stargazers.
+                pytest.skip('this token cannot read stargazers (recorded as hidden)')
             rows = (
                 cache.read_star_events(subject.full_name)
                 if resource == 'star_events'

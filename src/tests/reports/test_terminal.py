@@ -331,6 +331,21 @@ def test_unavailable_lists_each_row_with_its_reason(
     assert re.search(r'^\s+deployments\s+no releases in the cache', output, re.MULTILINE)
 
 
+def test_hidden_stargazers_are_listed_as_unavailable_with_the_star_count_still_shown(
+    stats_fetcher: wambatic.fetch.base.Fetcher, stats_cache: wambatic.fetch.cache.Cache
+) -> None:
+    alpha = fixture.REPOS[0]
+    state = stats_cache.sync_state(alpha.name_with_owner, 'star_events')
+    assert state is not None
+    stats_cache.write_state(
+        dataclasses.replace(state, watermark=None, probe=wambatic.fetch.base.STARS_HIDDEN)
+    )
+    output = render(recompute(stats_fetcher, groups=frozenset({'popularity'})))
+    assert 'Unavailable' in output
+    assert 'stargazers' in output
+    assert 'Popularity now' in output
+
+
 # Flow tables
 
 

@@ -12,6 +12,7 @@ import email.utils
 import hashlib
 import json
 import re
+import typing
 
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
@@ -111,6 +112,7 @@ class FakeRepo:
     stars: list[FakeStar] = dataclasses.field(default_factory=list)
     forks: list[FakeFork] = dataclasses.field(default_factory=list)
     forks_of_forks: int = 0
+    hidden_stars: typing.Literal['empty', 'forbidden'] | None = None
     watchers: int = 0
     languages: list[tuple[str, int]] | None = None
     has_forks: bool = True
@@ -315,7 +317,12 @@ class Upstream:
             )
         repo = self.repos[f'{variables["owner"]}/{variables["name"]}']
         responses = tests.fixtures.fetch.responses
-        ordered = sorted(repo.stars, key=lambda s: (s.starred_at, s.user_id), reverse=True)
+        if repo.hidden_stars == 'forbidden':
+            return tests.fixtures.fetch.server.Canned(
+                200, tests.fixtures.fetch.responses.GRAPHQL_FORBIDDEN, headers
+            )
+        shown = [] if repo.hidden_stars == 'empty' else repo.stars
+        ordered = sorted(shown, key=lambda s: (s.starred_at, s.user_id), reverse=True)
         start = int(cursor)
         end = start + self.star_page_size
         body = responses.stargazers_page(
