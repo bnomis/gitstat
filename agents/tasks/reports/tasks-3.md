@@ -4,7 +4,7 @@
 **Created:** 2026-10-30
 **Version:** 3
 
-This list builds step 9 of the [implementation order](../../specs/implementation-order.md), "Local web app": `SyncProgress` in the fetcher, the CLI's sync-then-compute code moved to `reports/service.py` and the five-result HTML build to `html.py`, the sync jobs, an `aiohttp.web` app with `/`, `/report`, `/api/stats` and `/api/progress`, its pages, the `Host` check, the `serve` command with loopback-only binding and `--allow-remote`, and the README's web app section. It is written against version 1.6 of the reports spec and 1.7 of the fetch-and-cache spec, which settled what 1.5 left open for this step; the gaps and the choices made are in [review-3.md](../../specs/reports/review-3.md). It follows the option recommended for that review's decision 1 (`aiohttp.web`, no new dependency); if FastAPI with uvicorn is chosen instead, tasks 3, 4, 5 and 6 change as the review says before the list runs. The step 7 list, [tasks-2.md](tasks-2.md), built the HTML page that `/report` returns, and the step 8 list, [stats/tasks-3.md](../stats/tasks-3.md), the delivery group it shows.
+This list builds step 9 of the [implementation order](../../specs/implementation-order.md), "Local web app": `SyncProgress` in the fetcher, the CLI's sync-then-compute code moved to `reports/service.py` and the five-result HTML build to `html.py`, the `fastapi` and `uvicorn` dependencies (and `httpx` for tests), the sync jobs, a FastAPI app with `/`, `/report`, `/api/stats` and `/api/progress`, its pages, the `Host` check, the `serve` command on uvicorn with loopback-only binding and `--allow-remote`, and the README's web app section. It is written against version 1.6 of the reports spec and 1.7 of the fetch-and-cache spec, which settled what 1.5 left open for this step; the gaps and the choices made are in [review-3.md](../../specs/reports/review-3.md). It follows the option you chose for that review's decision 1 on 2026-10-30, FastAPI with uvicorn (the review recommended `aiohttp.web`; the Answers section records the choice). The step 7 list, [tasks-2.md](tasks-2.md), built the HTML page that `/report` returns, and the step 8 list, [stats/tasks-3.md](../stats/tasks-3.md), the delivery group it shows.
 
 ## Spec coverage
 
@@ -19,7 +19,7 @@ This list builds step 9 of the [implementation order](../../specs/implementation
 | API: `is_loopback`, `check_bind`, `serve` | Task 6 |
 | Command line: `serve` and its flags | Task 6 |
 | Error handling (web statuses, redaction, JSON and page forms) | Tasks 4 and 5 |
-| Error handling (binding `OSError`, Ctrl-C exit 0, `CacheVersionError` at start-up) | Task 6 |
+| Error handling (binding `OSError`, Ctrl-C exit 130, `CacheVersionError` at start-up) | Task 6 |
 | Implementation: Web app (routes, parameters) | Tasks 4 and 5 |
 | Implementation: Web app (sync jobs, progress page) | Tasks 3 and 5 |
 | Implementation: Web app (security: loopback, `Host` check, no CORS) | Tasks 4 and 6 |
@@ -27,7 +27,7 @@ This list builds step 9 of the [implementation order](../../specs/implementation
 | Implementation: Web app (pages) | Task 5 |
 | Implementation: Web app (testing: large org, browser) | Tasks 4, 5 and 7 |
 | Settings (`allow_remote`, `web_host`, `web_port`) | Task 6 |
-| External dependencies (aiohttp's server; no new package) | Task 3 |
+| External dependencies (`fastapi`, `uvicorn`; `httpx` for tests) | Task 3 |
 | Fetch spec 1.7: `SyncProgress`, `Fetcher.sync(progress=)` | Task 1 |
 | User guide (shared user-guides rule) | Task 8 |
 | Implementation order step 9 "Done when" | Tasks 4, 6 and 7; checked in Task 9 |
@@ -36,10 +36,10 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 ## Conventions for every task
 
-- Async code is driven as in the earlier lists: plain `def test_...() -> None` functions whose body calls `asyncio.run(...)`; no pytest async plugin. The web tests build the app with `make_app` and drive it with `aiohttp.test_utils.TestClient(aiohttp.test_utils.TestServer(app))` inside that `asyncio.run`.
+- Async code is driven as in the earlier lists: plain `def test_...() -> None` functions whose body calls `asyncio.run(...)`; no pytest async plugin. The web tests build the app with `make_app` and drive it with `httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://127.0.0.1:8000')` inside that `asyncio.run`, entering `app.router.lifespan_context(app)` themselves, since `ASGITransport` does not run the lifespan. Starlette's synchronous `TestClient` is not used: it runs the app on its own thread and loop, which a test that also drives a `Fetcher` cannot share.
 - Every file a test writes lives under pytest's `tmp_path`; tests that run `main` set `fetch.cache_path` and `report.out_dir` there through a config file named by `WAMBATIC_CONFIG` (monkeypatched). The autouse `isolated_environment` fixture already removes `GITHUB_TOKEN` and `WAMBATIC_CONFIG`.
 - No test reaches the network. Fresh-cache tests use the stats fixtures' cache (`stats_cache`, `stats_fetcher`, numbers in `tests.fixtures.stats`); sync tests use the `Upstream` fake GitHub in `tests.fixtures.fetch.upstream` served by `ReplayServer`, reached by monkeypatching `wambatic.reports.service.make_fetcher`, as `test_cli.py` patches `wambatic.cli.make_fetcher` today.
-- No test binds a real port except the browser test (Task 7), which binds `127.0.0.1` on a free port chosen by the OS.
+- No test binds a real port except the browser test (Task 7), which binds `127.0.0.1` on a free port chosen by the OS. No test calls the real `uvicorn.Server.run` otherwise.
 - `wambatic.reports` modules import nothing from wambatic outside `wambatic.reports`, `wambatic.stats`, `wambatic.settings` and `wambatic.version`, except `wambatic.reports.service` and `wambatic.reports.web`, which may also import `wambatic.fetch`; only `wambatic.reports.html` imports `plotly` (Task 2 changes the layering test, Task 9 checks it).
 - Every value from a request or the data reaches a page through `html.escape`; no response carries the token or a traceback.
 - The project has no affected-tests tool, so each task names its test files literally; Task 9 runs every test the list can reach.
@@ -129,18 +129,21 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 ---
 
-## Task 3: Sync jobs
+## Task 3: Add FastAPI and uvicorn, and the sync jobs
 
 **Status:** todo
 **Priority:** high
 **Complexity:** medium
-**Spec Reference:** API (`SyncJob`, `Jobs`); Web app (Sync jobs); External dependencies (aiohttp's server); review-3.md decision 1 and choices 5 and 6
+**Spec Reference:** API (`SyncJob`, `Jobs`); Web app (Sync jobs); External dependencies (FastAPI, uvicorn, httpx); implementation order Principles (dependencies are checked, not assumed); review-3.md decision 1 and choices 5 and 6
 
-**Technical Goal:** Run the web app's syncs as asyncio tasks on the server's loop, one at a time, with a state and progress any request can read, so no request waits for a sync.
+**Technical Goal:** Add the server libraries after the maintenance check the shared tools-and-libraries rule requires, and run the web app's syncs as asyncio tasks on the server's loop, one at a time, with a state and progress any request can read, so no request waits for a sync.
 
 **Subtasks:**
 
-- [ ] Confirm, in the project environment, that the locked `aiohttp` ships `py.typed` and provides `aiohttp.web` and `aiohttp.test_utils` (review-3.md records it for 3.14.5); no `uv add`. If decision 1 chose FastAPI, stop: this list must first be changed as the review says
+- [ ] Re-run the maintenance check for `fastapi`, `uvicorn` and `httpx` on the day: the release the project's 14-day `exclude-newer` window resolves and its date, licence, the repository not archived; record the result with the date in this task's Notes (review-3.md has the 2026-10-30 result, including that `httpx`'s latest release is from 2024-12-06)
+- [ ] If any fails the check, stop the list and tell the user; do not substitute a library
+- [ ] `uv add fastapi uvicorn` and `uv add --dev httpx` (a deliberate dependency change, which decision 1 sanctions; never hand-edit `uv.lock`). Not `uvicorn[standard]` or `fastapi[standard]`: their extras add `uvloop`, `httptools`, `watchfiles` and the FastAPI CLI, none of which the app uses
+- [ ] Check that the resolved `fastapi`, `starlette`, `uvicorn` and `httpx` each ship `py.typed` (they did on 2026-10-30); if one does not, stop and tell the user rather than adding a mypy override
 - [ ] Add `src/wambatic/reports/web.py` with `SyncJob` and `Jobs` as the spec's API: `start` returns the key's job when it is `queued`, `listing` or `syncing`, else creates one with a fresh id (`secrets.token_hex(8)`), replaces the key's previous job, and runs `run(job)` in an `asyncio.Task` that waits for the one `asyncio.Lock` before setting `listing`
 - [ ] A job that raises gets `state='failed'`, `error` from `service.redact_environment_token(str(e))` and `status` from one mapping function `error_status(e)` shared with Task 4's middleware (400, 404, 502 or 500 as the spec's Error handling; 500 errors also logged with `loguru.logger.exception` and their message replaced by `internal error; see the server log`); `forget(job)` drops a job if it is still its key's latest; `close()` cancels every running and queued task and waits for them
 - [ ] `state` moves from `listing` to `syncing` once `progress.repos_listed` is set (the job's `run` checks it, or `SyncJob.state` is a property reading the progress; pick one and say which in Notes)
@@ -158,13 +161,16 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - [ ] `ruff format --check` passes
 - [ ] `mypy src` passes
 - [ ] `pre-commit run --all-files` passes
-- [ ] `pytest src/tests/reports/test_web.py src/tests/test_layering.py` passes
+- [ ] `uv sync --locked` succeeds (or, where this environment lacks Python 3.14.7, say so in Notes; the `check` job in CI runs it)
+- [ ] `pytest src/tests/reports/test_web.py src/tests/test_layering.py src/tests/test_package.py` passes
 
 **Notes:**
 
 - Depends on Task 2
 - Key files: `src/wambatic/reports/web.py`, `src/tests/reports/test_web.py`
-- Docs: [aiohttp server](https://docs.aiohttp.org/en/stable/web.html), [asyncio tasks](https://docs.python.org/3.14/library/asyncio-task.html)
+- Key files also: `pyproject.toml`, `uv.lock`
+- Docs: [FastAPI](https://fastapi.tiangolo.com/), [uvicorn](https://www.uvicorn.org/), [HTTPX](https://www.python-httpx.org/), [asyncio tasks](https://docs.python.org/3.14/library/asyncio-task.html)
+- Record the versions actually locked, and any new transitive packages, in Notes.
 - Keep a reference to every task (`Jobs` holds them), since the event loop keeps only weak references to tasks.
 
 ---
@@ -180,14 +186,14 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 **Subtasks:**
 
-- [ ] Add `make_app(settings, cache, *, default_target=None, check_host=True, clock=utc_now)` to `web.py`: an `aiohttp.web.Application` holding the settings, the cache, the clock and one `Jobs` (as typed `aiohttp.web.AppKey`s), with `Jobs.close` on `on_cleanup`, and the routes `/api/stats` and `/api/progress` (the HTML routes come in Task 5)
-- [ ] One parameter parser for both data routes: `target` (required; missing is a `UsageError`), `by` (default `month`), `since`, `until`, `groups`, `by_author` (`1`, `true` or `on`), `tz` (overriding `stats.timezone`, resolved as `service.resolve_tz` does), `job`; through `service.parse_target` and `service.make_request`, so messages match the CLI's
+- [ ] Add `make_app(settings, cache, *, default_target=None, check_host=True, clock=utc_now)` to `web.py`: a `fastapi.FastAPI` whose route functions are closures over the settings, the cache, the clock and one `Jobs` (so nothing untyped lives on `app.state`), with a lifespan that calls `Jobs.close` on shutdown, and the routes `/api/stats` and `/api/progress` (the HTML routes come in Task 5)
+- [ ] Declare every query parameter as `typing.Annotated[str | None, fastapi.Query(description=...)] = None`, so the OpenAPI page lists them and FastAPI's own validation can reject nothing, then parse them in one function for both data routes: `target` (required; missing is a `UsageError`), `by` (default `month`), `since`, `until`, `groups`, `by_author` (`1`, `true` or `on`), `tz` (overriding `stats.timezone`, resolved as `service.resolve_tz` does), `job`; through `service.parse_target` and `service.make_request`, so messages match the CLI's
 - [ ] `/api/stats`: compute with `service.build_results(..., sync=False)` when the `job` parameter names a `done` job with the request's key, or when the target is a `Subject` and `service.needs_sync` (on `Fetcher.provenance`, `full_refresh` and `no_fetch` false) is false; else `Jobs.start` a job running `build_results(..., sync=True, progress=job.progress, requests=[])` that records the resolved subject, and answer 202 `{"job", "progress"}`; a `job` naming a `failed` job answers its status and error, then `forget`s it
 - [ ] `/api/progress?job=ID`: the spec's JSON; 404 `{"error": "no such job"}` for an unknown id
-- [ ] An error middleware: every exception a handler raises becomes `error_status(e)` and `{"error": message}` JSON (Task 5 adds the page form for HTML routes); `aiohttp.web.HTTPException` passes through
-- [ ] A `Host` middleware, active when `check_host`: 403 `{"error": "unexpected Host header"}` unless `Host` is `localhost`, `127.0.0.1` or `[::1]`, then `:` and the port the request arrived on
+- [ ] One `@app.middleware('http')` error middleware: every exception a route raises becomes `error_status(e)` and `{"error": message}` JSON (Task 5 adds the page form for HTML routes); not an exception handler for `Exception`, which Starlette runs in `ServerErrorMiddleware` and then re-raises. Also register a handler turning FastAPI's `RequestValidationError` into 400 `{"error": ...}`, so no route can answer 422
+- [ ] A `Host` middleware, active when `check_host`: 403 `{"error": "unexpected Host header"}` unless `Host` is `localhost`, `127.0.0.1` or `[::1]`, then `:` and the port the request arrived on (the ASGI scope's `server` port). Not Starlette's `TrustedHostMiddleware`: it answers 400, ignores the port and splits `[::1]:8000` at the first `:`
 - [ ] A logging middleware: one `loguru.logger.debug` line per request with method, path, status and milliseconds; no query string, no headers
-- [ ] Write tests in `src/tests/reports/test_web.py`: `/api/stats?target=org:...` on the fresh stats cache with a `max_age` the cache is younger than equals `result_to_dict` of the same request computed directly (status 200); each invalid parameter (`target=a/b/c`, `by=hour`, `since=2026-1-1`, `groups=nope`, `tz=Mars/Base`, `until` before `since`) answers 400 with the CLI's message; a stale cache answers 202, the job runs against the `Upstream` fake, `/api/progress` reaches `done`, and `/api/stats?...&job=ID` answers 200 without a second sync (the replay server's request count does not grow); a 404 from the fake's listing answers 404; no `GITHUB_TOKEN` answers 502 naming `GITHUB_TOKEN`; a handler raising `RuntimeError` answers 500 with no traceback in the body; `Host: evil.example:8000` answers 403 and `Host: localhost:<port>` does not; responses carry no `Access-Control-Allow-Origin`
+- [ ] Write tests in `src/tests/reports/test_web.py`: `/api/stats?target=org:...` on the fresh stats cache with a `max_age` the cache is younger than equals `result_to_dict` of the same request computed directly (status 200); each invalid parameter (`target=a/b/c`, `by=hour`, `since=2026-1-1`, `groups=nope`, `tz=Mars/Base`, `until` before `since`) answers 400 with the CLI's message; a stale cache answers 202, the job runs against the `Upstream` fake, `/api/progress` reaches `done`, and `/api/stats?...&job=ID` answers 200 without a second sync (the replay server's request count does not grow); a 404 from the fake's listing answers 404; no `GITHUB_TOKEN` answers 502 naming `GITHUB_TOKEN`; a handler raising `RuntimeError` answers 500 with no traceback in the body; `Host: evil.example:8000` answers 403 and `Host: localhost:8000` does not; responses carry no `Access-Control-Allow-Origin`; `/openapi.json` lists `/api/stats` with every query parameter
 
 **Acceptance Criteria:**
 
@@ -207,9 +213,9 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 - Depends on Task 3
 - Key files: `src/wambatic/reports/web.py`, `src/tests/reports/test_web.py`
-- Docs: [aiohttp middlewares](https://docs.aiohttp.org/en/stable/web_advanced.html#middlewares), [AppKey](https://docs.aiohttp.org/en/stable/web_advanced.html#application-s-config), [testing](https://docs.aiohttp.org/en/stable/testing.html)
+- Docs: [FastAPI middleware](https://fastapi.tiangolo.com/tutorial/middleware/), [handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/), [lifespan events](https://fastapi.tiangolo.com/advanced/events/), [async tests](https://fastapi.tiangolo.com/advanced/async-tests/), [HTTPX ASGI transport](https://www.python-httpx.org/advanced/transports/#asgi-transport)
 - The request's key is `(the target text as given, resources_for(groups) & BUILT_RESOURCES)`, so `octocat` and `user:octocat` are different jobs; that is harmless and keeps the key known before resolution.
-- `TestServer` binds `127.0.0.1`, so the default `check_host=True` holds in tests; the 403 test sets the header explicitly.
+- The tests' `base_url` of `http://127.0.0.1:8000` gives the scope that `Host` and port, so the default `check_host=True` holds in tests; the 403 test sets the header explicitly.
 
 ---
 
@@ -226,7 +232,7 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 - [ ] Add `templates/form.html`, `templates/progress.html`, `templates/progress.js` and `templates/message.html`, read with `importlib.resources` and filled with `string.Template` like the report's templates; the pages use the report's CSS variables for colours (inline the shared `report.css`, or a small subset of it with a comment naming the source, never a second palette) and load nothing from outside the server
 - [ ] `/`: the form of the spec, with `default_target` (escaped) as the target field's value
-- [ ] `/report`: the same freshness and job logic as `/api/stats` (one shared function, not a copy), computing the five `html.period_requests` and answering `html.html_document(html.html_report(results, initial), settings.report.html_theme)` with 200 and `text/html; charset=utf-8`; `by=total` is a 400; a sync answers 202 with `progress.html`, which embeds the job id and the reload URL (the request's URL with `job=ID` set) as escaped JSON in `<script type="application/json">`, as the report page embeds its data
+- [ ] `/report`: the same freshness and job logic as `/api/stats` (one shared function, not a copy), computing the five `html.period_requests` and answering `html.html_document(html.html_report(results, initial), settings.report.html_theme)` as a `fastapi.responses.HTMLResponse` with 200 and `text/html; charset=utf-8`; `/` and `/report` are left out of the OpenAPI schema (`include_in_schema=False`); `by=total` is a 400; a sync answers 202 with `progress.html`, which embeds the job id and the reload URL (the request's URL with `job=ID` set) as escaped JSON in `<script type="application/json">`, as the report page embeds its data
 - [ ] `progress.js`: poll `/api/progress?job=ID` once a second, write the state and counts into the page, `location.replace` the reload URL on `done`, show the error on `failed`, and stop polling on either
 - [ ] Extend the error middleware: for `/` and `/report`, errors render `message.html` (status, escaped message, link to `/`) instead of JSON
 - [ ] Write tests in `src/tests/reports/test_web.py`: `/` contains a form to `/report` and the escaped default target (a target containing `<` is escaped); `/report` on a fresh cache equals `html_document` of the `org_report` fixture's report with the same theme; `/report?...&by=total` answers 400 as `message.html`; a stale cache answers 202 with the job id in the page's JSON; after the job is done, `/report?...&job=ID` answers 200 with the report and no second sync; an unknown target's job ends `failed` and `/report?...&job=ID` answers 404 as `message.html`, after which a new request starts a new job
@@ -265,9 +271,9 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 **Subtasks:**
 
 - [ ] Add `is_loopback` and `check_bind` to `web.py` as the spec says (`ipaddress.ip_address` on the host with any `[` `]` stripped; `localhost` exactly; nothing resolved); `check_bind` raises `UsageError` naming `--allow-remote` and `report.allow_remote`, and with `allow_remote` logs the warning
-- [ ] Add `serve(settings, *, default_target, ignore_cache_version)`: `check_bind`, parse `default_target` with `service.parse_target` when given, open the cache (`Cache.open(..., ignore_version=ignore_cache_version)`), log the listening line and the target's report URL, and run `make_app(..., check_host=not remote)` with `aiohttp.web.run_app(app, host=..., port=..., access_log=None, print=None)`; close the cache when `run_app` returns or raises; an `OSError` binding becomes `OutputError`-like exit 1 (`cannot listen on HOST:PORT: reason`; add a `ServeError` to `reports/errors.py` only if `OutputError`'s name would mislead, and say which in Notes)
+- [ ] Add `serve(settings, *, default_target, ignore_cache_version)`: `check_bind`, parse `default_target` with `service.parse_target` when given, open the cache (`Cache.open(..., ignore_version=ignore_cache_version)`), bind the listening socket itself with `socket.create_server((host, port))` (an `OSError` here becomes exit 1 with `cannot listen on HOST:PORT: reason`; add a `ServeError` to `reports/errors.py` only if `OutputError`'s name would mislead, and say which in Notes), log the listening line and the target's report URL, and run `make_app(..., check_host=not remote)` with `uvicorn.Server(uvicorn.Config(app, loop='asyncio', lifespan='on', log_config=None, access_log=False, log_level='warning')).run(sockets=[sock])`; close the socket and the cache in a `finally`, whether `run` returns or raises
 - [ ] Add the cappa `Serve` command to `cli.py` (`target` optional, `--host`, `--port`, `--allow-remote`, `--max-age`, `--ignore-cache-version`) in `Wambatic.command`'s subcommands; its flags reach settings through `load_settings(None, overrides)` (`report.web_host`, `report.web_port`, `report.allow_remote`, `fetch.max_age`); a port outside 1 to 65535 is a `UsageError`; `execute` dispatches to `web.serve`
-- [ ] Write tests: `is_loopback` is true for `localhost`, `127.0.0.1`, `127.1.2.3`, `::1`, `[::1]` and false for `0.0.0.0`, `::`, `192.168.1.2`, `localhost.example`, `example.com`, `` (empty); a hypothesis test over `ipaddress.IPv4Address` values agrees with `.is_loopback`; `main(['serve', '--host', '0.0.0.0'])` returns 2 and never calls `run_app` (monkeypatched to record calls); `--allow-remote` with the same host calls `run_app` with `check_host` off and logs the warning; `serve --port 0` and `--port 70000` return 2; `serve 'a/b/c'` returns 2; a cache written by another version returns 1 before `run_app`; `run_app` raising `OSError` returns 1 with the reason; `run_app` returning (Ctrl-C) returns 0 and the cache is closed; `wambatic serve --help` lists every flag
+- [ ] Write tests: `is_loopback` is true for `localhost`, `127.0.0.1`, `127.1.2.3`, `::1`, `[::1]` and false for `0.0.0.0`, `::`, `192.168.1.2`, `localhost.example`, `example.com`, `` (empty); a hypothesis test over `ipaddress.IPv4Address` values agrees with `.is_loopback`; `main(['serve', '--host', '0.0.0.0'])` returns 2 and never binds or calls `uvicorn.Server.run` (both monkeypatched to record calls); `--allow-remote` with the same host calls `run` with an app whose `Host` check is off and logs the warning; `serve --port 0` and `--port 70000` return 2; `serve 'a/b/c'` returns 2; a cache written by another version returns 1 before binding; `socket.create_server` raising `OSError` (`EADDRINUSE`) returns 1 with the reason; `run` raising `KeyboardInterrupt` (what uvicorn re-raises after a Ctrl-C shutdown) returns 130 and the cache and socket are closed; `run` returning returns 0; `wambatic serve --help` lists every flag
 
 **Acceptance Criteria:**
 
@@ -287,9 +293,10 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 - Depends on Task 5
 - Key files: `src/wambatic/reports/web.py`, `src/wambatic/cli.py`, `src/tests/reports/test_web.py`, `src/tests/test_cli.py`
-- Docs: [aiohttp.web.run_app](https://docs.aiohttp.org/en/stable/web_reference.html#aiohttp.web.run_app), [ipaddress](https://docs.python.org/3.14/library/ipaddress.html)
-- `run_app` handles SIGINT itself and returns, which is why Ctrl-C is exit 0 here rather than the 130 `report` gives.
-- `serve` blocks; tests never call the real `run_app` (Task 7's browser test runs the app with `AppRunner` in a thread instead).
+- Docs: [uvicorn settings](https://www.uvicorn.org/settings/), [uvicorn programmatic use](https://www.uvicorn.org/deployment/#running-programmatically), [ipaddress](https://docs.python.org/3.14/library/ipaddress.html)
+- The socket is bound by `serve`, not by uvicorn, because uvicorn logs a bind failure and calls `sys.exit(1)` itself, which would bypass `main`'s error conversion (review-3.md choice 19). Confirm this in the resolved uvicorn's `Server.startup` and note what was found.
+- uvicorn's own stdlib logging is left unconfigured (`log_config=None`) at `warning`, so only its warnings and errors reach stderr, through Python's last-resort handler; wambatic's lines go through loguru. Confirm on the day that the resolved uvicorn re-raises the captured SIGINT after a graceful shutdown (it has since 0.29); if it returns instead, Ctrl-C is exit 0, and say so in Notes and the README.
+- `serve` blocks; tests never call the real `uvicorn.Server.run` (Task 7's browser test runs a real `uvicorn.Server` in a thread instead).
 
 ---
 
@@ -306,7 +313,7 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 - [ ] Add to `tests.fixtures.fetch.upstream` (or `tests.fixtures.reports`) a generator of a large org: a few hundred `FakeRepo`s with one or two commits each, generated, not written out; name the count as a constant used by the test, not in prose
 - [ ] Write a test in `src/tests/reports/test_web.py`: with `Upstream.history_delay` set so the sync takes several seconds, `/report` answers 202 within a second; while the job is `syncing`, `/` and `/api/progress` each answer within a second (time them with `time.monotonic`), and two `/api/progress` reads a delay apart show `repos_done` rising; the job ends `done` and `/report?...&job=ID` answers 200
-- [ ] Write `src/tests/reports/test_web_browser.py` (marker `browser`, launching Chromium as `test_html_browser.py` does, reusing its launch helper rather than copying it): run `make_app` with `aiohttp.web.AppRunner` and a `TCPSite` on `127.0.0.1` port 0 in a thread with its own event loop, against the `Upstream` fake with a short `history_delay`; open `/report?target=...` and check that the progress text appears, then that the page becomes the report with every chart drawn, with no console error, no page error and no request to any host but the server
+- [ ] Write `src/tests/reports/test_web_browser.py` (marker `browser`, launching Chromium as `test_html_browser.py` does, reusing its launch helper rather than copying it): bind `127.0.0.1` port 0 with `socket.create_server`, run a real `uvicorn.Server` for `make_app` on that socket in a thread (`server.run(sockets=[sock])`, stopped by setting `server.should_exit`), against the `Upstream` fake with a short `history_delay`; open `/report?target=...` and check that the progress text appears, then that the page becomes the report with every chart drawn, with no console error, no page error and no request to any host but the server
 - [ ] Build the app's fixtures before launching the browser, as the step 7 notes require (Playwright's sync API cannot share a thread with `asyncio.run`)
 
 **Acceptance Criteria:**
@@ -344,9 +351,9 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 **Subtasks:**
 
-- [ ] Add a `## The web app` section after `## The HTML report`: a first command (`wambatic serve octocat`, then open the printed URL), the form and the progress page, `--max-age` (and why the default re-syncs on every page), `/api/stats` and `/api/progress` with one `curl` example each and the 202-then-`job` flow, and the security notes (loopback only by default, `--allow-remote` and what it exposes, the `Host` check, the token never sent to the browser)
+- [ ] Add a `## The web app` section after `## The HTML report`: a first command (`wambatic serve octocat`, then open the printed URL), the form and the progress page, `--max-age` (and why the default re-syncs on every page), `/api/stats` and `/api/progress` with one `curl` example each and the 202-then-`job` flow, the generated API page at `/docs` (and that it loads Swagger UI from jsDelivr, so it needs a network connection where the other pages do not), and the security notes (loopback only by default, `--allow-remote` and what it exposes, the `Host` check, the token never sent to the browser)
 - [ ] Add a `## wambatic serve options` table like the report options table
-- [ ] In the config file table, drop "not built yet" from `report.allow_remote`, `report.web_host` and `report.web_port` and describe each; in Exit statuses add `serve`'s (2 for a non-loopback host without `--allow-remote`, 1 for a port that cannot be bound, 0 on Ctrl-C); in Limits drop the web app from the "not built yet" line
+- [ ] In the config file table, drop "not built yet" from `report.allow_remote`, `report.web_host` and `report.web_port` and describe each; in Exit statuses add `serve`'s (2 for a non-loopback host without `--allow-remote`, 1 for a port that cannot be bound, 130 on Ctrl-C as for `report`); in Limits drop the web app from the "not built yet" line
 
 **Acceptance Criteria:**
 

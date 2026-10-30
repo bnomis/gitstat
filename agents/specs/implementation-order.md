@@ -81,7 +81,7 @@ Done when: specified with its task list.
 
 ### 9. Local web app
 
-Deliver: the CLI's sync-then-compute code moved to `reports/service.py` and the five-result HTML build to `html.py`, `SyncProgress` and `Fetcher.sync`'s `progress` argument, the sync jobs, an `aiohttp.web` app with `/`, `/report`, `/api/stats` and `/api/progress`, the form, progress and message pages, the `Host` check, loopback-only binding and `--allow-remote`, the `serve` command, and the README's web app section. Reports spec 1.6 and fetch spec 1.7; the choices are in the [reports review 3](reports/review-3.md).
+Deliver: the CLI's sync-then-compute code moved to `reports/service.py` and the five-result HTML build to `html.py`, `SyncProgress` and `Fetcher.sync`'s `progress` argument, the `fastapi` and `uvicorn` dependencies (and `httpx` for tests), the sync jobs, a FastAPI app with `/`, `/report`, `/api/stats` and `/api/progress`, the form, progress and message pages, the `Host` check, loopback-only binding and `--allow-remote`, the `serve` command, and the README's web app section. Reports spec 1.6 and fetch spec 1.7; the choices are in the [reports review 3](reports/review-3.md).
 Done when: a large-org fixture does not block the page, invalid parameters return 400, and a non-loopback bind without the flag refuses to start.
 
 ## Not in scope for this order
