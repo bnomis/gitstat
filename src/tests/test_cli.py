@@ -248,16 +248,34 @@ def test_full_refresh_with_no_fetch_is_a_usage_error() -> None:
         wambatic.cli.check_report(flags, settings_for(flags))
 
 
-def test_the_html_format_is_a_usage_error_naming_step_7_from_a_flag_or_the_config() -> None:
+def test_the_html_format_passes_the_checks_from_a_flag_or_the_config() -> None:
     flags = report(format='html')
-    with pytest.raises(UsageError, match='step 7'):
-        wambatic.cli.check_report(flags, settings_for(flags))
+    wambatic.cli.check_report(flags, settings_for(flags))
     configured = dataclasses.replace(
         wambatic.settings.Settings(),
         report=dataclasses.replace(wambatic.settings.ReportSettings(), format='html'),
     )
-    with pytest.raises(UsageError, match='step 7'):
-        wambatic.cli.check_report(report(), configured)
+    wambatic.cli.check_report(report(), configured)
+
+
+def test_out_is_a_usage_error_unless_the_effective_format_is_html() -> None:
+    for flags in (report(out='x.html'), report(out='x.html', format='json')):
+        with pytest.raises(UsageError, match='--out is for --format html'):
+            wambatic.cli.check_report(flags, settings_for(flags))
+    html_flags = report(out='x.html', format='html')
+    wambatic.cli.check_report(html_flags, settings_for(html_flags))
+    configured = dataclasses.replace(
+        wambatic.settings.Settings(),
+        report=dataclasses.replace(wambatic.settings.ReportSettings(), format='html'),
+    )
+    wambatic.cli.check_report(report(out='x.html'), configured)
+
+
+def test_by_total_is_a_usage_error_with_html() -> None:
+    flags = report(format='html', by='total')
+    with pytest.raises(UsageError, match='--by total'):
+        wambatic.cli.check_report(flags, settings_for(flags))
+    wambatic.cli.check_report(report(format='json', by='total'), settings_for(report()))
 
 
 def test_a_bare_name_with_no_fetch_asks_for_a_prefix() -> None:
@@ -305,6 +323,8 @@ def test_cappa_reads_every_report_flag() -> None:
             'org:octo-org',
             '--format',
             'json',
+            '--out',
+            'report.html',
             '--by',
             'week',
             '--since',
@@ -325,6 +345,7 @@ def test_cappa_reads_every_report_flag() -> None:
     assert parsed.command == wambatic.cli.Report(
         target='org:octo-org',
         format='json',
+        out='report.html',
         by='week',
         since='2026-10-01',
         until='2026-10-29',
@@ -1104,7 +1125,8 @@ def test_a_bad_flag_value_returns_2_before_any_cache_is_opened(
     assert wambatic.cli.main(['report', 'repo:a/b', '--max-age', '1x']) == 2
     assert 'fetch.max_age' in capsys.readouterr().err
     assert wambatic.cli.main(['report', 'a/b/c']) == 2
-    assert wambatic.cli.main(['report', 'repo:a/b', '--format', 'html']) == 2
+    assert wambatic.cli.main(['report', 'repo:a/b', '--format', 'html', '--by', 'total']) == 2
+    assert wambatic.cli.main(['report', 'repo:a/b', '--out', 'x.html']) == 2
     assert not cache.parent.exists()
 
 
@@ -1288,3 +1310,138 @@ def test_the_by_choices_are_the_granularities() -> None:
 def test_the_format_choices_are_the_report_formats() -> None:
     settings_hints = typing.get_type_hints(wambatic.settings.ReportSettings)
     assert report_choices('format') == set(typing.get_args(settings_hints['format']))
+
+
+def html_config(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, cache: pathlib.Path, **report: object
+) -> pathlib.Path:
+    """A config file with the cache and an `out_dir` under `tmp_path`; returns that directory."""
+    out_dir = tmp_path / 'reports'
+    config = tmp_path / 'html-config.json'
+    config.write_text(
+        json.dumps(
+            {'fetch': {'cache_path': str(cache)}, 'report': {'out_dir': str(out_dir), **report}}
+        )
+    )
+    monkeypatch.setenv('WAMBATIC_CONFIG', str(config))
+    return out_dir
+
+
+def test_html_writes_the_default_file_and_prints_exactly_its_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    out_dir = html_config(tmp_path, monkeypatch, stats_cache_path)
+    argv = ['report', 'org:octo-org', '--no-fetch', '--format', 'html', *ALPHA_FLAGS]
+    assert wambatic.cli.main(argv) == 0
+    captured = capsys.readouterr()
+    expected = out_dir / 'org-octo-org.html'
+    assert captured.out == f'{expected}\n'
+    assert captured.err == ''
+    text = expected.read_text(encoding='utf-8')
+    assert text.startswith('<!doctype html>')
+    assert 'org octo-org' in text
+    assert 'id="activity-commits"' in text
+
+
+def test_out_names_a_file_or_an_existing_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    out_dir = html_config(tmp_path, monkeypatch, stats_cache_path)
+    base = ['report', 'repo:octo-org/alpha', '--no-fetch', '--format', 'html', *ALPHA_FLAGS]
+    file = tmp_path / 'deep' / 'er' / 'mine.html'
+    assert wambatic.cli.main([*base, '--out', str(file)]) == 0
+    assert capsys.readouterr().out == f'{file}\n'
+    assert 'repo octo-org/alpha' in file.read_text(encoding='utf-8')
+    directory = tmp_path / 'existing'
+    directory.mkdir()
+    assert wambatic.cli.main([*base, '--out', str(directory)]) == 0
+    assert capsys.readouterr().out == f'{directory / "repo-octo-org-alpha.html"}\n'
+    assert (directory / 'repo-octo-org-alpha.html').is_file()
+    assert not out_dir.exists()
+
+
+def test_the_html_format_from_the_config_works_without_the_flag_and_by_picks_the_initial_period(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    out_dir = html_config(tmp_path, monkeypatch, stats_cache_path, format='html', html_theme='dark')
+    argv = ['report', 'user:octocat', '--no-fetch', '--by', 'week', *ALPHA_FLAGS]
+    assert wambatic.cli.main(argv) == 0
+    assert capsys.readouterr().out == f'{out_dir / "user-octocat.html"}\n'
+    text = (out_dir / 'user-octocat.html').read_text(encoding='utf-8')
+    assert 'data-theme="dark"' in text
+    assert '<input type="radio" name="granularity" value="week" checked>' in text
+
+
+def test_a_usage_error_with_html_comes_before_the_cache_is_opened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    cache = tmp_path / 'never' / 'cache.sqlite3'
+    config_for(tmp_path, monkeypatch, cache)
+    assert wambatic.cli.main(['report', 'repo:a/b', '--format', 'json', '--out', 'x']) == 2
+    assert wambatic.cli.main(['report', 'repo:a/b', '--format', 'html', '--by', 'total']) == 2
+    assert not cache.parent.exists()
+
+
+def test_html_syncs_once_and_computes_five_times_and_writes_one_file(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    granularities: list[str] = []
+    original = wambatic.stats.compute
+
+    async def spy(
+        subject: wambatic.fetch.base.Subject, reader: object, request: object, **kwargs: object
+    ) -> wambatic.stats.base.StatsResult:
+        result: wambatic.stats.base.StatsResult = await original(
+            subject,
+            reader,  # type: ignore[arg-type]
+            request,  # type: ignore[arg-type]
+            **kwargs,  # type: ignore[arg-type]
+        )
+        granularities.append(str(result.request.granularity))
+        return result
+
+    monkeypatch.setattr(wambatic.stats, 'compute', spy)
+    out = tmp_path / 'one' / 'report.html'
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--format', 'html', '--out', str(out), *ALPHA_FLAGS],
+    )
+    assert len(ran.syncs) == 1
+    assert granularities == ['total', 'year', 'month', 'week', 'day']
+    assert ran.stdout == f'{out}\n'
+    assert [path.name for path in out.parent.iterdir()] == ['report.html']
+
+
+def test_an_out_that_cannot_be_written_returns_1_with_one_error_line_and_no_temporary_file(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    config_for(tmp_path, monkeypatch, stats_cache_path)
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('a file, not a directory')
+    argv = ['report', 'org:octo-org', '--no-fetch', '--format', 'html', *ALPHA_FLAGS]
+    assert wambatic.cli.main([*argv, '--out', str(blocker / 'report.html')]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    errors = captured.err.splitlines()
+    assert len(errors) == 1
+    assert errors[0].startswith('ERROR: cannot write ')
+    assert [path.name for path in tmp_path.glob('**/*.tmp')] == []
+    assert blocker.read_text() == 'a file, not a directory'

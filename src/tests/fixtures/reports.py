@@ -1,4 +1,4 @@
-"""The known-good terminal rendering of the stats fixture's org.
+"""The known-good terminal rendering and figures of the stats fixture's org.
 
 `ORG_MONTH_TERMINAL` was generated from `render_terminal` at width 120 for the org by month with
 an author breakdown, regenerated when the flow tables were added, then checked by hand on
@@ -106,3 +106,103 @@ fetched_at:pull_requests: 2027-02-01T10:00:00+00:00
 wambatic_version: {wambatic_version}
 schema_version: {schema_version}
 """
+
+
+# The `activity-commits` and `flow-merge-time` figures of the org by month, as `Figure` fields
+# (`dataclasses.asdict`). Generated from `build_figures` once, then checked by hand on 2026-10-30:
+# commits 7, 0, 1, 2 and the merge p50 48, none, 37.5, 24 and p90 86.4, none, 37.5, 24 are the
+# months of `ORG_BY_MONTH_UTC` and `ORG_FLOW_BY_MONTH_UTC` (November has no merge, so a gap), no
+# month is partial so no mark, the first slot is the p50 and the second the p90, and the last
+# point of each line is labelled.
+ORG_MONTH_FIGURES = {
+    'activity-commits': {
+        'key': 'activity-commits',
+        'group': 'activity',
+        'title': 'Commits per period',
+        'description': 'Bars of the commits in each period.',
+        'data': [
+            {
+                'type': 'bar',
+                'name': 'Commits',
+                'x': ['2026-10', '2026-11', '2026-12', '2027-01'],
+                'y': [7, 0, 1, 2],
+                'marker': {'pattern': {'shape': ['', '', '', '']}},
+                'meta': {'slot': 1},
+            }
+        ],
+        'layout': {
+            'height': 320,
+            'margin': {'l': 64, 'r': 24, 't': 16, 'b': 72},
+            'font': {'family': 'system-ui, -apple-system, "Segoe UI", sans-serif'},
+            'xaxis': {'type': 'category', 'automargin': True},
+            'yaxis': {'title': {'text': 'commits'}, 'automargin': True, 'zeroline': True},
+            'barmode': 'group',
+            'hovermode': 'x unified',
+            'showlegend': False,
+            'legend': {'orientation': 'h', 'x': 0, 'y': 1.15},
+            'annotations': [],
+        },
+    },
+    'flow-merge-time': {
+        'key': 'flow-merge-time',
+        'group': 'flow',
+        'title': 'Time to merge per period',
+        'description': 'Lines of the median and 90th percentile hours to merge '
+        'for each period, with a gap where no merge has a value.',
+        'data': [
+            {
+                'type': 'scatter',
+                'mode': 'lines+markers',
+                'name': 'p50',
+                'x': ['2026-10', '2026-11', '2026-12', '2027-01'],
+                'y': [48.0, None, 37.5, 24.0],
+                'marker': {'symbol': ['circle', 'circle', 'circle', 'circle']},
+                'connectgaps': False,
+                'meta': {'slot': 1},
+            },
+            {
+                'type': 'scatter',
+                'mode': 'lines+markers',
+                'name': 'p90',
+                'x': ['2026-10', '2026-11', '2026-12', '2027-01'],
+                'y': [86.4, None, 37.5, 24.0],
+                'marker': {'symbol': ['circle', 'circle', 'circle', 'circle']},
+                'connectgaps': False,
+                'meta': {'slot': 2},
+            },
+        ],
+        'layout': {
+            'height': 320,
+            'margin': {'l': 64, 'r': 56, 't': 48, 'b': 72},
+            'font': {'family': 'system-ui, -apple-system, "Segoe UI", sans-serif'},
+            'xaxis': {'type': 'category', 'automargin': True},
+            'yaxis': {'title': {'text': 'hours'}, 'automargin': True, 'zeroline': True},
+            'barmode': 'group',
+            'hovermode': 'x unified',
+            'showlegend': True,
+            'legend': {'orientation': 'h', 'x': 0, 'y': 1.15},
+            'annotations': [
+                {
+                    'x': '2027-01',
+                    'y': 24.0,
+                    'xref': 'x',
+                    'yref': 'y',
+                    'text': 'p50',
+                    'showarrow': False,
+                    'xanchor': 'left',
+                    'xshift': 6,
+                },
+                {
+                    'x': '2027-01',
+                    'y': 24.0,
+                    'xref': 'x',
+                    'yref': 'y',
+                    'text': 'p90',
+                    'showarrow': False,
+                    'xanchor': 'left',
+                    'xshift': 6,
+                },
+            ],
+        },
+    },
+}

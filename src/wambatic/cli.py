@@ -4,6 +4,7 @@ import contextlib
 import dataclasses
 import datetime
 import os
+import pathlib
 import re
 import sys
 import typing
@@ -23,6 +24,7 @@ import wambatic.fetch.ratelimit
 import wambatic.logs
 import wambatic.reports.base
 import wambatic.reports.errors
+import wambatic.reports.html
 import wambatic.reports.terminal
 import wambatic.settings
 import wambatic.stats
@@ -49,10 +51,21 @@ class Report:
     ]
     format: typing.Annotated[
         FORMATS | None,
-        cappa.Arg(long=True, help='Output format, terminal or json (default: report.format)'),
+        cappa.Arg(long=True, help='Output format: terminal, html or json (default: report.format)'),
+    ] = None
+    out: typing.Annotated[
+        str | None,
+        cappa.Arg(
+            long=True,
+            help='File, or existing directory, for --format html (default: report.out_dir)',
+        ),
     ] = None
     by: typing.Annotated[
-        GRANULARITIES, cappa.Arg(long=True, help='Period to bucket by (default: month)')
+        GRANULARITIES,
+        cappa.Arg(
+            long=True,
+            help='Period to bucket by; with html, the period shown first (default: month)',
+        ),
     ] = 'month'
     since: typing.Annotated[
         str | None, cappa.Arg(long=True, help='First day, YYYY-MM-DD (default: first commit)')
@@ -168,9 +181,12 @@ def check_report(report: Report, settings: wambatic.settings.Settings) -> None:
     """The flag combinations that can be rejected before the cache or the network is touched."""
     if report.full_refresh and report.no_fetch:
         raise wambatic.reports.errors.UsageError('--full-refresh and --no-fetch cannot be combined')
-    if settings.report.format == 'html':
+    if report.out is not None and settings.report.format != 'html':
+        raise wambatic.reports.errors.UsageError('--out is for --format html')
+    if settings.report.format == 'html' and report.by == 'total':
         raise wambatic.reports.errors.UsageError(
-            'the html format is built in implementation step 7; use --format terminal or json'
+            '--by total is not for --format html: the page shows the totals as tiles and '
+            'switches between year, month, week and day'
         )
     target = parse_target(report.target)
     if report.no_fetch and isinstance(target, str):
@@ -264,11 +280,11 @@ async def build_result(
     settings: wambatic.settings.Settings,
     cache: wambatic.fetch.cache.Cache,
     target: wambatic.fetch.base.Subject | str,
-    request: wambatic.stats.base.StatsRequest,
+    requests: list[wambatic.stats.base.StatsRequest],
     clock: collections.abc.Callable[[], datetime.datetime],
-) -> wambatic.stats.base.StatsResult:
-    """Resolve the subject, sync when needed and compute; the network is used (and a token
-    resolved) only for a bare NAME or a sync."""
+) -> tuple[wambatic.fetch.base.Subject, list[wambatic.stats.base.StatsResult]]:
+    """Resolve the subject, sync once when needed and compute each of `requests` (which share
+    their groups); the network is used (and a token resolved) only for a bare NAME or a sync."""
     reader = make_fetcher('', cache, settings.fetch)
     async with contextlib.AsyncExitStack() as stack:
         online: wambatic.fetch.base.Fetcher | None = None
@@ -281,7 +297,7 @@ async def build_result(
         else:
             subject = target
         resources = (
-            wambatic.stats.resources_for(request.groups) & wambatic.fetch.base.BUILT_RESOURCES
+            wambatic.stats.resources_for(requests[0].groups) & wambatic.fetch.base.BUILT_RESOURCES
         )
         provenance = await reader.provenance(subject, resources)
         synced = needs_sync(
@@ -293,13 +309,51 @@ async def build_result(
                 online = await stack.enter_async_context(make_fetcher(token, cache, settings.fetch))
             log_sync(await online.sync(subject, resources, full_refresh=report.full_refresh))
     try:
-        return await wambatic.stats.compute(subject, reader, request, clock=clock)
+        return subject, [
+            await wambatic.stats.compute(subject, reader, request, clock=clock)
+            for request in requests
+        ]
     except wambatic.stats.EmptySubjectError as e:
         if report.no_fetch:
             raise wambatic.stats.EmptySubjectError(
                 f'{e}; the cache may only need a sync, so try again without --no-fetch'
             ) from None
         raise
+
+
+def output_path(
+    out: str | None, settings: wambatic.settings.Settings, subject: wambatic.fetch.base.Subject
+) -> pathlib.Path:
+    """`--out` as given, or inside it when it is an existing directory; else the default
+    directory. A file is named by `report_filename`."""
+    name = wambatic.reports.html.report_filename(subject)
+    if out is None:
+        return settings.report.out_dir / name
+    path = pathlib.Path(out).expanduser()
+    return path / name if path.is_dir() else path
+
+
+def render_html_report(
+    report: Report,
+    settings: wambatic.settings.Settings,
+    subject: wambatic.fetch.base.Subject,
+    results: list[wambatic.stats.base.StatsResult],
+    stdout: typing.TextIO,
+) -> None:
+    """Build the page from the TOTAL result and the four period results, write it and print
+    the path."""
+    total, *periods = results
+    page = wambatic.reports.html.HtmlReport(
+        total=total,
+        periods={result.request.granularity: result for result in periods},
+        initial=wambatic.stats.base.Granularity(report.by),
+    )
+    path = output_path(report.out, settings, subject)
+    try:
+        wambatic.reports.html.render_html(page, path, settings.report.html_theme)
+    except OSError as e:
+        raise wambatic.reports.errors.OutputError(f'cannot write {path}: {e.strerror or e}') from e
+    stdout.write(f'{path}\n')
 
 
 async def run_report(
@@ -318,14 +372,26 @@ async def run_report(
     cache = wambatic.fetch.cache.Cache.open(
         settings.fetch.cache_path, ignore_version=report.ignore_cache_version
     )
+    as_html = settings.report.format == 'html'
+    requests = [request]
+    if as_html:
+        requests = [
+            dataclasses.replace(request, granularity=granularity)
+            for granularity in (
+                wambatic.stats.base.Granularity.TOTAL,
+                *wambatic.reports.html.PERIODS,
+            )
+        ]
     try:
-        result = await build_result(report, settings, cache, target, request, clock)
+        subject, results = await build_result(report, settings, cache, target, requests, clock)
     finally:
         cache.close()
-    if settings.report.format == 'json':
-        wambatic.reports.base.render_json(result, stdout)
+    if as_html:
+        render_html_report(report, settings, subject, results, stdout)
+    elif settings.report.format == 'json':
+        wambatic.reports.base.render_json(results[0], stdout)
     else:
-        wambatic.reports.terminal.render_terminal(result, console)
+        wambatic.reports.terminal.render_terminal(results[0], console)
 
 
 def cache_info_table(info: wambatic.fetch.cache.CacheInfo) -> rich.table.Table:
@@ -431,7 +497,11 @@ def main(argv: list[str] | None = None) -> int:
     except (wambatic.reports.errors.UsageError, wambatic.settings.SettingsError) as e:
         loguru.logger.error(redact_environment_token(str(e)))
         return 2
-    except (wambatic.fetch.errors.FetchError, wambatic.stats.StatsError) as e:
+    except (
+        wambatic.fetch.errors.FetchError,
+        wambatic.reports.errors.OutputError,
+        wambatic.stats.StatsError,
+    ) as e:
         loguru.logger.error(redact_environment_token(str(e)))
         return 1
     except KeyboardInterrupt:

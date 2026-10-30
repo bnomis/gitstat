@@ -54,7 +54,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 1: Add `plotly` and Playwright for Python
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** External dependencies (Plotly, the mypy override, Playwright); Static HTML (Testing); implementation order Principles (dependencies are checked, not assumed); review-2.md decision 1 and choice 15
@@ -93,12 +93,16 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `pyproject.toml`, `uv.lock`
 - Docs: [plotly.py](https://plotly.com/python/), [plotly.js reference](https://plotly.com/javascript/reference/), [Playwright for Python](https://playwright.dev/python/docs/intro), [mypy per-module options](https://mypy.readthedocs.io/en/stable/config_file.html#per-module-and-global-options)
 - The project's `exclude-newer = "14 days"` may resolve an older release than PyPI's latest; record the version actually locked.
+- Maintenance check, 2026-10-30, PyPI: `plotly` 7.1.0 (MIT, released 2026-09-15) and `playwright` 1.64.1 (Apache 2.0, released 2026-10-22), both releasing within the last two months. This session's GitHub access covers only the two project repositories, so the archived flag of `plotly/plotly.py` and `microsoft/playwright-python` could not be read; review-2.md's 2026-10-30 check of the same two is the record for it.
+- Locked: `plotly` 7.1.0 (bundles plotly.js 4.1.1 by `plotly.offline.get_plotlyjs_version()`) and `playwright` 1.64.0 (1.64.1 is inside the 14-day window), with `narwhals`, `packaging` and `pyee` as new transitive packages.
+- `plotly` has no `py.typed`, so the single mypy override for `plotly` and `plotly.*` is in place. `playwright` ships `py.typed`.
+- The local Python is older than 3.14.7, so `uv sync` and `uv add` ran with `requires-python` lowered to 3.14.6 for those commands; `pyproject.toml` and the `requires-python` and `revision` lines of `uv.lock` were restored before the commit.
 
 ---
 
 ## Task 2: Move the table rows into `rows.py`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Module location (`rows.py`); Implementation (One result, three renderers); Static HTML (Layout: tables hold the terminal's rows); review-2.md choice 12
@@ -132,12 +136,15 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 1 (only so the environment is synced)
 - Key files: `src/wambatic/reports/rows.py`, `src/wambatic/reports/terminal.py`, `src/tests/reports/test_rows.py`
 - A refactor commit of its own (`refactor(reports): ...`), before any HTML code, so a change in terminal output would show in its diff alone.
+- `rows.py` also holds what both renderers need beyond the tables' rows: the column headers, `subject_text` and `provenance_lines` (so the page's header and footer are the terminal's), and the series helpers (`total_series`, `bucket_list`). The period tables are one `PeriodTable` type (rows, headers, metrics, optional total), so the terminal builds all three the same way; `terminal.format_cell` is the one place a cell is formatted, for the HTML page too.
+- `terminal.TOP_CONTRIBUTORS_SHOWN` stays readable through a module `__getattr__`, because `test_terminal.py` must not change and `wambatic.reports` is still being imported when `terminal.py` loads, so the constant cannot be copied at import time.
+- The org fixture has no partial buckets in its provenance (its range is whole months); a test of the marks sets `provenance['partial_buckets']`.
 
 ---
 
 ## Task 3: `Figure`, the palette and the per-period charts
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** large
 **Spec Reference:** API (`Figure`, `build_figures`); Static HTML (Charts, Partial buckets, Palette and themes, Labels and hover, Testing: validators); review-2.md decision 1 and choices 5, 6, 8, 9, 10 and 11
@@ -175,12 +182,16 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/wambatic/reports/figures.py`, `src/tests/reports/test_figures.py`, `src/tests/fixtures/reports.py`
 - plotly.js: [bar](https://plotly.com/javascript/reference/bar/) (`marker.pattern`), [scatter](https://plotly.com/javascript/reference/scatter/) (`connectgaps`, `marker.symbol`), [layout](https://plotly.com/javascript/reference/layout/) (`barmode`, `hovermode`, `annotations`), [`meta`](https://plotly.com/javascript/reference/scatter/#scatter-meta)
 - `figures.py` does not import `plotly`; only the tests do, to validate (review-2.md decision 1).
+- Choices the spec left open: a chart whose series have no value in any bucket is left out (an empty chart says nothing), and the caption sits below the plot as a layout annotation named `caption`, at paper coordinates, so the page script can find it. A line is labelled at its last bucket that has a value, not at a gap.
+- `PALETTE` holds a `Theme` dataclass per theme (`dataclasses.asdict` gives the page script its JSON). `wambatic.reports` is still being imported while its modules load, so `figures.py` reaches `wambatic.reports.rows` and `base` only inside functions.
+- The org fixture has no partial buckets, so its known-good figures carry none; a test sets `provenance['partial_buckets']` for the hatch, open-marker and caption checks.
+- The `activity-lines` test failed first because deleted lines were not negated; fixed in the builder.
 
 ---
 
 ## Task 4: Whole-range charts and the calendar
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`build_range_figures`, `build_calendar`); Static HTML (Charts; Layout item 3); review-2.md choices 5, 6 and 8
@@ -212,12 +223,14 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 3
 - Key files: `src/wambatic/reports/figures.py`, `src/tests/reports/test_figures.py`, `src/tests/conftest.py` (add `org_total_result` and `org_day_result` fixtures beside `org_result`, through `compute_stats`)
 - plotly.js: [heatmap](https://plotly.com/javascript/reference/heatmap/) (`xgap`, `ygap` give the cell gaps), [bar](https://plotly.com/javascript/reference/bar/) (`orientation='h'`, `yaxis.autorange='reversed'`)
+- The calendar's `text` matrix holds each cell's own date, so the hover shows the day and not its week's Monday (`hovertemplate` `%{text}: %{z} commits`); the heat-map's `colorbar` is the one key with `color` in its name, and it carries no colour. The scale is filled in by the page script from the trace's `meta`.
+- A horizontal-bar chart's height grows with its rows, so a long breakdown stays readable.
 
 ---
 
 ## Task 5: The HTML document
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** large
 **Spec Reference:** API (`HtmlReport`, `html_document`, `report_filename`); Static HTML (Self-contained and offline, Escaping, Layout, Granularity switch: pre-rendered tables); review-2.md decision 1 and choices 2, 6, 7, 12 and 13
@@ -254,12 +267,17 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/wambatic/reports/html.py`, `src/wambatic/reports/templates/`, `src/tests/reports/test_html.py`, `src/tests/conftest.py`
 - `string.Template` uses `$name`; CSS and the script contain no `$`, or escape it as `$$` (Python [string.Template](https://docs.python.org/3.14/library/string.html#template-strings)).
 - Check that `uv build` puts `templates/` in the wheel (list it with `python -m zipfile -l`); if not, configure the build backend to include it and record how in Notes.
+- Checked: `uv build --wheel` puts `wambatic/reports/templates/` with `report.html`, `report.css` and `report.js` in the wheel, with no build configuration.
+- `html.py` is in `wambatic.reports` and may not import `wambatic.fetch`, so `report_filename` takes a `SubjectLike` protocol (`kind`, `login`, `full_name`) that a `Subject` satisfies, in place of the spec's `Subject` annotation.
+- The chart element is a `div` inside the `<figure>`: it has the `id` (the figure's key), `role="img"` and the `aria-label`, plotly.js draws into it, and the `<figcaption>` with the title stays outside, so drawing does not remove the caption and `role="img"` does not hide it. The period tables carry `class="period"` and `data-granularity` (and `hidden`) on the `<table>`.
+- `report.css` is a template (`$light` and `$dark` hold the token declarations built from `PALETTE`); `report.js` is inserted as is. The page's data holds one figure list per granularity, and the chart elements are the union over the five results (a chart one granularity leaves out is hidden by the script).
+- The tests pass `html.escape` and the JSON escapes through a defect check: with `escape` made the identity, or the `<`, `>` and `&` escapes of the JSON removed, the hostile-login tests fail.
 
 ---
 
 ## Task 6: The page script and `render_html`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`render_html`); Static HTML (Granularity switch, Palette and themes, Labels and hover); Error handling (`--out` atomic write); Settings (`report.html_theme`); review-2.md choices 4, 7 and 11
@@ -290,13 +308,15 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 - Depends on Task 5
 - Key files: `src/wambatic/reports/templates/report.js`, `src/wambatic/reports/html.py`, `src/tests/reports/test_html.py`
+- `render_html` sets the file's mode to 0644 before the move: `NamedTemporaryFile` creates 0600, which would leave a report meant to be hosted or attached unreadable to others.
+- Looked at once in headless Chromium (screenshot of the org report): no console errors, every chart drawn; the browser test of Task 8 makes that a check.
 - plotly.js: [`Plotly.newPlot` and `Plotly.react`](https://plotly.com/javascript/plotlyjs-function-reference/); [`matchMedia` change events](https://developer.mozilla.org/en-US/docs/Web/API/MediaQueryList/change_event); Python [`os.replace`](https://docs.python.org/3.14/library/os.html#os.replace) is atomic on POSIX within one file system, which the same-directory temporary file guarantees.
 
 ---
 
 ## Task 7: `--format html` and `--out` in the CLI
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Command line (`--format html`, `--out`, `--by` with html; Running `report` step 6); Error handling (`OSError` writing `--out` exits 1); Settings (`report.format`, `report.out_dir`, `report.html_theme`); review-2.md choices 2, 3 and 4
@@ -330,12 +350,15 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 6
 - Key files: `src/wambatic/cli.py`, `src/tests/test_cli.py`
 - The five-result build lives in `cli.py` for now; step 9's web app needs the same and will hoist it then (review-2.md, Open for a later step).
+- `build_result` now takes a list of requests and returns the resolved subject with one result each, computed after the one sync; the filename needs the subject a bare NAME resolves to.
+- A write failure becomes `wambatic.reports.errors.OutputError` (message `cannot write PATH: reason`), which `main` logs as one line and turns into status 1; other `OSError`s keep the traceback route. Task 10 exports it.
+- The old `--format html` usage-error tests (a flag and the config file) became tests that html passes the checks; the main-level test for a bad flag combination uses `--format html --by total`.
 
 ---
 
 ## Task 8: Headless-browser smoke test and the `browser` CI job
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Static HTML (Testing: the browser test and CI job); implementation order step 7 "Done when" (opens offline, all four granularities, headless-browser smoke test); review-2.md choice 15
@@ -372,12 +395,16 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/tests/reports/test_html_browser.py`, `.github/workflows/ci.yml`
 - Playwright for Python: [network routing](https://playwright.dev/python/docs/network#abort-requests), [`emulate_media`](https://playwright.dev/python/docs/api/class-page#page-emulate-media), [console events](https://playwright.dev/python/docs/api/class-page#page-event-console), [installing browsers in CI](https://playwright.dev/python/docs/ci)
 - If the preinstalled Chromium is too old for the locked Playwright, stop and record the error rather than pinning an older Playwright.
+- Ran here on 2026-10-30: Playwright 1.64.0 looks for its own headless shell (revision 1248), which is not installed, so the fixture fell back to `/opt/pw-browsers/chromium` (Chromium 153.0.8010.12, revision 1243) and all five tests passed, with the page's requests all aborted and recorded (none recorded) and no console or page error.
+- Defect checks, both done by hand and restored: with the plotly.js `<script>` left empty the first test fails (the charts never draw); with an `<img src="https://example.com/x.png">` added to the template the same test fails on the recorded request, which shows the routing sees requests from a `file://` page.
+- The `chromium` fixture is per test, not per session as the list said: Playwright's sync API runs an event loop while it is open, and the report fixtures compute with `asyncio.run`, which fails inside a running loop. Each test's fixtures build the report first and launch the browser after (about 4 seconds a test).
+- The `check` job leaves `browser` tests out, and the new `browser` job installs Chromium with `playwright install --with-deps chromium` and runs only them; the job is untested until CI runs it.
 
 ---
 
 ## Task 9: README: the HTML report
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** shared user-guides rule (keep guides in sync with code); Command line (`--format html`, `--out`); Settings (`report.format`, `report.html_theme`, `report.out_dir`); review-2.md choice 16
@@ -409,12 +436,13 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 - Depends on Task 7
 - Key files: `README.md`
+- Checked 2026-10-30: the README's examples ran against the stats fixture cache with `--no-fetch` (default path `wambatic-reports/org-octo-org.html`; `--out reports/github.html` creates the directory and prints that path; `--by total` is a usage error), and a script found every `Report` flag and every `fetch`, `report` and `stats` setting named in the README. The README has no section on test markers, so the `browser` marker is left to `pyproject.toml`.
 
 ---
 
 ## Task 10: Exports, layering and closing checks
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location (layering; only `html.py` imports `plotly`); API; implementation order step 7 "Done when"; review-2.md decision 1 and choice 14
@@ -451,4 +479,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Tasks 1 to 9
 - The project has no affected-tests tool; the commands above name every test file that reaches a module this list changed (`wambatic.reports` is reached by the reports and CLI tests, `wambatic.cli` by the CLI tests, and the package and layering tests check the whole tree). No fetch or stats module changes, so their tests are not needed.
 - The reports spec's `**Status:**` stays `proposed` (see the header).
+- Duplication: the tests for "has activity series" and "has flow series" were repeated in `rows.py`, `figures.py` and `html.py`; they are now `rows.has_activity` and `rows.has_flow`. Metric names and order, partial labels, the unattributed login, `TOP_CONTRIBUTORS_SHOWN`, number and hour formatting (`terminal.format_number`, `format_cell`), the subject text and the provenance lines each have one owner (`rows.py` or `terminal.py`); `OutputError` is exported with the step 7 names.
+- Step 7 "Done when", where each is shown: the file opens offline with no request (`test_the_file_opens_offline_without_errors_and_every_chart_is_drawn` aborts and records every request, and none is recorded), all four granularities (`test_each_granularity_shows_its_own_buckets_and_tables`), and the headless-browser smoke test (`src/tests/reports/test_html_browser.py`, run here on the preinstalled Chromium; CI's `browser` job runs it on Playwright's own, untested until CI runs).
+- Run on 2026-10-30: `pytest src/tests/reports src/tests/test_cli.py src/tests/test_package.py src/tests/test_layering.py -m 'not browser'` and `pytest -m browser -rs src/tests/reports/test_html_browser.py`, both passing (browser tests not skipped).
 - Key files: `src/wambatic/reports/__init__.py`, `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`

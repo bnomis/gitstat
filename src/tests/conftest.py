@@ -14,6 +14,7 @@ import tests.fixtures.stats
 import wambatic.fetch.base
 import wambatic.fetch.cache
 import wambatic.fetch.client
+import wambatic.reports.html
 import wambatic.settings
 import wambatic.stats
 import wambatic.stats.base
@@ -197,3 +198,65 @@ def repo_total_result(
     )
     subject = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
     return compute_stats(stats_fetcher, subject, request)
+
+
+@pytest.fixture
+def org_total_result(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org as one bucket with an author breakdown."""
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.TOTAL,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+        by_author=True,
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+@pytest.fixture
+def org_day_result(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org by day."""
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.DAY,
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+def make_report(
+    fetcher: wambatic.fetch.base.Fetcher,
+    subject: wambatic.fetch.base.Subject,
+    initial: wambatic.stats.base.Granularity = wambatic.stats.base.Granularity.MONTH,
+    by_author: bool = False,
+) -> wambatic.reports.html.HtmlReport:
+    """The five results an HTML report is built from, over the stats fixture's range."""
+
+    def result(granularity: wambatic.stats.base.Granularity) -> wambatic.stats.base.StatsResult:
+        request = wambatic.stats.base.StatsRequest(
+            granularity=granularity,
+            since=tests.fixtures.stats.SINCE,
+            until=tests.fixtures.stats.UNTIL,
+            by_author=by_author,
+        )
+        return compute_stats(fetcher, subject, request)
+
+    return wambatic.reports.html.HtmlReport(
+        total=result(wambatic.stats.base.Granularity.TOTAL),
+        periods={granularity: result(granularity) for granularity in wambatic.reports.html.PERIODS},
+        initial=initial,
+    )
+
+
+@pytest.fixture
+def org_report(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.reports.html.HtmlReport:
+    """The stats fixture's org with an author breakdown, shown by month."""
+    return make_report(stats_fetcher, tests.fixtures.stats.ORG, by_author=True)
+
+
+@pytest.fixture
+def repo_report(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.reports.html.HtmlReport:
+    """The stats fixture's repo octo-org/alpha, shown by week."""
+    subject = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
+    return make_report(stats_fetcher, subject, wambatic.stats.base.Granularity.WEEK)

@@ -1,0 +1,180 @@
+:root {
+  $light
+}
+
+:root[data-theme="dark"] {
+  $dark
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    $dark
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+header,
+main,
+footer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+header {
+  padding-top: 24px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+h1 .subject {
+  font-weight: 400;
+}
+
+h2 {
+  margin: 32px 0 12px;
+  font-size: 1.25rem;
+}
+
+.range {
+  margin: 4px 0 16px;
+  color: var(--ink-secondary);
+}
+
+.switch {
+  display: inline-flex;
+  gap: 16px;
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+}
+
+.switch legend {
+  padding: 0 4px;
+  color: var(--ink-secondary);
+  font-size: 0.85rem;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.tile {
+  margin: 0;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+}
+
+.tile dt {
+  color: var(--ink-secondary);
+  font-size: 0.85rem;
+}
+
+.tile dd {
+  margin: 0;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
+  gap: 16px;
+}
+
+figure.chart {
+  margin: 0;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+}
+
+figure.chart.wide {
+  grid-column: 1 / -1;
+}
+
+figcaption {
+  padding: 4px 8px 8px;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  margin: 0 0 24px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+caption {
+  padding: 8px 0;
+  text-align: left;
+  font-weight: 600;
+}
+
+caption .note {
+  margin-left: 8px;
+  color: var(--ink-secondary);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+th,
+td {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--grid);
+  text-align: left;
+}
+
+th.num,
+td.num {
+  text-align: right;
+}
+
+tfoot td {
+  font-weight: 600;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+footer {
+  margin-top: 32px;
+  padding-bottom: 32px;
+  color: var(--ink-secondary);
+  font-size: 0.85rem;
+}
+
+footer p {
+  margin: 2px 0;
+}
+
+footer .warning {
+  color: var(--ink);
+  font-weight: 600;
+}

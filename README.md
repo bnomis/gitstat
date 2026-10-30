@@ -1,6 +1,6 @@
 # wambatic
 
-Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal or as JSON.
+Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal, as one self-contained HTML page or as JSON.
 
 wambatic reads the default-branch history, pull requests and issues from GitHub's GraphQL and REST APIs, keeps them in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, together with how pull requests and issues flow (opened, merged, closed, and how long that takes), by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
 
@@ -48,6 +48,20 @@ The first run reads the whole history of the repository and may take a while for
 
 Nothing in the output depends on colour: net lines carry an explicit sign, and partial periods carry a mark.
 
+## The HTML report
+
+```shell
+wambatic report org:github --format html
+```
+
+This writes one HTML file and prints its path on stdout, so a script can capture it (`open "$(wambatic report org:github --format html)"`). The page has summary tiles, a chart for each measure, the whole-range charts (top contributors, and by repository and by author), a calendar of commits by day, and the same tables as the terminal report. The tables are plain HTML, so they can be read, copied and searched even with script turned off.
+
+- **Where the file goes.** `--out PATH` is a file, or an existing directory to write into. Without it the file goes in `report.out_dir`. The file is named `repo-OWNER-NAME.html`, `user-NAME.html` or `org-NAME.html`. Missing directories are created and an existing file is replaced. The write is atomic: a failed write leaves the earlier file as it was and no partial file. `--out` is an error with another format.
+- **Switching period.** The page has a Year, Month, Week and Day switch and does not need the network or wambatic to change it. `--by` picks the period shown when the page opens (default month); `--by total` is an error, because the tiles already show the totals. A repeat report from the same cache makes one sync and writes one file.
+- **Themes.** `report.html_theme` is `auto` (follow the viewer's light or dark setting, and change with it), `light` or `dark`. The charts use one colour set per theme and never rely on colour alone: a period the range cuts short is hatched in bar charts, drawn with open markers in line charts, and named in the chart's caption.
+- **Offline and shareable.** The file holds its own copy of [plotly.js](https://plotly.com/javascript/) and makes no request, so it opens from disk and can be hosted or attached to an issue. It is megabytes in size for that reason.
+- **Per-period charts** show the total series only. The breakdown by repository and by author is for the whole range.
+
 ## Flow
 
 The `flow` group counts pull requests and issues. Each event is placed in the period of its own date in the report time zone, so a pull request opened in one month and merged in the next is in `prs_opened` for the first and `prs_merged` for the second.
@@ -73,6 +87,9 @@ wambatic report repo:octocat/Hello-World --no-fetch
 
 # Sync only if the cache is more than a day old
 wambatic report org:github --max-age 1d
+
+# A self-contained HTML page, opening on the week view, written to a file of your choice
+wambatic report org:github --format html --by week --out reports/github.html
 
 # Machine-readable output, with logs kept on stderr
 wambatic report org:github --format json | jq '.series[0].points'
@@ -108,8 +125,9 @@ Global options come before the command: `wambatic -v report ...`.
 |--------|---------|---------|
 | `-v`, `--verbose` | off | Log debugging detail, with time and source location |
 | `-q`, `--quiet` | off | Log warnings and errors only; cannot be used with `-v` |
-| `--format terminal\|json` | `report.format` | The output format; `html` is not built yet |
-| `--by year\|month\|week\|day\|total` | `month` | The period to bucket by; weeks are ISO weeks starting on Monday |
+| `--format terminal\|html\|json` | `report.format` | The output format |
+| `--out PATH` | `report.out_dir` | With `--format html`, the file to write, or an existing directory to write the report into; an error with another format |
+| `--by year\|month\|week\|day\|total` | `month` | The period to bucket by; weeks are ISO weeks starting on Monday. With `--format html`, the period shown when the page opens, and `total` is an error |
 | `--since YYYY-MM-DD` | the first commit | First day, inclusive, in the report time zone |
 | `--until YYYY-MM-DD` | today | Last day, inclusive, in the report time zone |
 | `--groups NAMES` | `activity,flow` | Comma-separated metric groups: `activity`, `delivery`, `flow`. `activity` and `flow` are built; `delivery` is not built yet and is listed as unavailable |
@@ -166,9 +184,9 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | `fetch.stats_retries` | `6` | Retries while a REST statistics endpoint is still computing |
 | `fetch.workers` | `4` | Repositories fetched at once; more is faster and closer to GitHub's secondary limits |
 | `report.allow_remote` | `false` | For the web app, which is not built yet |
-| `report.format` | `terminal` | The default output format: `terminal` or `json` (`html` is not built yet) |
-| `report.html_theme` | `auto` | For the HTML report, which is not built yet |
-| `report.out_dir` | `./wambatic-reports` | For the HTML report, which is not built yet |
+| `report.format` | `terminal` | The default output format: `terminal`, `html` or `json` |
+| `report.html_theme` | `auto` | The HTML report's colours: `auto` follows the viewer's system setting, `light` and `dark` are fixed |
+| `report.out_dir` | `./wambatic-reports` | The directory the HTML report is written to when `--out` is absent |
 | `report.web_host` | `127.0.0.1` | For the web app, which is not built yet |
 | `report.web_port` | `8000` | For the web app, which is not built yet |
 | `stats.bot_logins` | `["dependabot[bot]", "renovate[bot]"]` | Authors left out of contributor counts and the top-contributors table |
@@ -183,7 +201,7 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | Status | Meaning |
 |--------|---------|
 | 0 | Success, and `--help` |
-| 1 | A GitHub or cache error (no token, a missing user or repository, the rate limit, a cache from another version), a report error (nothing to report, an unknown group, a range that ends before it starts), or an unexpected error, which is logged with its traceback |
+| 1 | A GitHub or cache error (no token, a missing user or repository, the rate limit, a cache from another version), a report error (nothing to report, an unknown group, a range that ends before it starts), an HTML report that cannot be written to its path, or an unexpected error, which is logged with its traceback |
 | 2 | A command line that cannot be run: an unknown option, a malformed target or date, a clash such as `--full-refresh` with `--no-fetch`, or a bad config file or setting |
 | 130 | Interrupted with Ctrl-C |
 
@@ -196,7 +214,7 @@ Each failure prints one line to stderr that says what to do, such as setting `GI
 - Line counts are not filtered for generated files.
 - A report uses one time zone.
 - GitHub Enterprise Server is not supported.
-- The delivery group, the HTML report (`--format html`) and the local web app (`serve`) are not built yet.
+- The delivery group and the local web app (`serve`) are not built yet.
 
 ## More
 
