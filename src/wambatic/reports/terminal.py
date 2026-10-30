@@ -7,6 +7,7 @@ import rich.text
 
 import wambatic.stats.activity
 import wambatic.stats.base
+import wambatic.stats.flow
 
 BLOCKS = '▁▂▃▄▅▆▇█'
 TOTAL_METRICS = tuple(metric for metric, _ in wambatic.stats.activity.TOTAL_METRICS)
@@ -15,6 +16,17 @@ PARTIAL_MARK = ' *'
 TOP_CONTRIBUTORS_SHOWN = 20
 BREAKDOWN_TITLES = (('repo', 'By repository'), ('author', 'By author'))
 SIGNED_METRICS = frozenset({'lines_net'})
+FLOW_COUNTS = wambatic.stats.flow.COUNT_METRICS
+TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS)
+FLOW_TIMES = (
+    'time_to_first_review_p50',
+    'time_to_first_review_p90',
+    'time_to_merge_p50',
+    'time_to_merge_p90',
+    'time_to_close_p50',
+    'time_to_close_p90',
+)
+NO_DATA = '-'
 
 
 def sparkline(values: list[float]) -> str:
@@ -29,10 +41,14 @@ def sparkline(values: list[float]) -> str:
     return ''.join(BLOCKS[round((value - low) / (high - low) * top)] for value in values)
 
 
-def format_number(value: float, *, signed: bool = False) -> str:
-    """Thousands separators; with `signed`, an explicit sign on every non-zero value."""
+def format_number(value: float, *, signed: bool = False, decimals: int | None = None) -> str:
+    """Thousands separators; with `signed`, an explicit sign on every non-zero value. A whole
+    number has no decimals and another has two, unless `decimals` fixes the count."""
     number: float = int(value) if float(value).is_integer() else value
-    text = f'{number:,}' if isinstance(number, int) else f'{number:,.2f}'
+    if decimals is not None:
+        text = f'{value:,.{decimals}f}'
+    else:
+        text = f'{number:,}' if isinstance(number, int) else f'{number:,.2f}'
     if signed and number > 0:
         return f'+{text}'
     return text
@@ -138,6 +154,85 @@ def period_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
     return table
 
 
+def bucket_list(result: wambatic.stats.base.StatsResult) -> list[wambatic.stats.base.Bucket]:
+    """The result's buckets, from whichever total series is present."""
+    series = total_series(result)
+    for metric in (*TOTAL_METRICS, *FLOW_COUNTS):
+        if metric in series:
+            return [bucket for bucket, _ in series[metric]]
+    return []
+
+
+def partial_note(partial: frozenset[str], buckets: list[wambatic.stats.base.Bucket]) -> str:
+    return '* partial period' if partial & {bucket.label for bucket in buckets} else ''
+
+
+def flow_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
+    series = total_series(result)
+    partial = partial_labels(result)
+    buckets = bucket_list(result)
+    table = make_table(
+        'Flow by period',
+        [
+            ('Period', False),
+            ('PRs opened', True),
+            ('PRs merged', True),
+            ('Issues opened', True),
+            ('Issues closed', True),
+        ],
+    )
+    for index, bucket in enumerate(buckets):
+        label = bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+        table.add_row(
+            text_cell(label), *(format_number(series[metric][index][1]) for metric in FLOW_COUNTS)
+        )
+    if note := partial_note(partial, buckets):
+        table.caption = note
+        table.caption_justify = 'left'
+    if len(buckets) > 1:
+        table.show_footer = True
+        footer = ['Total']
+        footer += [format_number(sum(value for _, value in series[m])) for m in FLOW_COUNTS]
+        for column, text in zip(table.columns, footer, strict=True):
+            column.footer = text
+    return table
+
+
+def flow_times_table(result: wambatic.stats.base.StatsResult) -> rich.table.Table:
+    series = total_series(result)
+    partial = partial_labels(result)
+    buckets = bucket_list(result)
+    table = make_table(
+        'Flow times by period',
+        [
+            ('Period', False),
+            ('Review p50', True),
+            ('Review p90', True),
+            ('Merge p50', True),
+            ('Merge p90', True),
+            ('Close p50', True),
+            ('Close p90', True),
+            ('PR size p50', True),
+        ],
+    )
+    points = {metric: dict(series[metric]) for metric in (*FLOW_TIMES, 'pr_size_p50')}
+    for bucket in buckets:
+        label = bucket.label + (PARTIAL_MARK if bucket.label in partial else '')
+        cells = [
+            NO_DATA
+            if bucket not in points[metric]
+            else format_number(points[metric][bucket], decimals=1)
+            for metric in FLOW_TIMES
+        ]
+        size = points['pr_size_p50'].get(bucket)
+        cells.append(NO_DATA if size is None else format_number(size))
+        table.add_row(text_cell(label), *cells)
+    note = partial_note(partial, buckets)
+    table.caption = f'{note}; hours; {NO_DATA} no data' if note else f'hours; {NO_DATA} no data'
+    table.caption_justify = 'left'
+    return table
+
+
 def plural(count: int) -> str:
     return 'period' if count == 1 else 'periods'
 
@@ -151,9 +246,11 @@ def trend_lines(result: wambatic.stats.base.StatsResult, width: int) -> list[str
     """One `<metric>  <sparkline>  <min> to <max>` line per total series, cropped to the latest
     buckets that fit `width` with `last N periods` added."""
     series = total_series(result)
-    label_width = max(len(metric) for metric in TOTAL_METRICS)
+    buckets = len(bucket_list(result))
+    metrics = [m for m in TREND_METRICS if m in series and len(series[m]) == buckets]
+    label_width = max(len(metric) for metric in metrics)
     lines: list[str] = []
-    for metric in TOTAL_METRICS:
+    for metric in metrics:
         values = [value for _, value in series[metric]]
         shown = len(values)
         while True:
@@ -270,15 +367,28 @@ def render_unavailable(
     console.print(table)
 
 
+def render_flow(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
+    """Flow by period and Flow times by period (items 6 and 7 of the terminal layout)."""
+    console.print()
+    console.print(flow_table(result))
+    console.print()
+    console.print(flow_times_table(result))
+
+
 def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
+    series = total_series(result)
     console.print(title_line(result))
-    console.print(period_table(result))
-    if len(total_series(result)['commits']) > 1:
+    if 'commits' in series:
+        console.print(period_table(result))
+    if len(bucket_list(result)) > 1 and any(metric in series for metric in TREND_METRICS):
         heading(console, 'Trends')
         for line in trend_lines(result, console.width):
             console.print(rich.text.Text(line))
-    render_breakdowns(result, console)
-    render_top_contributors(result, console)
+    if 'commits' in series:
+        render_breakdowns(result, console)
+        render_top_contributors(result, console)
+    if 'prs_opened' in series:
+        render_flow(result, console)
     render_unavailable(result, console)
     heading(console, 'Provenance')
     for line in provenance_lines(result):

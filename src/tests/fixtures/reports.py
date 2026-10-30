@@ -1,11 +1,13 @@
 """The known-good terminal rendering of the stats fixture's org.
 
-`ORG_MONTH_TERMINAL` was generated once from `render_terminal` at width 120 for the org by
-month with an author breakdown, then checked by hand on 2026-10-29: every number against the
-hand-worked totals in `tests.fixtures.stats` (periods, breakdowns by repository and by author,
-top contributors) and the layout against the reports spec's Terminal section. The versions in
-the provenance footer are `{wambatic_version}` and `{schema_version}`, filled in by the test;
-trailing spaces are not kept, so the test compares lines without them.
+`ORG_MONTH_TERMINAL` was generated from `render_terminal` at width 120 for the org by month with
+an author breakdown, regenerated when the flow tables were added, then checked by hand on
+2026-10-30: every number against the hand-worked totals in `tests.fixtures.stats` (periods,
+breakdowns by repository and by author, top contributors, and the flow counts and times by period,
+whose arithmetic is in `ORG_FLOW_BY_MONTH_UTC`) and the layout against the reports spec's Terminal
+section. The versions in the provenance footer are `{wambatic_version}` and
+`{schema_version}`, filled in by the test; trailing spaces are not kept, so the test compares
+lines without them.
 """
 
 ORG_MONTH_TERMINAL = """\
@@ -29,6 +31,10 @@ active_days    █▁▂▄  0 to 5
 lines_added    █▁▂▂  0 to 73
 lines_deleted  █▁▂▂  0 to 39
 lines_net      █▁▂▂  0 to +34
+prs_opened     █▁▁▅  1 to 5
+prs_merged     █▁▂▂  0 to 5
+issues_opened  █▃▁▃  0 to 3
+issues_closed  █▃▁▁  0 to 3
 
 By repository
 
@@ -59,11 +65,33 @@ Top contributors
   unattributed         1       3         1    +2             1
 
 
+Flow by period
+
+  Period    PRs opened   PRs merged   Issues opened   Issues closed
+ ───────────────────────────────────────────────────────────────────
+  2026-10            5            5               3               3
+  2026-11            1            0               1               1
+  2026-12            1            1               0               0
+  2027-01            3            1               1               0
+ ───────────────────────────────────────────────────────────────────
+  Total             10            7               5               4
+
+
+Flow times by period
+
+  Period    Review p50   Review p90   Merge p50   Merge p90   Close p50   Close p90   PR size p50
+ ─────────────────────────────────────────────────────────────────────────────────────────────────
+  2026-10         12.0         21.6        48.0        86.4        48.0       201.6            15
+  2026-11            -            -           -           -        12.0        12.0             -
+  2026-12          2.0          2.0        37.5        37.5           -           -             5
+  2027-01         12.5         21.7        24.0        24.0           -           -            15
+
+hours; - no data
+
 Unavailable
 
   Metric      Reason
  ────────────────────────────────────────────────────────────────────────────────
-  flow        the flow group is built in implementation step 6
   stars       stars come from star_events, which step 8 fetches
   forks       forks has no fetch resource yet; it is specified before step 8
   watchers    watchers has no fetch resource yet; it is specified before step 8
@@ -73,6 +101,8 @@ Unavailable
 Provenance
 computed_at: 2027-01-20T12:00:00+00:00
 fetched_at:commits: 2027-02-01T10:00:00+00:00
+fetched_at:issues: 2027-02-01T10:00:00+00:00
+fetched_at:pull_requests: 2027-02-01T10:00:00+00:00
 wambatic_version: {wambatic_version}
 schema_version: {schema_version}
 """
