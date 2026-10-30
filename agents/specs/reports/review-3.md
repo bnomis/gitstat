@@ -51,4 +51,4 @@ Writing the task list for step 9 of the implementation order (local web app) fou
 ## Answers
 
 - Decision 1, 2026-10-30: **Option B, FastAPI with uvicorn**, chosen by Simon on the decision card in the project thread. The spec (reports 1.6, system 1.6, implementation order 1.8) and the task list follow it; choices 12, 13 and 15 were revised for it and choices 18 and 19 added.
-- Choices 2 to 19: no verdict yet.
+- Choices 2 to 19, 2026-10-30: each **approved**, with no comments, by Simon on the review page (answers saved between 07:42 and 07:45 UTC).
