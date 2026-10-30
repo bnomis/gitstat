@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -60,8 +60,8 @@ Done when: `wambatic report repo:OWNER/NAME --by month --no-fetch` (or with a `-
 
 ### 6. Flow data and stats
 
-Deliver: `pull_requests()` and `issues()` with updated-at paging, the `flow` group (throughput, time to first review, merge and close, PR size).
-Done when: incremental refresh updates a PR that changed and leaves unchanged ones untouched, and the full-refresh interval removes a deleted issue.
+Deliver: the `PullRequest` and `Issue` records and tables (cache schema 2), `pull_requests()` and `issues()` with updated-at paging from a `Date`-header watermark, the repo listing's newest pull request and issue update times so unchanged repos are skipped, `issues` and `pull_requests` in `BUILT_RESOURCES`, the `flow` group (throughput, time to first review, merge and close, PR size) in `compute`, the terminal's Flow by period and Flow times tables, and the README's flow section. Fetch spec 1.5, stats spec 1.2 and reports spec 1.3; the choices are in the [stats review 2](stats/review-2.md).
+Done when: incremental refresh updates a PR that changed and leaves unchanged ones untouched, the full-refresh interval removes a deleted issue, a repo whose newest PR and issue are older than the watermark costs no per-repo request, and the default report (`activity,flow`) lists nothing as unavailable for `flow`.
 
 ### 7. Static HTML report
 
@@ -70,7 +70,7 @@ Done when: the file opens offline, shows all four granularities, and passes a he
 
 ### 8. Delivery data and stats
 
-Deliver: `releases()`, `workflow_runs()`, `star_events()`, the `delivery` group, DORA proxies emitted only when configured, and the `activity` metrics step 4 left unavailable (stars, forks, watchers, languages; the fetch spec needs resources for forks, watchers and languages first).
+Deliver: `releases()`, `workflow_runs()`, `star_events()`, the `delivery` group, DORA proxies emitted only when configured, and the `activity` metrics step 4 left unavailable (stars, forks, watchers, languages; the fetch spec needs resources for forks, watchers and languages first, and `PullRequest` fields for labels and its first commit's time, which the hotfix and lead-time proxies read; adding them is a cache schema increase).
 Done when: unconfigured proxies are listed as `unavailable` with a reason, and in-progress runs are refreshed on the next sync.
 
 ### 9. Local web app

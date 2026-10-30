@@ -1,6 +1,6 @@
 # Reports
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** proposed
 **Date:** 2026-10-29
 
@@ -8,7 +8,7 @@ The three ways a user sees a `StatsResult`: a terminal report, a self-contained 
 
 **Prerequisites:** [Fetch and cache](../fetch-and-cache/spec.md) and [Stats](../stats/spec.md) are implemented (check: `python -c 'import wambatic.stats'`).
 
-Version 1.2 settles what step 5 of the [implementation order](../implementation-order.md) (terminal report and CLI) needed; the gaps and the choices made are in [review-1.md](review-1.md).
+Version 1.2 settles what step 5 of the [implementation order](../implementation-order.md) (terminal report and CLI) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.3 adds the terminal's flow sections for step 6 (flow data and stats); the choices are in the [stats review 2](../stats/review-2.md).
 
 ## Module location
 
@@ -99,10 +99,10 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 2. Open the cache at `fetch.cache_path`.
 3. Decide whether to sync. The resources are `resources_for(groups) & BUILT_RESOURCES` (fetch spec): resources whose step is not built are never synced, so the default groups run before step 6. There is no sync when `--no-fetch` is given, when the resources are empty, or when `fetch.max_age` is above zero, `--full-refresh` is absent and every `fetched_at:<resource>` in `Fetcher.provenance(subject, resources)` is a time less than `max_age` before now. Otherwise sync.
 4. Only when a sync or a bare-`NAME` resolution is needed, resolve the token with `resolve_token()` and enter the `Fetcher` (which opens the aiohttp session). Otherwise the `Fetcher` is built with an empty token and never entered, so no session is opened and no request can be made; a warm cache with `--no-fetch` or a fresh `--max-age` needs no `GITHUB_TOKEN`.
-5. Sync, logging one `info` line from the `SyncReport`: repositories listed, unchanged, commits written and any full refetches.
+5. Sync, logging one `info` line from the `SyncReport`: repositories listed, unchanged, the rows written for each resource synced (`commits 12, issues 3, pull_requests 5`) and any full refetches.
 6. `compute`, then render to stdout with the selected format.
 
-**`cache info`** prints, for `fetch.cache_path`, what `Cache.inspect` (fetch spec) returns: the path and size, the recorded identity and every key that differs from the running code (with both values), `version_override_at` when set, the number of repositories and commits, and the latest sync time. It opens the file read-only and never creates, migrates or stamps it, so it works on a cache that `report` refuses. A missing file prints that there is no cache at the path and exits 0.
+**`cache info`** prints, for `fetch.cache_path`, what `Cache.inspect` (fetch spec) returns: the path and size, the recorded identity and every key that differs from the running code (with both values), `version_override_at` when set, the number of repositories, commits, pull requests and issues, and the latest sync time. It opens the file read-only and never creates, migrates or stamps it, so it works on a cache that `report` refuses. A missing file prints that there is no cache at the path and exits 0.
 
 **`cache clear`** deletes the cache file and its `-wal` and `-shm` files with `clear_cache` (fetch spec), logs each path removed at `info`, and exits 0 when there was nothing to remove. It does not prompt: the cache is derived data that the next `report` refetches.
 
@@ -129,15 +129,17 @@ The CLI is defined with [cappa](https://cappa.readthedocs.io/) dataclasses, as t
 
 **One result, three renderers.** Rendering is a pure function of `StatsResult`. Only `--format` and the command select a renderer; there is no per-renderer metric logic.
 
-**Terminal.** [Rich](https://rich.readthedocs.io/) output, in this order; every table is a `rich.table.Table` and numbers are right-aligned with thousands separators (`1,234`), `lines_net` with an explicit sign (`+1,234`, `-56`, `0`), so nothing depends on colour:
+**Terminal.** [Rich](https://rich.readthedocs.io/) output, in this order; every table is a `rich.table.Table` and numbers are right-aligned with thousands separators (`1,234`), `lines_net` with an explicit sign (`+1,234`, `-56`, `0`), so nothing depends on colour. Items 2, 4 and 5 appear when the result has `activity` series, items 6 and 7 when it has `flow` series, and item 3 when it has any series with a trend line, so `--groups flow` prints no activity tables but does print the flow trend lines:
 
 1. A title line: the subject (`repo octocat/Hello-World`, `user octocat`, `org octo-org`), the resolved range (`2026-01-01 to 2026-10-29`), the granularity (`by month`, or `total`) and the timezone.
 2. **Activity by period**: one row per bucket, columns Period, Commits, Contributors, Active days, Added, Deleted, Net, from the total series. A partial bucket's label (from `provenance['partial_buckets']`) ends in ` *` and the table's caption says `* partial period`. With more than one bucket a footer row `Total` sums commits, active days, added, deleted and net (all additive over disjoint buckets), and gives as contributors the number of `top_contributors` rows other than `unattributed` (contributors are not additive over buckets).
-3. **Trends**: with more than one bucket, one line per total series, `<metric>  <sparkline>  <min> to <max>`; when there are more buckets than fit in `console.width` less the label and range columns, the line shows the latest buckets that fit and says `last N periods`.
+3. **Trends**: with more than one bucket, one line per total series that has a value in every bucket (the activity metrics, then the flow counts `prs_opened`, `prs_merged`, `issues_opened` and `issues_closed`), `<metric>  <sparkline>  <min> to <max>`; the duration and size medians (`*_p50`, `*_p90`) have no trend line, because their empty buckets have no value; when there are more buckets than fit in `console.width` less the label and range columns, the line shows the latest buckets that fit and says `last N periods`.
 4. **By repository** and **By author**: one table per `by_kind` present, columns Name, Commits, Added, Deleted, Net, each the sum of that breakdown series' points over the range; rows ordered by commits descending then name; rows whose four values are all zero are left out.
 5. **Top contributors**: `tables['top_contributors']` in its own order, columns Login, Commits, Added, Deleted, Net, Active days; the first `TOP_CONTRIBUTORS_SHOWN = 20` rows, then a line `and N more` when there are more (the JSON output has every row).
-6. **Unavailable**: `tables['unavailable']`, columns Metric and Reason, when not empty.
-7. A provenance footer: `computed_at`, each `fetched_at:<resource>`, `wambatic_version` and `schema_version`; when `version_override_at` is present, a warning line that the cache was read with `--ignore-cache-version` at that time.
+6. **Flow by period**: one row per bucket, columns Period, PRs opened, PRs merged, Issues opened, Issues closed, from the flow count series, with partial marks as in item 2 and, with more than one bucket, a `Total` footer row summing each column.
+7. **Flow times by period**: one row per bucket, columns Period, Review p50, Review p90, Merge p50, Merge p90, Close p50, Close p90 (hours, one decimal place) and PR size p50 (lines), from the duration and size series; a bucket with no value shows `-`. There is no `Total` row, because medians do not add up over buckets; the caption says `hours; - no data`.
+8. **Unavailable**: `tables['unavailable']`, columns Metric and Reason, when not empty.
+9. A provenance footer: `computed_at`, each `fetched_at:<resource>`, `wambatic_version` and `schema_version`; when `version_override_at` is present, a warning line that the cache was read with `--ignore-cache-version` at that time.
 
 **JSON output.** `--format json` writes `render_json(result, sys.stdout)` (the one place output bypasses loguru). `result_to_dict` returns, in this key order:
 
