@@ -8,6 +8,7 @@ dependencies = [
     "aiohttp>=3.14.5",
     "cappa>=0.33.0",
     "loguru>=0.7.3",
+    "plotly>=7.1.0",
     "rich>=15.0.0",
 ]
 
@@ -18,6 +19,7 @@ wambatic = 'wambatic.cli:run'
 dev = [
     "hypothesis>=6.165.9",
     "mypy>=2.3.1",
+    "playwright>=1.64.0",
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",
     "ruff>=0.16.3",
@@ -71,10 +73,17 @@ strict = true
 mypy_path = 'src'
 explicit_package_bases = true
 
+# plotly ships no py.typed and no stubs (checked on 7.1.0, 2026-10-30), and only
+# wambatic.reports.html imports it, for the plotly.js it bundles.
+[[tool.mypy.overrides]]
+module = ['plotly', 'plotly.*']
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ['src/tests']
 pythonpath = ['src']
 markers = [
+    'browser: opens a page in headless Chromium; skipped when no Chromium can be launched',
     'live: calls the real GitHub API; skipped without GITHUB_TOKEN',
     'slow: loads large models or processes real datasets',
 ]

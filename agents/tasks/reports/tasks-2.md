@@ -54,7 +54,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 1: Add `plotly` and Playwright for Python
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** External dependencies (Plotly, the mypy override, Playwright); Static HTML (Testing); implementation order Principles (dependencies are checked, not assumed); review-2.md decision 1 and choice 15
@@ -93,6 +93,10 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `pyproject.toml`, `uv.lock`
 - Docs: [plotly.py](https://plotly.com/python/), [plotly.js reference](https://plotly.com/javascript/reference/), [Playwright for Python](https://playwright.dev/python/docs/intro), [mypy per-module options](https://mypy.readthedocs.io/en/stable/config_file.html#per-module-and-global-options)
 - The project's `exclude-newer = "14 days"` may resolve an older release than PyPI's latest; record the version actually locked.
+- Maintenance check, 2026-10-30, PyPI: `plotly` 7.1.0 (MIT, released 2026-09-15) and `playwright` 1.64.1 (Apache 2.0, released 2026-10-22), both releasing within the last two months. This session's GitHub access covers only the two project repositories, so the archived flag of `plotly/plotly.py` and `microsoft/playwright-python` could not be read; review-2.md's 2026-10-30 check of the same two is the record for it.
+- Locked: `plotly` 7.1.0 (bundles plotly.js 4.1.1 by `plotly.offline.get_plotlyjs_version()`) and `playwright` 1.64.0 (1.64.1 is inside the 14-day window), with `narwhals`, `packaging` and `pyee` as new transitive packages.
+- `plotly` has no `py.typed`, so the single mypy override for `plotly` and `plotly.*` is in place. `playwright` ships `py.typed`.
+- The local Python is older than 3.14.7, so `uv sync` and `uv add` ran with `requires-python` lowered to 3.14.6 for those commands; `pyproject.toml` and the `requires-python` and `revision` lines of `uv.lock` were restored before the commit.
 
 ---
 
