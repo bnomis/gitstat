@@ -1008,6 +1008,58 @@ def test_one_worker_syncs_one_repo_at_a_time(
     assert run.max_in_flight == 1
 
 
+def test_progress_ends_equal_to_the_report(make_fetcher: tests.conftest.MakeFetcher) -> None:
+    upstream = Upstream([hello(), spoon(), FakeRepo('octocat/Third', history('t', 2))])
+    first = sync_once(make_fetcher, upstream)
+    upstream.repos[HELLO].push(*history('h', 1, start=4))
+    upstream.repos[SPOON].push(*history('s', 1, start=3))
+    progress = wambatic.fetch.base.SyncProgress()
+
+    async def scenario() -> wambatic.fetch.base.SyncReport:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            async with make_fetcher(server, cache=first.cache) as fetcher:
+                return await fetcher.sync(OWNER, COMMITS, progress=progress)
+
+    report = asyncio.run(scenario())
+    assert report.repos_skipped == 1
+    assert progress.repos_listed == report.repos_listed
+    assert progress.repos_pending == report.repos_listed - report.repos_skipped
+    assert progress.repos_done == progress.repos_pending
+    assert progress.rows_written == report.rows_written
+
+
+def test_progress_is_readable_while_the_sync_runs(
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
+) -> None:
+    upstream = Upstream([FakeRepo(f'octocat/r{n}', history(f'r{n}-', 2)) for n in range(4)])
+    upstream.history_delay = 0.05
+    progress = wambatic.fetch.base.SyncProgress()
+    seen: list[tuple[int | None, int | None, int]] = []
+
+    async def watch(done: asyncio.Event) -> None:
+        while not done.is_set():
+            seen.append((progress.repos_listed, progress.repos_pending, progress.repos_done))
+            await asyncio.sleep(0.01)
+
+    async def scenario() -> None:
+        done = asyncio.Event()
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server, settings=settings_with(fetch_settings, workers=1))
+            async with fetcher:
+                watcher = asyncio.create_task(watch(done))
+                await fetcher.sync(OWNER, COMMITS, progress=progress)
+                done.set()
+                await watcher
+
+    asyncio.run(scenario())
+    assert any(listed_ == 4 and done < 4 for listed_, _, done in seen)
+
+
+def test_a_sync_without_progress_is_unchanged(make_fetcher: tests.conftest.MakeFetcher) -> None:
+    run = sync_once(make_fetcher, Upstream([hello(), spoon()]))
+    assert run.report == wambatic.fetch.base.SyncReport(2, 0, {'commits': 5}, (HELLO, SPOON))
+
+
 def test_an_unknown_resource_raises_before_any_request(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:

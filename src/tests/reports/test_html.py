@@ -11,6 +11,7 @@ import typing
 
 import pytest
 
+import tests.conftest
 import tests.fixtures.stats as fixture
 import wambatic.fetch.base
 import wambatic.reports.figures
@@ -299,6 +300,20 @@ def test_an_initial_granularity_outside_the_periods_is_refused(
         wambatic.reports.html.html_document(
             dataclasses.replace(org_report, initial=Granularity.TOTAL), 'auto'
         )
+
+
+def test_results_without_a_requested_start_begin_at_their_own_period_start_and_build_a_page(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    request = wambatic.stats.base.StatsRequest(until=fixture.UNTIL)
+    results = [
+        tests.conftest.compute_stats(stats_fetcher, fixture.ORG, item)
+        for item in wambatic.reports.html.period_requests(request)
+    ]
+    starts = {result.since for result in results}
+    assert len(starts) > 1
+    report = wambatic.reports.html.html_report(results, Granularity.MONTH)
+    assert 'id="wambatic-data"' in wambatic.reports.html.html_document(report, 'auto')
 
 
 def test_a_result_made_for_another_range_is_refused_naming_the_difference(

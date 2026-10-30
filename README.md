@@ -1,6 +1,6 @@
 # wambatic
 
-Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal, as one self-contained HTML page or as JSON.
+Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal, as one self-contained HTML page, as JSON or in a web app on your own machine.
 
 wambatic reads the default-branch history, pull requests, issues, releases and GitHub Actions runs from GitHub's GraphQL and REST APIs, keeps them in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, together with how pull requests and issues flow (opened, merged, closed, and how long that takes) and how the project delivers (runs, releases and proxies for the DORA metrics), by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
 
@@ -16,7 +16,7 @@ source bin/activate.sh
 wambatic --help
 ```
 
-`wambatic --help` lists the `report` and `cache` commands. `python -m wambatic` runs the same program.
+`wambatic --help` lists the `report`, `serve` and `cache` commands. `python -m wambatic` runs the same program.
 
 ## The token
 
@@ -62,6 +62,44 @@ This writes one HTML file and prints its path on stdout, so a script can capture
 - **Themes.** `report.html_theme` is `auto` (follow the viewer's light or dark setting, and change with it), `light` or `dark`. The charts use one colour set per theme and never rely on colour alone: a period the range cuts short is hatched in bar charts, drawn with open markers in line charts, and named in the chart's caption.
 - **Offline and shareable.** The file holds its own copy of [plotly.js](https://plotly.com/javascript/) and makes no request, so it opens from disk and can be hosted or attached to an issue. It is megabytes in size for that reason.
 - **Per-period charts** show the total series only. The breakdown by repository and by author is for the whole range.
+
+## The web app
+
+```shell
+wambatic serve octocat
+```
+
+This starts a web app on your machine and logs the address, `http://127.0.0.1:8000/`, and the URL of the report for the target you gave. Open the printed address to get a form for any target; the target on the command line only fills the form in, and is optional. Submitting the form shows the same page as `report --format html`, on the same cache.
+
+- **The progress page.** A report that needs a sync does not make the browser wait for it. The server answers at once with a progress page that shows the state (waiting, listing, syncing), how many repositories are done and how many rows were written, polls once a second, and loads the report when the sync is done. A large organisation can take minutes; the rest of the app stays responsive meanwhile. One sync runs at a time, so a second target waits its turn, and asking again for a target that is already syncing joins its sync. If a sync fails, the page shows the message and a link to try again.
+- **How fresh is fresh.** The web app syncs on the same rule as `report`: `--max-age` (or `fetch.max_age`) says how recent a sync may be to skip the network. The default is zero, so every page you open syncs first, as a `report` does; for a server you leave running, `wambatic serve --max-age 1h` is usually what you want. A page you reach from the progress page does not sync a second time.
+- **The JSON routes.** `/api/stats` takes the same parameters as the report (`target`, `by`, `since`, `until`, `groups`, `by_author`, `tz`) and returns what `report --format json` prints; `by=total` is allowed there, and `by_author` is `1`, `true` or `on`. When a sync is needed it answers 202 with a job to follow, and you ask again with `job=ID` once `/api/progress` says it is done:
+
+  ```shell
+  curl -s 'http://127.0.0.1:8000/api/stats?target=repo:octocat/Hello-World&by=week'
+  # {"job": "9c1b...", "progress": "/api/progress?job=9c1b..."}
+  curl -s 'http://127.0.0.1:8000/api/progress?job=9c1b...'
+  # {"job": "9c1b...", "state": "syncing", "repos_listed": 1, "repos_pending": 1, "repos_done": 0, ...}
+  curl -s 'http://127.0.0.1:8000/api/stats?target=repo:octocat/Hello-World&by=week&job=9c1b...'
+  ```
+
+  Errors are `{"error": "..."}` with status 400 for a bad parameter, 404 for a target that does not exist or has nothing in range, 502 for a GitHub error (for example no token) and 500 for anything unexpected, whose details are in the server's log. The report pages show the same errors as a short page.
+- **The API page.** `/docs` is a generated page describing the JSON routes. It loads its script and style from jsDelivr, so unlike the other pages it needs a network connection.
+- **Security.** The server uses the `GITHUB_TOKEN` of the environment it runs in, and never sends it to the browser. It listens on loopback only, and refuses any other address unless you pass `--allow-remote` (or set `report.allow_remote`), because anyone who can reach the port can then read whatever your token can read, private repositories included, and make wambatic spend your rate limit. On loopback it also answers 403 to a request whose `Host` header is not `localhost`, `127.0.0.1` or `[::1]` with the port the server listens on, which stops a web page on another site from reaching it through DNS rebinding. That check is off with `--allow-remote`, since the names the server is reached by are not known. The app sends no CORS headers, so other sites cannot read its answers.
+- **Stopping.** Press Ctrl-C. A running sync is cancelled and resumes where it stopped on the next sync, and the exit status is 130.
+
+## `wambatic serve` options
+
+Global options come before the command, as for `report`.
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `TARGET` | none | Optional. Fills in the form and names the first report URL; a malformed target is an error before the server starts |
+| `--host ADDRESS` | `report.web_host` | The address to listen on. Only `localhost` and loopback addresses are accepted without `--allow-remote`; no name is looked up, so use `127.0.0.1` or `::1` |
+| `--port PORT` | `report.web_port` | The port, from 1 to 65535 |
+| `--allow-remote` | `report.allow_remote` | Listen on an address other than loopback, and turn off the `Host` check; logs a warning |
+| `--max-age DURATION` | `fetch.max_age` | As for `report` |
+| `--ignore-cache-version` | off | As for `report` |
 
 ## Flow
 
@@ -222,12 +260,12 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | `fetch.overlap` | `1h` | Safety margin subtracted from the watermark so a late arrival is not missed |
 | `fetch.stats_retries` | `6` | Retries while a REST statistics endpoint is still computing |
 | `fetch.workers` | `4` | Repositories fetched at once; more is faster and closer to GitHub's secondary limits |
-| `report.allow_remote` | `false` | For the web app, which is not built yet |
+| `report.allow_remote` | `false` | Let `serve` listen on an address other than loopback; anyone who can reach the port then acts with your token |
 | `report.format` | `terminal` | The default output format: `terminal`, `html` or `json` |
 | `report.html_theme` | `auto` | The HTML report's colours: `auto` follows the viewer's system setting, `light` and `dark` are fixed |
 | `report.out_dir` | `./wambatic-reports` | The directory the HTML report is written to when `--out` is absent |
-| `report.web_host` | `127.0.0.1` | For the web app, which is not built yet |
-| `report.web_port` | `8000` | For the web app, which is not built yet |
+| `report.web_host` | `127.0.0.1` | The address `serve` listens on |
+| `report.web_port` | `8000` | The port `serve` listens on |
 | `stats.bot_logins` | `["dependabot[bot]", "renovate[bot]"]` | Authors left out of contributor counts and the top-contributors table |
 | `stats.deploy_workflow` | none | The workflow whose successful runs are the deployments, matched against a run's workflow file name (`deploy.yml`) or its name; unset, releases that are not prereleases are the deployments |
 | `stats.exclude_merge_commits` | `true` | Leave merge commits out of line counts |
@@ -240,9 +278,9 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | Status | Meaning |
 |--------|---------|
 | 0 | Success, and `--help` |
-| 1 | A GitHub or cache error (no token, a missing user or repository, the rate limit, a cache from another version), a report error (nothing to report, an unknown group, a range that ends before it starts), an HTML report that cannot be written to its path, or an unexpected error, which is logged with its traceback |
-| 2 | A command line that cannot be run: an unknown option, a malformed target or date, a clash such as `--full-refresh` with `--no-fetch`, or a bad config file or setting |
-| 130 | Interrupted with Ctrl-C |
+| 1 | A GitHub or cache error (no token, a missing user or repository, the rate limit, a cache from another version), a report error (nothing to report, an unknown group, a range that ends before it starts), an HTML report that cannot be written to its path, a port that `serve` cannot listen on, or an unexpected error, which is logged with its traceback |
+| 2 | A command line that cannot be run: an unknown option, a malformed target or date, a clash such as `--full-refresh` with `--no-fetch`, a bad config file or setting, or `serve` asked to listen on an address other than loopback without `--allow-remote` or on a port outside 1 to 65535 |
+| 130 | Interrupted with Ctrl-C, including a stopped `serve` |
 
 Each failure prints one line to stderr that says what to do, such as setting `GITHUB_TOKEN` or running `wambatic cache clear`. Reports go to stdout and logs to stderr, so `--format json` can be piped; if the reader of a pipe goes away (`| head`), wambatic ends quietly with status 1.
 
@@ -254,7 +292,7 @@ Each failure prints one line to stderr that says what to do, such as setting `GI
 - A report uses one time zone.
 - GitHub Enterprise Server is not supported.
 - The DORA figures are proxies built on conventions that GitHub does not enforce (see [DORA proxies](#dora-proxies)).
-- Stars, forks, watchers and languages, and the local web app (`serve`), are not built yet.
+- Stars, forks, watchers and languages are not built yet.
 
 ## More
 

@@ -4,3 +4,7 @@ class UsageError(Exception):
 
 class OutputError(Exception):
     """A report that was built but could not be written; exit status 1."""
+
+
+class ServeError(Exception):
+    """A web app that cannot listen on its address; exit status 1."""

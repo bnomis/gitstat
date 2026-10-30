@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"$theme_attribute>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wambatic: syncing $target</title>
+<style>
+$style
+</style>
+</head>
+<body>
+<header>
+<h1>wambatic <span class="subject">$target</span></h1>
+</header>
+<main>
+<h2 id="state" role="status">Starting</h2>
+<p id="counts"></p>
+<p id="error" hidden></p>
+<p id="retry" hidden><a href="$retry">Try again</a></p>
+<noscript><p>Following the sync needs script. Reload this page to check on it.</p></noscript>
+<p><a href="/">Back to the form</a></p>
+</main>
+<script type="application/json" id="progress-data">$data</script>
+<script>
+$script
+</script>
+</body>
+</html>

@@ -147,6 +147,16 @@ class SyncReport:
     full_refetches: tuple[str, ...]
 
 
+@dataclasses.dataclass(slots=True)
+class SyncProgress:
+    """Filled in by `Fetcher.sync` as it runs, on the event loop that runs it."""
+
+    repos_listed: int | None = None
+    repos_pending: int | None = None
+    repos_done: int = 0
+    rows_written: dict[str, int] = dataclasses.field(default_factory=dict)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class NewCommit:
     """A commit found by a compare, before its line counts are known."""
@@ -982,7 +992,12 @@ class Fetcher:
             yield issue
 
     async def sync(
-        self, subject: Subject, resources: frozenset[str], full_refresh: bool = False
+        self,
+        subject: Subject,
+        resources: frozenset[str],
+        full_refresh: bool = False,
+        *,
+        progress: SyncProgress | None = None,
     ) -> SyncReport:
         """Bring the cache up to date for the subject: backfill on first use, otherwise only
         the delta."""
@@ -1009,6 +1024,9 @@ class Fetcher:
                 pending.append((repo, needed))
         rows = dict.fromkeys(ordered, 0)
         refetched: list[str] = []
+        if progress is not None:
+            progress.repos_listed = len(listed)
+            progress.repos_pending = len(pending)
 
         async def sync_one(repo: Repo, needed: list[str]) -> None:
             async with self.semaphore:
@@ -1024,6 +1042,12 @@ class Fetcher:
                     else:
                         written = await self.sync_updated(repo, resource, full_refresh)
                     rows[resource] += written
+                    if progress is not None:
+                        progress.rows_written[resource] = (
+                            progress.rows_written.get(resource, 0) + written
+                        )
+                if progress is not None:
+                    progress.repos_done += 1
 
         try:
             async with asyncio.TaskGroup() as group:

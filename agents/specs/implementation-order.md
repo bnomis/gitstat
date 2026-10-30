@@ -26,7 +26,7 @@ The order in which wambatic is built, with what each step delivers, what it depe
 | 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | done: [tasks-2](../tasks/stats/tasks-2.md) |
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | done: [tasks-2](../tasks/reports/tasks-2.md) |
 | 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats, reports | 6, 7 | done: [tasks-3](../tasks/stats/tasks-3.md) |
-| 9 | Local web app | [reports](reports/spec.md), fetch-and-cache | 7 | planned: [tasks-3](../tasks/reports/tasks-3.md) |
+| 9 | Local web app | [reports](reports/spec.md), fetch-and-cache | 7 | done: [tasks-3](../tasks/reports/tasks-3.md) |
 | 10 | Popularity data and stats (stars, forks, watchers, languages) | fetch-and-cache, stats, reports | 7 | not specified |
 
 Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done. Step 10 was split from step 8 on 2026-10-30 (stats review 3): its fetch resources are not specified yet, and the two together were more than one task list. Steps 9 and 10 are independent of each other.

@@ -9,6 +9,7 @@ from .base import (
     Release,
     Repo,
     Subject,
+    SyncProgress,
     SyncReport,
     WorkflowRun,
 )
@@ -44,6 +45,7 @@ __all__ = [
     'Repo',
     'StatsPendingError',
     'Subject',
+    'SyncProgress',
     'SyncReport',
     'WorkflowRun',
     'clear_cache',

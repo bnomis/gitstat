@@ -39,6 +39,27 @@ class HtmlReport:
     initial: Granularity
 
 
+def period_requests(
+    request: wambatic.stats.base.StatsRequest,
+) -> list[wambatic.stats.base.StatsRequest]:
+    """The five requests of a report: `request` with granularity TOTAL, then YEAR, MONTH, WEEK
+    and DAY, everything else unchanged."""
+    return [
+        dataclasses.replace(request, granularity=granularity)
+        for granularity in (Granularity.TOTAL, *PERIODS)
+    ]
+
+
+def html_report(results: list[wambatic.stats.base.StatsResult], initial: Granularity) -> HtmlReport:
+    """The `HtmlReport` of the five results of `period_requests`, in that order."""
+    total, *periods = results
+    return HtmlReport(
+        total=total,
+        periods={result.request.granularity: result for result in periods},
+        initial=initial,
+    )
+
+
 class SubjectLike(typing.Protocol):
     """What `report_filename` reads of a `wambatic.fetch.Subject`, which `wambatic.reports` may
     not import."""
@@ -70,9 +91,12 @@ def first_difference(
             other.request, field.name
         ):
             return f'request {field.name}'
-    for name in ('since', 'until'):
-        if getattr(total, name) != getattr(other, name):
-            return f'the resolved {name}'
+    if total.until != other.until:
+        return 'the resolved until'
+    # Without a requested start each result begins at the start of the bucket holding the first
+    # record, so the resolved starts differ by granularity by design.
+    if total.request.since is not None and total.since != other.since:
+        return 'the resolved since'
     return None
 
 
@@ -120,6 +144,11 @@ def tokens(theme: wambatic.reports.figures.Theme) -> str:
         **{f'sequential-{n}': colour for n, colour in enumerate(theme.sequential, 1)},
     }
     return '\n  '.join(f'--{name}: {colour};' for name, colour in declarations.items())
+
+
+def theme_attribute(theme: Theme) -> str:
+    """The `<html>` attribute that fixes a theme; `auto` leaves the choice to the viewer."""
+    return '' if theme == 'auto' else f' data-theme="{theme}"'
 
 
 def stylesheet() -> str:
@@ -471,7 +500,7 @@ def html_document(report: HtmlReport, theme: Theme) -> str:
     check_report(report)
     title = f'wambatic: {wambatic.reports.rows.subject_text(report.total)}'
     return string.Template(read_template('report.html')).substitute(
-        theme_attribute='' if theme == 'auto' else f' data-theme="{theme}"',
+        theme_attribute=theme_attribute(theme),
         title=escape(title),
         style=stylesheet(),
         header=header_html(report),
