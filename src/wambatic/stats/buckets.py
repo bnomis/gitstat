@@ -1,3 +1,4 @@
+import bisect
 import datetime
 
 import wambatic.stats.base
@@ -107,3 +108,19 @@ def bucket_granularity(bucket: wambatic.stats.base.Bucket) -> wambatic.stats.bas
         7: wambatic.stats.base.Granularity.MONTH,
         10: wambatic.stats.base.Granularity.DAY,
     }[len(bucket.label)]
+
+
+def bucket_end(buckets: list[wambatic.stats.base.Bucket]) -> datetime.date | None:
+    """First local date after the last of `buckets`; None for a TOTAL bucket, which has no end."""
+    if not buckets or buckets[0].label == 'total':
+        return None
+    return next_start(buckets[-1].start, bucket_granularity(buckets[-1]))
+
+
+def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date | None) -> int:
+    """Index of the bucket holding `day`, given the buckets' start dates and the end of the last;
+    ValueError when `day` is before the first or at or after `end`."""
+    index = bisect.bisect_right(starts, day) - 1
+    if index < 0 or (end is not None and day >= end):
+        raise ValueError(f'{day} is outside the buckets')
+    return index

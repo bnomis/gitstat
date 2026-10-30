@@ -1,4 +1,3 @@
-import bisect
 import collections.abc
 import dataclasses
 import datetime
@@ -55,13 +54,6 @@ class Tally:
                 return self.lines_added - self.lines_deleted
 
 
-def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date | None) -> int:
-    index = bisect.bisect_right(starts, day) - 1
-    if index < 0 or (end is not None and day >= end):
-        raise ValueError(f'{day} is outside the buckets')
-    return index
-
-
 def series_of(
     metric: str,
     unit: str,
@@ -87,10 +79,7 @@ def aggregate(
     the range `buckets` covers; a commit outside it raises ValueError."""
     bots = {login.casefold() for login in settings.bot_logins}
     starts = [bucket.start for bucket in buckets]
-    end = None
-    if buckets and buckets[0].label != 'total':
-        granularity = wambatic.stats.buckets.bucket_granularity(buckets[-1])
-        end = wambatic.stats.buckets.next_start(buckets[-1].start, granularity)
+    end = wambatic.stats.buckets.bucket_end(buckets)
     totals = [Tally() for _ in buckets]
     authors: dict[str | None, list[Tally]] = {}
     spellings: dict[str | None, str] = {}
@@ -98,7 +87,7 @@ def aggregate(
     overall: dict[str | None, Tally] = {}
     for commit in commits:
         day = commit.authored_at.astimezone(tz).date()
-        index = locate(day, starts, end)
+        index = wambatic.stats.buckets.locate(day, starts, end)
         lines = not (settings.exclude_merge_commits and commit.is_merge)
         key = None if commit.author_login is None else commit.author_login.casefold()
         spellings.setdefault(key, UNATTRIBUTED if key is None else str(commit.author_login))
