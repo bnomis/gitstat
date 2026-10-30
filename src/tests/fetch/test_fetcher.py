@@ -541,7 +541,9 @@ def test_provenance_holds_the_identity_and_the_override(
 ) -> None:
     path = tmp_path / 'prov.sqlite3'
     wambatic.fetch.cache.Cache.open(path).close()
-    monkeypatch.setattr(wambatic.fetch.cache, 'SCHEMA_VERSION', 2)
+    monkeypatch.setattr(
+        wambatic.fetch.cache, 'SCHEMA_VERSION', wambatic.fetch.cache.SCHEMA_VERSION + 1
+    )
     cache = wambatic.fetch.cache.Cache.open(path, ignore_version=True)
     try:
         result, _ = provenance_of(make_fetcher, cache)

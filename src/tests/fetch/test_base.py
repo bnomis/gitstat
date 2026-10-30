@@ -65,6 +65,29 @@ def test_resources_are_the_spec_names() -> None:
     }
 
 
-def test_built_resources_are_the_commits_only_and_a_subset_of_all_resources() -> None:
+def test_built_resources_are_a_subset_of_all_resources() -> None:
     assert wambatic.fetch.base.BUILT_RESOURCES <= wambatic.fetch.base.RESOURCES
-    assert wambatic.fetch.base.BUILT_RESOURCES == frozenset({'commits'})
+
+
+def pull_request() -> wambatic.fetch.base.PullRequest:
+    return wambatic.fetch.base.PullRequest(
+        'octocat/Hello-World', 1, 'octocat', NOW, NOW, None, None, None, 3, 4
+    )
+
+
+def issue() -> wambatic.fetch.base.Issue:
+    return wambatic.fetch.base.Issue('octocat/Hello-World', 1, 'octocat', NOW, NOW, None)
+
+
+def test_pull_request_and_issue_are_frozen_and_slotted() -> None:
+    for record in (pull_request(), issue()):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            record.number = 2  # type: ignore[misc]
+        assert not hasattr(record, '__dict__')
+
+
+def test_a_repo_built_without_the_probe_fields_has_them_none() -> None:
+    repo = wambatic.fetch.base.Repo('octocat/Hello-World', 'main', None, False, False, None, NOW)
+    assert repo.pull_requests_updated_at is None
+    assert repo.issues_updated_at is None
+    assert not hasattr(repo, '__dict__')

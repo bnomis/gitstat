@@ -57,6 +57,8 @@ class Repo:
     is_fork: bool
     pushed_at: datetime.datetime | None
     updated_at: datetime.datetime
+    pull_requests_updated_at: datetime.datetime | None = None
+    issues_updated_at: datetime.datetime | None = None
     missing: bool = False
 
 
@@ -69,6 +71,30 @@ class Commit:
     additions: int
     deletions: int
     is_merge: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PullRequest:
+    repo: str
+    number: int
+    author_login: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    merged_at: datetime.datetime | None
+    closed_at: datetime.datetime | None
+    first_review_at: datetime.datetime | None
+    additions: int
+    deletions: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Issue:
+    repo: str
+    number: int
+    author_login: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    closed_at: datetime.datetime | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

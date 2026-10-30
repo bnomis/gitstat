@@ -871,7 +871,7 @@ def test_cache_info_lists_the_counts_and_no_differences(stats_cache_path: pathli
     assert rows['commits'] == [str(len(tests.fixtures.stats.COMMITS))]
     assert rows['differences'] == ['none']
     assert rows['last'] == ['synced', tests.fixtures.stats.BETA_SYNCED_AT.isoformat()]
-    assert rows['schema_version'] == ['1']
+    assert rows['schema_version'] == [str(wambatic.fetch.cache.SCHEMA_VERSION)]
     assert str(stats_cache_path) in output
     assert 'differs' not in output
 
@@ -891,7 +891,7 @@ def test_cache_info_shows_why_a_cache_is_refused_and_leaves_it_alone(
     before = meta()
     output, _ = run_cache('info', stats_cache_path)
     assert 'differs: schema_version' in output
-    assert '0 -> 1' in output
+    assert f'0 -> {wambatic.fetch.cache.SCHEMA_VERSION}' in output
     assert meta() == before
 
 
@@ -940,7 +940,9 @@ RESET = datetime.datetime(2027, 3, 1, 13, 0, tzinfo=UTC)
 ERROR_STATUSES = [
     (wambatic.fetch.errors.AuthError('No GitHub token found: set GITHUB_TOKEN'), 1),
     (
-        wambatic.fetch.errors.CacheVersionError({'schema_version': ('0', '1')}),
+        wambatic.fetch.errors.CacheVersionError(
+            {'schema_version': ('0', str(wambatic.fetch.cache.SCHEMA_VERSION))}
+        ),
         1,
     ),
     (wambatic.fetch.errors.GraphQLError([('NOT_FOUND', 'no such thing')]), 1),
