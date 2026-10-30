@@ -2,7 +2,9 @@ import dataclasses
 
 import pytest
 
+import tests.conftest
 import tests.fixtures.stats as fixture
+import wambatic.fetch.base
 import wambatic.reports.rows
 import wambatic.stats.base
 
@@ -305,9 +307,98 @@ def test_a_result_without_delivery_or_proxy_series_has_neither_table(
     assert wambatic.reports.rows.dora_table(only) is None
 
 
-def test_the_trend_metrics_end_with_the_three_delivery_counts() -> None:
-    assert wambatic.reports.rows.TREND_METRICS[-3:] == (
+def test_the_trend_metrics_hold_the_three_delivery_counts_before_the_popularity_ones() -> None:
+    assert wambatic.reports.rows.TREND_METRICS[-7:-4] == (
         'workflow_runs',
         'release_count',
         'deployments',
+    )
+
+
+# Popularity
+
+
+def test_the_popularity_rows_are_the_hand_worked_months_with_cumulative_totals_in_the_footer(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    table = wambatic.reports.rows.popularity_table(popularity_result)
+    assert table is not None
+    assert table.headers == wambatic.reports.rows.POPULARITY_HEADERS
+    assert table_by_label(table) == fixture.ORG_POPULARITY_BY_MONTH_UTC
+    assert table.total is not None
+    assert dict(zip(table.metrics, table.total, strict=True)) == fixture.ORG_POPULARITY_TOTAL
+
+
+def test_a_single_popularity_bucket_has_no_footer(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    request = wambatic.stats.base.StatsRequest(
+        granularity=wambatic.stats.base.Granularity.TOTAL,
+        since=fixture.SINCE,
+        until=fixture.UNTIL,
+        groups=frozenset({'popularity'}),
+    )
+    result = tests.conftest.compute_stats(stats_fetcher, fixture.ORG, request)
+    table = wambatic.reports.rows.popularity_table(result)
+    assert table is not None
+    assert table.total is None
+    assert table_by_label(table) == {'total': fixture.ORG_POPULARITY_TOTAL}
+
+
+def test_popularity_now_lists_the_repositories_by_stars_with_a_total_when_there_are_several(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    now = wambatic.reports.rows.popularity_now(popularity_result)
+    assert now is not None
+    assert [(r.repo, r.stars, r.forks, r.watchers) for r in now.rows] == [
+        (row['repo'], row['stars'], row['forks'], row['watchers'])
+        for row in fixture.ORG_POPULARITY_TABLE
+    ]
+    assert now.total == wambatic.reports.rows.PopularityRow(
+        'Total', 10, 5, 6
+    )  # 6 + 4, 3 + 2, 4 + 2
+
+
+def test_popularity_now_of_one_repository_has_no_total(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    request = wambatic.stats.base.StatsRequest(
+        since=fixture.SINCE, until=fixture.UNTIL, groups=frozenset({'popularity'})
+    )
+    subject = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
+    result = tests.conftest.compute_stats(stats_fetcher, subject, request)
+    now = wambatic.reports.rows.popularity_now(result)
+    assert now is not None
+    assert len(now.rows) == 1
+    assert now.total is None
+
+
+def test_languages_rows_cut_at_the_limit_and_count_what_is_left(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    everything = wambatic.reports.rows.languages_rows(popularity_result)
+    assert everything is not None
+    assert [row.language for row in everything.rows] == ['Python', 'Go', 'Shell', 'Other']
+    assert everything.more == 0
+    cut = wambatic.reports.rows.languages_rows(popularity_result, 3)
+    assert cut is not None
+    assert [row.language for row in cut.rows] == ['Python', 'Go', 'Shell']
+    assert cut.more == 1
+    assert wambatic.reports.rows.TOP_LANGUAGES_SHOWN == 10
+
+
+def test_there_are_no_popularity_rows_without_the_group(
+    org_result: wambatic.stats.base.StatsResult,
+) -> None:
+    assert wambatic.reports.rows.popularity_table(org_result) is None
+    assert wambatic.reports.rows.popularity_now(org_result) is None
+    assert wambatic.reports.rows.languages_rows(org_result) is None
+
+
+def test_the_trend_metrics_end_with_the_four_popularity_series() -> None:
+    assert wambatic.reports.rows.TREND_METRICS[-4:] == (
+        'stars_added',
+        'stars_total',
+        'forks_added',
+        'forks_total',
     )

@@ -171,7 +171,12 @@ Until = typing.Annotated[
 ]
 Groups = typing.Annotated[
     str | None,
-    fastapi.Query(description='Comma-separated metric groups (default: activity,flow)'),
+    fastapi.Query(
+        description=(
+            'Comma-separated metric groups: activity, flow, delivery, popularity '
+            '(default: activity,flow)'
+        )
+    ),
 ]
 ByAuthor = typing.Annotated[
     str | None,

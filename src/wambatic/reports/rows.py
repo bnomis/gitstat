@@ -8,6 +8,7 @@ import wambatic.stats.activity
 import wambatic.stats.base
 import wambatic.stats.delivery
 import wambatic.stats.flow
+import wambatic.stats.popularity
 
 TOTAL_METRICS = tuple(metric for metric, _ in wambatic.stats.activity.TOTAL_METRICS)
 UNATTRIBUTED = wambatic.stats.activity.UNATTRIBUTED
@@ -22,7 +23,12 @@ DELIVERY_COUNTS = ('workflow_runs', 'release_count', 'deployments')
 DELIVERY_TABLE_METRICS = wambatic.stats.delivery.ACTIONS_RELEASE_METRICS
 DORA_TABLE_METRICS = wambatic.stats.delivery.DORA_METRICS
 DELIVERY_UNITS = wambatic.stats.delivery.UNITS
-TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS)
+POPULARITY_TABLE_METRICS = tuple(
+    metric for metric, _ in wambatic.stats.popularity.POPULARITY_METRICS
+)
+POPULARITY_ADDED = frozenset({'stars_added', 'forks_added'})
+TOP_LANGUAGES_SHOWN = 10
+TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS, *POPULARITY_TABLE_METRICS)
 NO_DATA = '-'
 ACTIVITY_HEADERS = ('Commits', 'Contributors', 'Active days', 'Added', 'Deleted', 'Net')
 FLOW_HEADERS = ('PRs opened', 'PRs merged', 'Issues opened', 'Issues closed')
@@ -53,6 +59,9 @@ DELIVERY_HEADERS = {
     'time_to_restore_p90': 'Restore p90',
 }
 DELIVERY_TOTALS = frozenset({'workflow_runs', 'release_count', 'deployments'})
+POPULARITY_HEADERS = ('Stars added', 'Stars total', 'Forks added', 'Forks total')
+POPULARITY_NOW_HEADERS = ('Repository', 'Stars', 'Forks', 'Watchers')
+LANGUAGE_HEADERS = ('Language', 'Bytes', 'Share')
 UNAVAILABLE_HEADERS = ('Metric', 'Reason')
 
 
@@ -87,6 +96,37 @@ class BreakdownRow:
     lines_added: float
     lines_deleted: float
     lines_net: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PopularityRow:
+    repo: str
+    stars: int
+    forks: int
+    watchers: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PopularityNow:
+    """One row per repository as GitHub listed it, and the sums when there is more than one."""
+
+    rows: tuple[PopularityRow, ...]
+    total: PopularityRow | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Language:
+    language: str
+    bytes: int
+    share: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Languages:
+    """The first `limit` rows of the languages table and how many were left out."""
+
+    rows: tuple[Language, ...]
+    more: int
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -125,6 +165,11 @@ def has_delivery(result: wambatic.stats.base.StatsResult) -> bool:
     return any(s.metric == 'workflow_runs' and s.by is None for s in result.series)
 
 
+def has_popularity(result: wambatic.stats.base.StatsResult) -> bool:
+    """Whether the result holds the popularity group's total series."""
+    return any(s.metric == 'stars_added' and s.by is None for s in result.series)
+
+
 def has_dora(result: wambatic.stats.base.StatsResult) -> bool:
     """Whether the result holds at least one DORA proxy series."""
     return any(s.metric in DORA_TABLE_METRICS and s.by is None for s in result.series)
@@ -133,7 +178,7 @@ def has_dora(result: wambatic.stats.base.StatsResult) -> bool:
 def bucket_list(result: wambatic.stats.base.StatsResult) -> list[wambatic.stats.base.Bucket]:
     """The result's buckets, from whichever total series is present."""
     series = total_series(result)
-    for metric in (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS):
+    for metric in (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS, *POPULARITY_TABLE_METRICS):
         if metric in series:
             return [bucket for bucket, _ in series[metric]]
     return []
@@ -250,6 +295,65 @@ def dora_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
     if not has_dora(result):
         return None
     return delivery_period_table(result, 'DORA proxies by period', DORA_TABLE_METRICS)
+
+
+def popularity_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
+    """Popularity by period; the footer adds up the stars and forks added and gives the last
+    bucket's cumulative totals. None without popularity series."""
+    if not has_popularity(result):
+        return None
+    series = total_series(result)
+    partial = partial_labels(result)
+    rows = tuple(
+        period_row(
+            bucket.label, partial, (series[metric][index][1] for metric in POPULARITY_TABLE_METRICS)
+        )
+        for index, bucket in enumerate(bucket_list(result))
+    )
+    total: tuple[float | None, ...] | None = None
+    if len(rows) > 1:
+        total = tuple(
+            sum(value for _, value in series[metric])
+            if metric in POPULARITY_ADDED
+            else series[metric][-1][1]
+            for metric in POPULARITY_TABLE_METRICS
+        )
+    return PeriodTable(
+        'Popularity by period', POPULARITY_HEADERS, POPULARITY_TABLE_METRICS, rows, total
+    )
+
+
+def popularity_now(result: wambatic.stats.base.StatsResult) -> PopularityNow | None:
+    """GitHub's own counts per repository at the last listing; None without the table."""
+    if not has_popularity(result):
+        return None
+    rows = tuple(
+        PopularityRow(row['repo'], row['stars'], row['forks'], row['watchers'])
+        for row in result.tables.get('popularity', [])
+    )
+    total = (
+        PopularityRow(
+            'Total',
+            sum(row.stars for row in rows),
+            sum(row.forks for row in rows),
+            sum(row.watchers for row in rows),
+        )
+        if len(rows) > 1
+        else None
+    )
+    return PopularityNow(rows, total)
+
+
+def languages_rows(
+    result: wambatic.stats.base.StatsResult, limit: int | None = None
+) -> Languages | None:
+    """The languages table in its own order, the first `limit` rows when given; None when it is
+    empty or absent."""
+    rows = result.tables.get('languages', [])
+    if not rows:
+        return None
+    shown = tuple(Language(row['language'], row['bytes'], row['share']) for row in rows[:limit])
+    return Languages(shown, len(rows) - len(shown))
 
 
 def breakdown_rows(result: wambatic.stats.base.StatsResult, kind: str) -> list[BreakdownRow] | None:

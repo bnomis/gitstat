@@ -259,6 +259,19 @@ def delivery_result(stats_fetcher: wambatic.fetch.base.Fetcher) -> wambatic.stat
 
 
 @pytest.fixture
+def popularity_result(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> wambatic.stats.base.StatsResult:
+    """The stats fixture's org by month with the popularity group alone."""
+    request = wambatic.stats.base.StatsRequest(
+        since=tests.fixtures.stats.SINCE,
+        until=tests.fixtures.stats.UNTIL,
+        groups=frozenset({'popularity'}),
+    )
+    return compute_stats(stats_fetcher, tests.fixtures.stats.ORG, request)
+
+
+@pytest.fixture
 def repo_total_result(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> wambatic.stats.base.StatsResult:

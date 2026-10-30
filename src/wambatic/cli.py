@@ -65,7 +65,13 @@ class Report:
     ] = None
     groups: typing.Annotated[
         str | None,
-        cappa.Arg(long=True, help='Comma-separated metric groups (default: activity,flow)'),
+        cappa.Arg(
+            long=True,
+            help=(
+                'Comma-separated metric groups: activity, flow, delivery, popularity '
+                '(default: activity,flow)'
+            ),
+        ),
     ] = None
     by_author: typing.Annotated[
         bool, cappa.Arg(long=True, help='Break activity down by author (not for a user)')

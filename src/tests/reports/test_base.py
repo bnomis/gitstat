@@ -200,3 +200,22 @@ def test_any_stats_settings_survive_json_and_durations_parse_back(
     written = as_dict(result)['request']['settings']
     assert json.loads(json.dumps(written)) == written
     assert wambatic.settings.parse_duration(written['failure_window']) == settings.failure_window
+
+
+def test_the_popularity_series_are_integers_and_the_tables_are_given_as_they_are(
+    popularity_result: wambatic.stats.base.StatsResult,
+) -> None:
+    data = as_dict(popularity_result)
+    for metric in ('stars_added', 'stars_total', 'forks_added', 'forks_total'):
+        points = series_points(data, metric)
+        assert all(type(point['value']) is int for point in points), metric
+    assert [point['value'] for point in series_points(data, 'stars_total')] == [5, 5, 6, 8]
+    assert data['tables']['popularity'] == fixture.ORG_POPULARITY_TABLE
+    assert [row['language'] for row in data['tables']['languages']] == [
+        'Python',
+        'Go',
+        'Shell',
+        'Other',
+    ]
+    assert json.loads(render(popularity_result))['tables'] == data['tables']
+    assert data['request']['groups'] == ['popularity']

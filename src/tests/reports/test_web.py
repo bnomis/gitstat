@@ -496,6 +496,7 @@ def test_the_form_posts_to_report_and_escapes_the_default_target(
     assert 'name="target" value=""' in empty
     for field in ('target', 'by', 'since', 'until', 'groups', 'by_author', 'tz'):
         assert f'name="{field}"' in plain
+    assert 'Comma-separated: activity, flow, delivery, popularity' in plain
 
 
 @pytest.mark.parametrize('theme', ['auto', 'dark'])
