@@ -36,7 +36,6 @@ import wambatic.version
 JobKey = tuple[str, frozenset[str]]
 INTERNAL_ERROR = 'internal error; see the server log'
 BAD_REQUEST = (
-    wambatic.reports.errors.UsageError,
     wambatic.settings.SettingsError,
     wambatic.stats.UnknownGroupError,
     wambatic.stats.InvalidRangeError,
@@ -60,7 +59,7 @@ def error_status(error: BaseException) -> int:
     """The HTTP status an error maps to (reports spec, Error handling)."""
     if isinstance(error, JobError):
         return error.status
-    if isinstance(error, BAD_REQUEST):
+    if isinstance(error, (wambatic.reports.errors.UsageError, *BAD_REQUEST)):
         return 400
     if isinstance(error, NOT_FOUND):
         return 404

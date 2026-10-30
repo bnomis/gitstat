@@ -7,6 +7,7 @@ import wambatic.cli
 import wambatic.fetch
 import wambatic.fetch.base
 import wambatic.reports
+import wambatic.reports.service
 import wambatic.stats
 
 
@@ -43,6 +44,28 @@ def test_fetch_names_resolve(name: str) -> None:
 @pytest.mark.parametrize('name', wambatic.stats.__all__)
 def test_stats_names_resolve(name: str) -> None:
     assert getattr(wambatic.stats, name)
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'Jobs',
+        'SyncJob',
+        'check_bind',
+        'html_report',
+        'is_loopback',
+        'make_app',
+        'period_requests',
+        'serve',
+    ],
+)
+def test_the_web_app_names_are_exported_by_the_reports_layer(name: str) -> None:
+    assert name in wambatic.reports.__all__
+
+
+def test_the_service_names_are_not_exported() -> None:
+    assert 'parse_target' not in wambatic.reports.__all__
+    assert hasattr(wambatic.reports.service, 'parse_target')
 
 
 def test_sync_progress_is_exported_by_the_fetch_layer() -> None:

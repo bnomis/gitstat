@@ -685,6 +685,7 @@ def test_a_large_orgs_sync_does_not_block_the_pages(
                     progress, more = await timed(client, data['progress'])
                     waits += [seconds, more]
                     body = progress.json()
+                    assert body['state'] != 'failed', body['error']
                     if body['state'] == 'done':
                         break
                     if body['repos_done'] is not None:

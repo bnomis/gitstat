@@ -50,7 +50,7 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 
 ## Task 1: Report sync progress from `Fetcher.sync`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Spec Reference:** fetch-and-cache spec 1.7 (`SyncProgress`, `Fetcher.sync`); review-3.md choice 4
@@ -82,12 +82,13 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Depends on stats/tasks-3.md Task 13 (step 8), done
 - Key files: `src/wambatic/fetch/base.py`, `src/wambatic/fetch/__init__.py`, `src/tests/fetch/test_fetcher.py`
 - The progress object is written and read on one event loop, so it needs no lock; do not update it from the `Cache` worker threads.
+- Done. `SyncProgress` is updated in `Fetcher.sync` on the event loop only, never from the `Cache` worker threads.
 
 ---
 
 ## Task 2: Move the sync-then-compute pipeline to `reports/service.py`
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Module location (`service.py`, layering); API (`period_requests`, `html_report`, the `service.py` functions); review-3.md choices 2 and 3
@@ -126,12 +127,14 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Key files: `src/wambatic/reports/service.py`, `src/wambatic/reports/html.py`, `src/wambatic/cli.py`, `src/tests/reports/test_service.py`, `src/tests/test_cli.py`, `src/tests/test_layering.py`
 - A refactor commit of its own (`refactor(reports): ...`), before any web code, so a change in CLI behaviour would show in its diff alone.
 - `parse_target` raises `wambatic.reports.errors.UsageError` and returns a `wambatic.fetch.base.Subject`, which is why `service.py` needs the layering exception.
+- Done. One deviation from the spec's signature: the sync half of `build_results` is also a function of its own, `service.sync_target(settings, cache, target, groups, ...)`, which resolves a bare NAME and syncs and returns the `Subject`; `build_results` calls it and then computes. The web app's job calls it directly because `build_results(..., requests=[])` has no groups to derive the resources from. `service.make_request` also turns an unknown `by` into a `UsageError`, since the web app passes it a string from the query.
+- `Fetcher.sync` is called with `progress=` only when a progress object is given, so the CLI's existing tests, whose spy has no such parameter, pass unchanged.
 
 ---
 
 ## Task 3: Add FastAPI and uvicorn, and the sync jobs
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`SyncJob`, `Jobs`); Web app (Sync jobs); External dependencies (FastAPI, uvicorn, httpx); implementation order Principles (dependencies are checked, not assumed); review-3.md decision 1 and choices 5 and 6
@@ -172,12 +175,16 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Docs: [FastAPI](https://fastapi.tiangolo.com/), [uvicorn](https://www.uvicorn.org/), [HTTPX](https://www.python-httpx.org/), [asyncio tasks](https://docs.python.org/3.14/library/asyncio-task.html)
 - Record the versions actually locked, and any new transitive packages, in Notes.
 - Keep a reference to every task (`Jobs` holds them), since the event loop keeps only weak references to tasks.
+- Done. Maintenance check on 2026-10-30, PyPI: `fastapi` 0.162.0 (MIT, released 2026-10-23), `uvicorn` 0.54.0 (BSD-3-Clause, 2026-09-25), `starlette` 1.10.0 (BSD-3-Clause, 2026-10-24) and `httpx` 0.28.1 (BSD-3-Clause; later releases are only 1.0 development releases, which `prerelease = "disallow"` excludes). The archived flags of the repositories could not be read: this session's GitHub access covers only the two project repositories.
+- Locked: `fastapi` 0.143.2, `starlette` 1.8.0, `uvicorn` 0.54.0, `httpx` 0.28.1 (with `httpcore` 1.0.9 and `certifi`), `pydantic` 2.14.1, `pydantic-core` 2.50.1, `anyio` 4.15.1, `click` 8.5.0, `h11` 0.16.0, `opentelemetry-api` 1.45.1, `annotated-doc`, `annotated-types` and `typing-inspection` as new packages. Each of `fastapi`, `starlette`, `uvicorn` and `httpx` ships `py.typed`.
+- `SyncJob.state` is a property over a stored `phase` (`queued`, `running`, `done`, `failed`): it reads `listing` until `progress.repos_listed` is set and `syncing` after, so nothing has to poll the progress to update a field.
+- The local Python is older than 3.14.7, so `uv sync` and `uv add` ran with `requires-python` lowered to 3.14.6 for those commands; `pyproject.toml` and the `requires-python` and `revision` lines of `uv.lock` were restored before the commit.
 
 ---
 
 ## Task 4: The app, its parameters, errors, `Host` check and the JSON routes
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** large
 **Spec Reference:** API (`make_app`); Web app (routes `/api/stats` and `/api/progress`, Parameters, Sync jobs, Security, Logging, Testing); Error handling (web); review-3.md choices 5, 7, 8, 11 and 12
@@ -216,12 +223,14 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Docs: [FastAPI middleware](https://fastapi.tiangolo.com/tutorial/middleware/), [handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/), [lifespan events](https://fastapi.tiangolo.com/advanced/events/), [async tests](https://fastapi.tiangolo.com/advanced/async-tests/), [HTTPX ASGI transport](https://www.python-httpx.org/advanced/transports/#asgi-transport)
 - The request's key is `(the target text as given, resources_for(groups) & BUILT_RESOURCES)`, so `octocat` and `user:octocat` are different jobs; that is harmless and keeps the key known before resolution.
 - The tests' `base_url` of `http://127.0.0.1:8000` gives the scope that `Host` and port, so the default `check_host=True` holds in tests; the 403 test sets the header explicitly.
+- Done. Middleware order, outermost first: request log, `Host` check, error conversion. A `job` parameter that names no known job is ignored, so the request goes through the freshness check as if it had none. A form submits empty fields as empty strings, which the parameter parsing treats as left out. `/api/progress` reports `rows_written` as the total over all resources, and `repos_done` as null until `repos_pending` is known.
+- Tests that start a sync without `GITHUB_TOKEN` also replace `subprocess.run`, because `resolve_token` falls back to `gh auth token`, which would find a real token and reach the network.
 
 ---
 
 ## Task 5: The form, `/report` and the progress page
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Web app (routes `/` and `/report`, Sync jobs, Pages); Error handling (page form); review-3.md choices 5, 8 and 14
@@ -256,12 +265,14 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Depends on Task 4
 - Key files: `src/wambatic/reports/web.py`, `src/wambatic/reports/templates/form.html`, `progress.html`, `progress.js`, `message.html`, `src/tests/reports/test_web.py`
 - Templates are package data already (`report.html` is read the same way); check that `uv_build` includes the new files by `python -c 'import importlib.resources; print(importlib.resources.files("wambatic.reports") / "templates" / "progress.js")'` reading it.
+- Done. `node --check` passes on `templates/progress.js`. The pages inline the report's own stylesheet through `html.stylesheet()` and `html.theme_attribute()`, so there is no second palette.
+- Found while testing the default form (no `since`): `html_document` refused every report without a requested start, because each period result begins at its own bucket start and `first_difference` compared the resolved starts. This was already so for `report --format html` without `--since`. The comparison now skips the resolved start when none was requested, with a regression test in `test_html.py`.
 
 ---
 
 ## Task 6: The `serve` command
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** API (`is_loopback`, `check_bind`, `serve`); Command line (`serve` and its flags); Web app (Security, Logging, Stopping); Error handling (binding `OSError`, Ctrl-C, `CacheVersionError`); Settings (`allow_remote`, `web_host`, `web_port`); review-3.md choices 9, 10, 12 and 13
@@ -297,12 +308,13 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - The socket is bound by `serve`, not by uvicorn, because uvicorn logs a bind failure and calls `sys.exit(1)` itself, which would bypass `main`'s error conversion (review-3.md choice 19). Confirm this in the resolved uvicorn's `Server.startup` and note what was found.
 - uvicorn's own stdlib logging is left unconfigured (`log_config=None`) at `warning`, so only its warnings and errors reach stderr, through Python's last-resort handler; wambatic's lines go through loguru. Confirm on the day that the resolved uvicorn re-raises the captured SIGINT after a graceful shutdown (it has since 0.29); if it returns instead, Ctrl-C is exit 0, and say so in Notes and the README.
 - `serve` blocks; tests never call the real `uvicorn.Server.run` (Task 7's browser test runs a real `uvicorn.Server` in a thread instead).
+- Done. A `ServeError` in `reports/errors.py` carries the bind failure, since `OutputError`'s name would mislead; `main` treats it as status 1. The port range is checked in `serve`, so a bad `report.web_port` in the config file is caught as well as the flag. Checked against the resolved uvicorn 0.54.0: `Server.run(sockets=[...])` does not bind, `Server.serve` re-raises the captured signals after a graceful shutdown (`signal.raise_signal`), and a real `wambatic serve` stopped by SIGINT from a Python parent exits 130. (From a non-interactive shell's background job, where SIGINT is ignored, it exits 0, which is the shell's doing.)
 
 ---
 
 ## Task 7: A large org does not block the page, end to end
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Web app (Testing); implementation order step 9 "Done when"; review-3.md choice 15
@@ -337,12 +349,13 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Key files: `src/tests/reports/test_web.py`, `src/tests/reports/test_web_browser.py`, `src/tests/fixtures/fetch/upstream.py`
 - If the timing test takes more than ten seconds, lower the repo count or the delay rather than marking it `slow`: the step's check must run in the `check` CI job.
 - CI's `browser` job already runs every `browser` test, so no workflow change is needed.
+- Done. The `chromium` fixture moved from `test_html_browser.py` to `src/tests/reports/conftest.py` so both browser modules share it. The large-org test takes several seconds; it is not marked `slow`. The browser test runs the replay GitHub and the uvicorn server on one event loop in one thread (`uvicorn.Server.serve`), stopped by `should_exit`.
 
 ---
 
 ## Task 8: README web app section
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** shared user-guides rule; Command line (`serve`); Web app; review-3.md choice 17
@@ -369,12 +382,13 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - Depends on Task 7
 - Key files: `README.md`
 - Follow the shared markdown rule (ASCII punctuation) and the counts-in-prose rule (no counts of routes or flags).
+- Done.
 
 ---
 
 ## Task 9: Exports, layering and closing checks
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** Module location (layering); API; implementation order step 9 "Done when"
@@ -411,3 +425,6 @@ The reports spec's `**Status:**` is not changed by this list: step 10 adds the l
 - The project has no affected-tests tool; the commands above name every test directory that reaches a module this list changed: `wambatic.fetch.base` (Task 1) is imported by the fetch, stats and reports tests, `wambatic.reports` by the reports and CLI tests, and the package and layering tests check the whole tree.
 - The reports spec's `**Status:**` stays `proposed` (see the header).
 - Key files: `src/wambatic/reports/__init__.py`, `src/tests/test_package.py`, `src/tests/test_layering.py`, `agents/specs/implementation-order.md`
+- Done. Where each "Done when" item is shown: a large-org fixture does not block the page, `test_a_large_orgs_sync_does_not_block_the_pages` and the browser test `test_the_progress_page_becomes_the_report_with_every_chart_drawn`; invalid parameters return 400, `test_invalid_parameters_answer_400_with_the_cli_message`; a non-loopback bind without the flag refuses to start, `test_serve_refuses_a_public_host_before_binding`.
+- `web.py` builds its error-class tuple inside `error_status` rather than at module level, because `wambatic.reports.errors` cannot be reached through the `wambatic.reports` attribute while the package's `__init__` is still importing `web`.
+- Duplicates checked: the HTML theme attribute, the CSS, the escaped-JSON embedding and the template loader are the report's own (`html.theme_attribute`, `html.stylesheet`, `html.json_for_script`, `html.read_template`); target forms, patterns and the error redaction are `service.py`'s; the error-to-status mapping is `web.error_status`.
