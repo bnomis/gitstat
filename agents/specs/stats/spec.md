@@ -1,14 +1,14 @@
 # Stats
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** proposed
-**Date:** 2026-10-29
+**Date:** 2026-10-30
 
 Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into statistics for a user, repository or organisation, optionally bucketed by year, month, week or day. It does no network or rendering of its own: `compute` reads the cache through the fetcher, and the aggregation functions it calls are pure. [Reports](../reports/spec.md) consumes its output.
 
-**Prerequisite:** the `wambatic.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import wambatic.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` and `star_events()` (step 8).
+**Prerequisite:** the `wambatic.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import wambatic.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` (step 8) and `pull_requests()`; the activity metrics `stars`, `forks`, `watchers` and `languages` wait for step 10.
 
-Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.2 settles what step 6 needed for the `flow` group: what each flow metric counts and its series names, how the range and an empty result are found when several groups are read, and the user-subject rule for pull requests and issues; the choices are in [review-2.md](review-2.md).
+Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.2 settles what step 6 needed for the `flow` group: what each flow metric counts and its series names, how the range and an empty result are found when several groups are read, and the user-subject rule for pull requests and issues; the choices are in [review-2.md](review-2.md). Version 1.3 settles what step 8 needed for the `delivery` group: what each delivery metric and DORA proxy counts, its series names and units, when a proxy counts as configured, and which resources the group reads; stars, forks, watchers and languages move to step 10. The choices are in [review-3.md](review-3.md).
 
 ## Module location
 
@@ -54,7 +54,7 @@ class Bucket:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Series:
     metric: str                      # e.g. 'lines_added'
-    unit: str                        # 'count', 'days', 'lines', 'hours', 'ratio'
+    unit: str                        # 'count', 'days', 'lines', 'hours', 'minutes', 'ratio'
     points: dict[Bucket, float]      # every bucket of the range, in order; see Aggregation
     by: str | None = None            # grouping key: an author login, 'unattributed', or 'owner/name'
     by_kind: typing.Literal['author', 'repo'] | None = None   # what `by` is; None when `by` is None
@@ -74,7 +74,7 @@ def partial_buckets(since: datetime.date, until: datetime.date, buckets: list[Bu
 def resources_for(groups: frozenset[str]) -> frozenset[str]:
     """The fetch resources the groups read, for the caller's Fetcher.sync before compute:
     'activity' -> {'commits'}, 'flow' -> {'issues', 'pull_requests'},
-    'delivery' -> {'releases', 'star_events', 'workflow_runs'}. Raises UnknownGroupError."""
+    'delivery' -> {'pull_requests', 'releases', 'workflow_runs'}. Raises UnknownGroupError."""
 
 async def compute(
     subject: Subject,
@@ -104,7 +104,7 @@ class StatsResult:
     since: datetime.date                             # the resolved range, both inclusive
     until: datetime.date
     series: list[Series]
-    tables: dict[str, list[dict[str, typing.Any]]]   # 'top_contributors', 'unavailable', later 'languages'
+    tables: dict[str, list[dict[str, typing.Any]]]   # 'top_contributors', 'unavailable', from step 10 'languages'
     provenance: dict[str, str]                       # see Provenance
 ```
 
@@ -127,9 +127,9 @@ Validation happens before any cache read, in this order: unknown groups, `by_aut
 
 All timestamps are stored UTC and converted once to `request.tz` before bucketing; a record belongs to the local date of `authored_at.astimezone(tz)`. Weeks follow [ISO 8601](https://en.wikipedia.org/wiki/ISO_week_date), so a week can straddle a year boundary and carries the ISO year in its label (`2026-12-31` is in `2026-W53`, and so is `2027-01-01`). Labels are `YYYY`, `YYYY-MM`, `YYYY-Www` with a two-digit week, `YYYY-MM-DD`, and `total`. Bucket boundaries are half-open on local dates: a bucket runs from its `start` up to the next bucket's `start`.
 
-**Range.** `since` and `until` are local dates in `tz`, both inclusive (`--until 2026-10-31` includes the 31st). A `None` `since` resolves to the start of the bucket holding the earliest record of any requested built group (a commit's `authored_at`, a pull request's or issue's `created_at`), so the first bucket is never partial for lack of a bound; for `TOTAL` it resolves to the earliest record's local date. A `None` `until` resolves to today in `tz` from `clock`, so the current bucket is partial. The resolved bounds are in `StatsResult.since` and `until`.
+**Range.** `since` and `until` are local dates in `tz`, both inclusive (`--until 2026-10-31` includes the 31st). A `None` `since` resolves to the start of the bucket holding the earliest record of any requested built group (a commit's `authored_at`, a pull request's or issue's `created_at`, a release's `published_at`, a workflow run's `created_at`; for `delivery` the pull requests it reads for the proxies do not count, since they are inputs to release events, not events of their own), so the first bucket is never partial for lack of a bound; for `TOTAL` it resolves to the earliest record's local date. A `None` `until` resolves to today in `tz` from `clock`, so the current bucket is partial. The resolved bounds are in `StatsResult.since` and `until`.
 
-**Reading the cache.** `compute` converts the range to UTC instants for `Fetcher.commits` widened by one day at each end, then keeps only records whose local date is in the range. For `flow` it passes the widened lower instant to `Fetcher.pull_requests` and `Fetcher.issues`, which filter on `updated_at` (every event of an item is at or before it), and each flow metric then keeps the events whose local date is in the range. The widening makes the result independent of how `tz` handles midnight (a zone whose clocks skip midnight has no `00:00` on that date).
+**Reading the cache.** `compute` converts the range to UTC instants for `Fetcher.commits` widened by one day at each end, then keeps only records whose local date is in the range. For `flow` it passes the widened lower instant to `Fetcher.pull_requests` and `Fetcher.issues`, which filter on `updated_at` (every event of an item is at or before it), and each flow metric then keeps the events whose local date is in the range. For `delivery` it reads every release (`Fetcher.releases`), because a release interval and a lead time reach back before the range, the workflow runs from the widened lower instant (`Fetcher.workflow_runs`, which filters on `created_at`), or all of them when `stats.deploy_workflow` is set, because deployments are then runs and a lead time reaches back like a release interval, and, only when a proxy needs them, every pull request (`Fetcher.pull_requests(repo, None)`), because a release in range can ship a pull request merged long before it; each delivery metric then keeps the events whose local date is in the range. The widening makes the result independent of how `tz` handles midnight (a zone whose clocks skip midnight has no `00:00` on that date).
 
 **Partial buckets.** `partial_buckets` names the first and last bucket when the range covers only part of them; their labels are recorded comma-separated in `provenance['partial_buckets']` (empty when none), and reports chart them with a hatch pattern.
 
@@ -143,7 +143,7 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 - `contributors` (unit `count`): distinct author logins with a commit in the bucket, compared case-insensitively, excluding `stats.bot_logins` and excluding unattributed commits (they cannot be told apart by person).
 - `active_days` (unit `days`): distinct local dates with at least one commit in the bucket.
 - **Code contributions:** `lines_added`, `lines_deleted`, `lines_net` (added minus deleted, unit `lines`) from per-commit `additions` and `deletions`, summed per bucket. Merge commits are excluded when `stats.exclude_merge_commits` is true (the default) so lines are not double counted; the setting does not affect `commits`. Bot commits are counted in `commits` and lines; `stats.bot_logins` only affects contributor counts. Generated and vendored files are not filtered because GitHub does not expose per-file stats cheaply (documented limitation).
-- `stars`, `forks`, `watchers` cumulative and per bucket, `languages` (bytes per language, latest snapshot table). Not built in step 4: they are listed in `tables['unavailable']` until the step that fetches them (stars from `star_events` in step 8; forks, watchers and languages have no fetch resource yet, see review-1.md).
+- `stars`, `forks`, `watchers` cumulative and per bucket, `languages` (bytes per language, latest snapshot table). Not built in step 4: they are listed in `tables['unavailable']` until step 10, which specifies and fetches them (stars from `star_events`; forks, watchers and languages have no fetch resource yet, see review-1.md and review-3.md).
 - `tables['top_contributors']`: one row per author over the whole range, `{'login', 'commits', 'lines_added', 'lines_deleted', 'lines_net', 'active_days'}`, with the same merge rule as the series, ordered by `commits` descending then `login`. Bots are left out; unattributed commits are one row with `login` `'unattributed'`. Produced for every subject, with or without `by_author`.
 
 **flow** (pull requests and issues; total series only, built in step 6)
@@ -156,19 +156,33 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 
 **delivery** (CI and delivery; approximations, labelled as proxies in reports)
 
-- `workflow_runs`, `workflow_success_rate`, `workflow_duration_p50` from Actions runs.
-- `release_count` and `release_interval_days`.
-- Four-keys proxies following [DORA](https://dora.dev/guides/dora-metrics-four-keys/): deployment frequency (releases, or successful runs of the workflow named by `stats.deploy_workflow`), lead time for changes (first commit on a merged PR to its release), change failure rate (releases followed by a hotfix-labelled PR within `stats.failure_window`) and time to restore (hotfix PR open to merge). These need conventions that GitHub does not enforce, so each is only emitted when its inputs are configured and is otherwise listed in `tables['unavailable']` with the reason.
+Built in step 8; total series only. Percentiles are computed as in `flow` (`statistics.median` for p50, `statistics.quantiles(values, n=10, method='inclusive')[8]` for p90), and an empty bucket has no value for a percentile or a ratio and zero for a count.
+
+- **Actions.** Every workflow run counts, whatever its workflow, event or branch, bucketed by the local date of its `created_at`:
+  - `workflow_runs` (unit `count`): runs created in the bucket, finished or not.
+  - `workflow_success_rate` (unit `ratio`, 0 to 1): of the bucket's completed runs whose `conclusion` is `success`, `failure`, `timed_out` or `startup_failure`, the share that is `success`. `cancelled`, `skipped`, `neutral`, `action_required` and `stale` are not outcomes of the code and are left out of both counts; a bucket with none of the four has no value.
+  - `workflow_duration_p50` and `workflow_duration_p90` (unit `minutes`): `(updated_at - run_started_at).total_seconds() / 60` over the bucket's completed runs with a `run_started_at`, the wall-clock time of the latest attempt. This is a proxy: GitHub's per-run timing endpoint would cost a request per run, and a run's `updated_at` can move after it finishes (a re-run request resets it), which reads as a longer run.
+- **Releases.** Published releases only (drafts are not stored), prereleases included, bucketed by the local date of `published_at`:
+  - `release_count` (unit `count`).
+  - `release_interval_p50` (unit `days`): `statistics.median_low` of the whole days (`(later - earlier).days`) between each release and the previous release of the same repository by `published_at`, bucketed by the later one, so the value is one real interval and an integer, as the JSON output requires of `days`. A repository's first release has no interval.
+- **DORA proxies**, following the [four keys](https://dora.dev/guides/dora-metrics-four-keys/). They lean on conventions GitHub does not enforce, so each is emitted only when its inputs exist and is otherwise a row in `tables['unavailable']` naming what is missing:
+  - *Deployments.* With `stats.deploy_workflow` set, a deployment is a completed run with `conclusion` `success` whose workflow file name (`workflow_path` after its last `/`, such as `deploy.yml`) or `name` equals the setting, at its `updated_at` (when it finished). Without the setting, a deployment is a release that is not a prerelease, at its `published_at`. Deployments are per repository.
+  - `deployments` (unit `count`): deployments in the bucket. Emitted when the subject has at least one deployment in the cache (at any time); otherwise unavailable with `no releases in the cache and stats.deploy_workflow is not set`, or `no successful run of the workflow named by stats.deploy_workflow`.
+  - `lead_time_p50` and `lead_time_p90` (unit `hours`): for each merged pull request, from its `first_commit_at` (its `created_at` when that is `None`) to the first deployment of the same repository at or after its `merged_at`, bucketed by that deployment's local date. A pull request with no deployment after its merge yet is not counted. Emitted with `deployments`, under the same condition.
+  - `change_failure_rate` (unit `ratio`): of the bucket's deployments, the share followed by a hotfix pull request of the same repository whose `created_at` is after the deployment and no later than `stats.failure_window` after it. A hotfix pull request is one with a label in `stats.hotfix_labels`, compared case-insensitively. Emitted when `deployments` is and the subject has at least one hotfix pull request in the cache; otherwise unavailable, naming whichever is missing. A deployment within `stats.failure_window` of now is counted as not failed, since its window is still open.
+  - `time_to_restore_p50` and `time_to_restore_p90` (unit `hours`): hotfix pull requests from `created_at` to `merged_at`, bucketed by the local date of `merged_at`. Emitted when the subject has at least one hotfix pull request; it needs no deployments.
+- Bots are counted, as in `flow`; `stats.bot_logins` affects contributor counts only.
+- Series order: `workflow_runs`, `workflow_success_rate`, `workflow_duration_p50`, `workflow_duration_p90`, `release_count`, `release_interval_p50`, `deployments`, `lead_time_p50`, `lead_time_p90`, `change_failure_rate`, `time_to_restore_p50`, `time_to_restore_p90`; a proxy that is not emitted is left out, never sent as an empty series.
 
 ### Aggregation
 
-- `user` subject: repositories owned by the user, counting only commits, pull requests and issues whose `author_login` matches the subject's login case-insensitively; `by_author` is not meaningful and is rejected. Per-repo breakdown series as for `org`.
+- `user` subject: repositories owned by the user, counting only commits, pull requests and issues whose `author_login` matches the subject's login case-insensitively; `by_author` is not meaningful and is rejected. Per-repo breakdown series as for `org`. `delivery` is the exception: it counts every release, workflow run and pull request of the user's repositories, because a release or a run ships the repository's work, not one author's, and a lead time measured on the user's own pull requests only would leave out what the release shipped.
 - `repo` subject: one repository, optionally per author.
 - `org` subject: sum across org repositories, with per-repo breakdown series always and per-author breakdown series with `by_author`.
 - **Breakdown series** are `commits`, `lines_added`, `lines_deleted` and `lines_net` with `by` set to the author login (or `'unattributed'`, `by_kind='author'`) or the repo's `owner/name` (`by_kind='repo'`). Per-author series include bots: they are not contributors, but their lines are counted.
 - A series' `points` holds every bucket of the range in chronological order: empty buckets are zero for counts and lines, and absent for medians and ratios. Breakdown series are filled over the whole range too, so they align with the totals.
-- `flow` has no breakdown series; `by_author` and the per-repo breakdowns apply to `activity` only.
-- `series` is ordered: the `activity` total series, then the `flow` total series, each in the order listed above, then breakdown series ordered by `by_kind` (`author` before `repo`), then `by`, then metric in the order listed above.
+- `flow` and `delivery` have no breakdown series; `by_author` and the per-repo breakdowns apply to `activity` only.
+- `series` is ordered: the `activity` total series, then the `flow` total series, then the `delivery` total series, each in the order listed above, then breakdown series ordered by `by_kind` (`author` before `repo`), then `by`, then metric in the order listed above.
 - Summing an `activity` breakdown's points over every `by` of one `by_kind` gives the total series' points, for each of its four metrics.
 
 ### Provenance
@@ -183,10 +197,10 @@ Every result records what produced it, so a saved report can be traced and a mis
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `stats.bot_logins` | `list[str]` | `['dependabot[bot]', 'renovate[bot]']` | Authors excluded from contributor counts and the top-contributors table |
-| `stats.deploy_workflow` | `str \| None` | `None` | Workflow name counted as a deployment |
+| `stats.deploy_workflow` | `str \| None` | `None` | Workflow counted as a deployment, matched against a run's workflow file name (`deploy.yml`) or its name; unset, non-prerelease releases are the deployments |
 | `stats.exclude_merge_commits` | `bool` | `True` | Skip merge commits in line counts |
-| `stats.failure_window` | `timedelta` | `7 days` | Window for change-failure detection |
-| `stats.hotfix_labels` | `list[str]` | `['hotfix']` | PR labels marking a failure fix |
+| `stats.failure_window` | `timedelta` | `7 days` | How long after a deployment a hotfix pull request marks it as failed |
+| `stats.hotfix_labels` | `list[str]` | `['hotfix']` | Pull request labels marking a failure fix, compared case-insensitively |
 | `stats.timezone` | `str` | `'UTC'` | IANA zone the CLI uses for `StatsRequest.tz` when `--tz` is absent |
 
 `compute` takes the settings from `StatsRequest.settings`, so a result records the settings it was computed with.

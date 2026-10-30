@@ -1,8 +1,8 @@
 # Fetch and cache
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** proposed
-**Date:** 2026-10-29
+**Date:** 2026-10-30
 
 Fetches raw data about a GitHub user, repository or organisation and stores it in a local SQLite cache so that repeated and incremental runs stay inside the API rate limits. It uses the [GraphQL API](https://docs.github.com/en/graphql) for almost everything and the [REST API](https://docs.github.com/en/rest) only where GraphQL has no equivalent (workflow runs, the `stats/*` endpoints, and comparing two commits). It knows nothing about metrics; [Stats](../stats/spec.md) consumes its output.
 
@@ -17,8 +17,8 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 | `ratelimit.py` | `RateLimitState`, `backoff_delay` | 2 |
 | `client.py` | `GitHubClient`, `RestResponse`: the aiohttp transport | 2 |
 | `queries.py` | GraphQL query texts | 2 (first query), 3 onwards |
-| `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags; `CacheInfo`, `inspect_cache`, `clear_cache` | 3 (`CacheInfo`, `inspect_cache`, `clear_cache` in 5; the `pull_requests` and `issues` tables in 6) |
-| `base.py` | `Subject`, `RESOURCES`, `BUILT_RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, `PullRequest` and `Issue` in 6, the rest with their resources), `SyncReport`, `Fetcher` | 3 (`BUILT_RESOURCES`, `Fetcher.owner_kind` in 5; `pull_requests`, `issues` in 6) |
+| `cache.py` | `Cache`, `SCHEMA_VERSION`: SQLite schema, identity, watermarks, ETags; `CacheInfo`, `inspect_cache`, `clear_cache` | 3 (`CacheInfo`, `inspect_cache`, `clear_cache` in 5; the `pull_requests` and `issues` tables in 6; the `releases` and `workflow_runs` tables in 8) |
+| `base.py` | `Subject`, `RESOURCES`, `BUILT_RESOURCES`, the record dataclasses (`Repo`, `Commit` and `SyncState` in 3, `PullRequest` and `Issue` in 6, `Release` and `WorkflowRun` in 8, `StarEvent` with its resource in 10), `SyncReport`, `Fetcher` | 3 (`BUILT_RESOURCES`, `Fetcher.owner_kind` in 5; `pull_requests`, `issues` in 6; `releases`, `workflow_runs` in 8) |
 
 `Fetcher` owns one `GitHubClient` and one `Cache`; its `__aenter__` enters the client and its `__aexit__` exits it. `Fetcher` is therefore built in step 3, when `Cache` exists; step 2 builds the client it wraps.
 
@@ -27,6 +27,8 @@ Fetches raw data about a GitHub user, repository or organisation and stores it i
 Version 1.4 adds what step 5's CLI needs: `BUILT_RESOURCES`, `Fetcher.owner_kind`, and `inspect_cache` and `clear_cache` for the `cache` command. The choices are in the [reports review](../reports/review-1.md).
 
 Version 1.5 adds what step 6 (flow data) needs: the `PullRequest` and `Issue` records and their tables, `Fetcher.pull_requests` and `Fetcher.issues`, the repo listing's newest pull request and issue update times that let a sync skip unchanged repos, the `Date` header as the server-side watermark (`GitHubClient.graphql_dated`), and `SCHEMA_VERSION` 2. The choices are in the [stats review 2](../stats/review-2.md).
+
+Version 1.6 adds what step 8 (delivery data) needs: the `Release` and `WorkflowRun` records and their tables, `Fetcher.releases` and `Fetcher.workflow_runs`, the pull request fields `labels` and `first_commit_at` that the hotfix and lead-time proxies read, the repo listing's release probe and the `sync_state.probe` column it is compared with, `RestResponse.date`, and `SCHEMA_VERSION` 3. `star_events` moves to step 10 with the other popularity data (stars, forks, watchers, languages), which is specified then. The choices are in the [stats review 3](../stats/review-3.md).
 
 ## API
 
@@ -44,7 +46,7 @@ class Subject:
 RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'})
 # The resources whose implementation step is built; each later step adds its own. `sync` raises
 # NotImplementedError for a resource in RESOURCES but not here, and callers sync only these.
-BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests'})   # from step 6
+BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'workflow_runs'})   # from step 8
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Repo:
@@ -57,6 +59,8 @@ class Repo:
     updated_at: datetime.datetime         # UTC, as GitHub reports it
     pull_requests_updated_at: datetime.datetime | None = None   # newest PR's updatedAt; None: no PRs
     issues_updated_at: datetime.datetime | None = None          # newest issue's updatedAt; None: no issues
+    releases_count: int = 0                                     # releases totalCount, drafts included when visible
+    releases_updated_at: datetime.datetime | None = None        # newest-created release's updatedAt; None: none
     missing: bool = False            # gone from the owner's listing; rows kept
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -89,6 +93,8 @@ class PullRequest:
                                                 # author and bots; None when there is none
     additions: int
     deletions: int
+    labels: tuple[str, ...] = ()                     # the first 20 label names, as GitHub orders them
+    first_commit_at: datetime.datetime | None = None # authoredDate of the pull request's first commit
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Issue:                         # issues only: GitHub's issues connection has no PRs
@@ -98,6 +104,29 @@ class Issue:                         # issues only: GitHub's issues connection h
     created_at: datetime.datetime
     updated_at: datetime.datetime
     closed_at: datetime.datetime | None   # None unless state is CLOSED (a reopened issue is open)
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Release:                       # published releases only: drafts are not stored
+    repo: str
+    tag_name: str                    # unique per repository
+    created_at: datetime.datetime
+    published_at: datetime.datetime
+    is_prerelease: bool
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class WorkflowRun:                   # a GitHub Actions run, its latest attempt
+    repo: str
+    id: int
+    workflow_path: str               # '.github/workflows/deploy.yml'
+    name: str                        # the run's name (the workflow's name unless `run-name` sets it)
+    event: str                       # 'push', 'pull_request', 'schedule', ...
+    head_branch: str | None
+    status: str                      # 'completed', 'in_progress', 'queued', ...
+    conclusion: str | None           # 'success', 'failure', ...; None until completed
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    run_started_at: datetime.datetime | None   # start of the latest attempt
+    run_attempt: int
 
 class Fetcher:
     def __init__(self, token: str, cache: Cache, settings: FetchSettings, *, client: GitHubClient | None = None) -> None:
@@ -137,9 +166,13 @@ class Fetcher:
         before its `updated_at`, so this is a superset of those with an event since `since`."""
     async def issues(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[Issue]:
         """From the cache, as `pull_requests`."""
-    async def releases(self, repo: Repo) -> typing.AsyncIterator[Release]: ...
-    async def workflow_runs(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[WorkflowRun]: ...
-    async def star_events(self, repo: Repo) -> typing.AsyncIterator[StarEvent]: ...
+    async def releases(self, repo: Repo) -> typing.AsyncIterator[Release]:
+        """From the cache: the repo's published releases, oldest `published_at` first (then
+        `tag_name`). All of them: a release interval and a lead time reach before any range."""
+    async def workflow_runs(self, repo: Repo, since: datetime.datetime | None) -> typing.AsyncIterator[WorkflowRun]:
+        """From the cache: the repo's runs with `created_at >= since` (all when None), oldest
+        `created_at` first (then `id`)."""
+    async def star_events(self, repo: Repo) -> typing.AsyncIterator[StarEvent]: ...   # step 10
 
 def resolve_token() -> str:
     """GITHUB_TOKEN from the environment, else `gh auth token`; raises AuthError if neither."""
@@ -153,7 +186,7 @@ The cache, used only inside `wambatic.fetch` and by the CLI's `cache` command. I
 ```python
 import pathlib
 
-SCHEMA_VERSION: int = 2   # 2 from step 6: the pull_requests and issues tables
+SCHEMA_VERSION: int = 3   # 2 from step 6: the pull_requests and issues tables; 3 from step 8: see Cache
 
 # in base.py with the other records, so cache.py imports base.py and base.py needs cache.py
 # only for annotations (under typing.TYPE_CHECKING): no import cycle
@@ -167,6 +200,7 @@ class SyncState:
     updated_at: datetime.datetime         # the repo's listed updatedAt this sync was made against
     synced_at: datetime.datetime
     full_synced_at: datetime.datetime
+    probe: str | None = None              # releases only: the listing's release probe this sync was made against
 
 class Cache:
     @classmethod
@@ -194,6 +228,16 @@ class Cache:
         """Rows with `updated_at >= since` (all when None), by number."""
     def write_issues(self, repo: str, issues: list[Issue], state: SyncState, *, replace: bool) -> int: ...
     def read_issues(self, repo: str, since: datetime.datetime | None) -> list[Issue]: ...
+    def write_releases(self, repo: str, releases: list[Release], state: SyncState) -> int:
+        """In one transaction: delete the repo's releases, insert these, write `state`. Every
+        read of releases is a full read, so there is no `replace` flag."""
+    def read_releases(self, repo: str) -> list[Release]: ...
+    def write_workflow_runs(self, repo: str, runs: list[WorkflowRun], state: SyncState, *, replace: bool, gone: collections.abc.Collection[int] = ()) -> int:
+        """As `write_commits`, upserting by `id`; also deletes the runs whose ids are in `gone`."""
+    def read_workflow_runs(self, repo: str, since: datetime.datetime | None) -> list[WorkflowRun]:
+        """Rows with `created_at >= since` (all when None), oldest first."""
+    def unfinished_runs(self, repo: str) -> list[int]:
+        """Ids of the repo's cached runs whose `status` is not `completed`, ascending."""
     def etag(self, url: str) -> tuple[str, object] | None:
         """The stored ETag and parsed body for a REST URL."""
     def store_etag(self, url: str, etag: str, body: object) -> None: ...
@@ -209,6 +253,8 @@ class CacheInfo:
     commits: int
     pull_requests: int                                     # from step 6
     issues: int                                            # from step 6
+    releases: int                                          # from step 8
+    workflow_runs: int                                     # from step 8
     last_synced_at: datetime.datetime | None               # latest `sync_state.synced_at`
 
 def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
@@ -250,6 +296,7 @@ class RestResponse:
     data: object | None            # parsed JSON; None on 304
     etag: str | None
     next_url: str | None           # rel="next" from the Link header
+    date: datetime.datetime | None = None   # the `Date` header, aware UTC; None when absent (1.6)
 
 class GitHubClient:
     def __init__(
@@ -320,26 +367,27 @@ Every query text in `queries.py` selects `rateLimit { cost remaining resetAt }`;
 
 **GraphQL cost control.** Queries are built to stay under the 500,000-node cap and the 5,000-points/hour budget ([limits](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-github-graphql-api)): 100 nodes per page, only requested fields, and `rateLimit { cost remaining resetAt }` on every query so the fetcher can pace itself. Per-commit `additions` and `deletions` come from the `Commit` object's history connection, or from `nodes(ids:)` for commits found by a compare; the REST `stats/code_frequency` endpoint is used only by the opt-in live test, as a cross-check of the summed line totals on a repo under 10,000 commits, and never at run time.
 
-**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/wambatic/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `etags(url, etag, body)`, and `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at)`. Each step creates only the tables its resources use; step 3 creates `meta`, `repos`, `commits`, `etags` and `sync_state`, and a later table is a `SCHEMA_VERSION` increase. Step 6 adds `pull_requests` and `issues` (primary key `(repo, number)`, indexed on `(repo, updated_at)`) and the `repos` columns `pull_requests_updated_at` and `issues_updated_at`, and sets `SCHEMA_VERSION` to 2, so a cache written before step 6 is refused once with the `CacheVersionError` message and is cleared and refetched; there is no migration. Timestamps are stored as ISO 8601 UTC text. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304; a 304 returns the stored body.
+**Cache.** One SQLite file (`fetch.cache_path`, default `~/.cache/wambatic/cache.sqlite3`) in WAL mode. Tables: `meta(key, value)`, `repos`, `commits`, `pull_requests`, `issues`, `releases`, `workflow_runs`, `star_events`, `etags(url, etag, body)`, and `sync_state(repo, resource, watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at)`. Each step creates only the tables its resources use; step 3 creates `meta`, `repos`, `commits`, `etags` and `sync_state`, and a later table is a `SCHEMA_VERSION` increase. Step 6 adds `pull_requests` and `issues` (primary key `(repo, number)`, indexed on `(repo, updated_at)`) and the `repos` columns `pull_requests_updated_at` and `issues_updated_at`, and sets `SCHEMA_VERSION` to 2, so a cache written before step 6 is refused once with the `CacheVersionError` message and is cleared and refetched; there is no migration. Step 8 adds `releases` (primary key `(repo, tag_name)`) and `workflow_runs` (primary key `(repo, id)`, indexed on `(repo, created_at)` and `(repo, status)`), the `pull_requests` columns `labels` (a JSON array of names) and `first_commit_at`, the `repos` columns `releases_count` and `releases_updated_at`, and the `sync_state` column `probe`, and sets `SCHEMA_VERSION` to 3, with the same refusal. Timestamps are stored as ISO 8601 UTC text. REST responses also store their `ETag` and are revalidated with `If-None-Match`, which does not count against the limit when answered 304; a 304 returns the stored body.
 
 **Incremental sync.** The first query of a subject backfills everything; later queries fetch only what changed since the last successful sync. State is per repo and per resource, so asking for a new metric group later backfills only that resource.
 
-1. *Subject level.* The repo list is always re-read (one cheap query per 100 repos, ordered by `PUSHED_AT` descending, selecting each repo's default branch and its head oid, and since 1.5 the `updatedAt` of its newest pull request and newest issue: `pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }` and the same for `issues`). A repo is skipped for a resource when that resource is unchanged by the rule below, and a repo skipped for every requested resource is skipped entirely, with no per-repo requests. `commits` is unchanged when the listed `pushedAt` and `updatedAt` equal the values recorded in its `sync_state` row. `pull_requests` and `issues` are unchanged when a `sync_state` row exists, no full re-read is due (step 5), and the listed newest `updatedAt` is `None` or earlier than `watermark - fetch.overlap`, the cutoff at which paging would stop on the first item. A repository's own `pushedAt` and `updatedAt` are not used for them, because nothing in GitHub's documentation says they move when an issue or a review changes. Comparing GitHub's values with GitHub's values avoids clock skew, and because those values are written in the same transaction as the rows (step 4 below), a repo whose sync was interrupted is never skipped. A repo not yet in the cache is backfilled; a repo gone from the list is marked `missing`, its rows kept. Forks and archived repos excluded by the current settings are neither listed nor synced. A repo subject reads its one repository with the same fields.
+1. *Subject level.* The repo list is always re-read (one cheap query per 100 repos, ordered by `PUSHED_AT` descending, selecting each repo's default branch and its head oid, and since 1.5 the `updatedAt` of its newest pull request and newest issue: `pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }` and the same for `issues`). A repo is skipped for a resource when that resource is unchanged by the rule below, and a repo skipped for every requested resource is skipped entirely, with no per-repo requests. `commits` is unchanged when the listed `pushedAt` and `updatedAt` equal the values recorded in its `sync_state` row. `pull_requests` and `issues` are unchanged when a `sync_state` row exists, no full re-read is due (step 5), and the listed newest `updatedAt` is `None` or earlier than `watermark - fetch.overlap`, the cutoff at which paging would stop on the first item. A repository's own `pushedAt` and `updatedAt` are not used for them, because nothing in GitHub's documentation says they move when an issue or a review changes. Since 1.6 the listing also selects `releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { updatedAt } }`; its probe text is `"<totalCount> <updatedAt as ISO UTC, or none>"`. `releases` is unchanged when a `sync_state` row exists, no full re-read is due (step 5) and its `probe` equals the listed probe text: a release added or deleted changes the count, and publishing or editing the newest release (a draft kept by a release-drafting workflow is the usual newest) changes its `updatedAt`. An edit to an older release is seen at the next full re-read, an accepted limit. `workflow_runs` has no probe in GraphQL and is never unchanged: its first request is a conditional one that GitHub answers with 304 when nothing changed, which does not count against the rate limit, so a repo synced for `workflow_runs` is never skipped entirely, at no cost when it is unchanged. Comparing GitHub's values with GitHub's values avoids clock skew, and because those values are written in the same transaction as the rows (step 4 below), a repo whose sync was interrupted is never skipped. A repo not yet in the cache is backfilled; a repo gone from the list is marked `missing`, its rows kept. Forks and archived repos excluded by the current settings are neither listed nor synced. A repo subject reads its one repository with the same fields.
 2. *Per resource.* Each resource has an incremental strategy that pages newest-first and stops at the watermark:
    - `commits`: immutable, so never refetched, and tracked by `head_oid` rather than a time watermark, because a time window misses commits that reach the default branch after their dates (a merge commit brings in branch commits with older committer dates, and `history(since:)` filters on those dates). The first sync, and any full refetch, pages the default branch's `history(first: 100)` from the head, selecting `oid`, `authoredDate`, `author { user { login } }`, `additions`, `deletions` and `parents { totalCount }`. When the listed head differs from the stored `head_oid`, REST `GET /repos/{owner}/{name}/compare/{stored}...{listed}` (paged with `per_page=100`) answers both questions at once: its `status` says whether the stored head is an ancestor (`ahead`), and its `commits` are exactly the commits reachable from the new head and not the old one, like `git log stored..listed`. Their `additions` and `deletions`, which the compare response does not carry per commit, come from one GraphQL `nodes(ids:)` query per 100 commits using each commit's `node_id`. A `status` of `diverged` or `behind`, or a 404 because the stored head no longer exists (force-push or rewritten history), fully refetches that repo's commits, replacing its rows. Rows are de-duplicated by `oid`. An empty repository (no default branch) is recorded with no commits and no `head_oid`.
-   - `pull_requests` and `issues`: mutable. Paged ordered by `UPDATED_AT` descending, 100 per page, stopping at the first item whose `updatedAt` is earlier than `watermark - fetch.overlap` (with no watermark, or on a full re-read, every page is read); changed items are upserted by `(repo, number)`. Still-open items are therefore refreshed whenever they change. The queries are `PULL_REQUESTS` (`number state createdAt updatedAt mergedAt closedAt additions deletions author { __typename login }` and `reviews(first: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) { nodes { submittedAt author { __typename login } } }`) and `ISSUES` (`number state createdAt updatedAt closedAt author { __typename login }`), each on `repository(owner:, name:)`. An author whose `__typename` is `Bot` is stored as `<login>[bot]`, the form REST and `stats.bot_logins` use; a `null` author (a deleted account) is `None`. `merged_at` is kept only when `state` is `MERGED`, and `closed_at` only when `state` is not `OPEN`. `first_review_at` is the earliest `submittedAt` among the first 20 submitted reviews whose author is neither the pull request's author nor a `Bot`; a review whose author is `null` counts. More than 20 reviews by the author or bots before the first other review leaves it `None`, an accepted limit.
-   - `releases` and `star_events`: paged newest-first (`CREATED_AT`, `STARRED_AT`), stopping at the first known id.
-   - `workflow_runs`: REST with `created=>watermark - fetch.overlap`, plus a refetch of any cached run whose status is not `completed`.
-3. *The watermark is a server-side timestamp* (for the time-windowed resources, from step 6) taken at the start of the sync, not the newest item seen, and the overlap (default one hour) absorbs clock skew and in-flight updates. For `pull_requests` and `issues` it is the `Date` header of the first page's response for that repo and resource (`GitHubClient.graphql_dated`): an item that changes while later pages are read has an `updatedAt` after it, so the next sync reads it.
+   - `pull_requests` and `issues`: mutable. Paged ordered by `UPDATED_AT` descending, 100 per page, stopping at the first item whose `updatedAt` is earlier than `watermark - fetch.overlap` (with no watermark, or on a full re-read, every page is read); changed items are upserted by `(repo, number)`. Still-open items are therefore refreshed whenever they change. The queries are `PULL_REQUESTS` (`number state createdAt updatedAt mergedAt closedAt additions deletions author { __typename login }` and `reviews(first: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) { nodes { submittedAt author { __typename login } } }`) and `ISSUES` (`number state createdAt updatedAt closedAt author { __typename login }`), each on `repository(owner:, name:)`. Since 1.6 `PULL_REQUESTS` also selects `labels(first: 20) { nodes { name } }` and `commits(first: 1) { nodes { commit { authoredDate } } }` (a pull request's commits are listed oldest first), stored as `labels` in GitHub's order and as `first_commit_at` (`None` when the list is empty); more than 20 labels keeps the first 20, an accepted limit. Adding or removing a label moves the pull request's `updatedAt`, so the incremental read sees it. An author whose `__typename` is `Bot` is stored as `<login>[bot]`, the form REST and `stats.bot_logins` use; a `null` author (a deleted account) is `None`. `merged_at` is kept only when `state` is `MERGED`, and `closed_at` only when `state` is not `OPEN`. `first_review_at` is the earliest `submittedAt` among the first 20 submitted reviews whose author is neither the pull request's author nor a `Bot`; a review whose author is `null` counts. More than 20 reviews by the author or bots before the first other review leaves it `None`, an accepted limit.
+   - `releases`: mutable and few, so every read is a full read. The `RELEASES` query pages `repository(owner:, name:) { releases(first: 100, after:, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName createdAt publishedAt isDraft isPrerelease } } }` to the end and replaces the repo's rows with the releases that are not drafts and have a `publishedAt` (`Cache.write_releases`), in one transaction with a state whose `probe` is the listed probe text. Drafts are visible only to tokens with push access, so leaving them out makes the cache the same whoever's token fills it.
+   - `workflow_runs`: REST `GET /repos/{owner}/{name}/actions/runs` with `per_page=100` and `exclude_pull_requests=true`, newest first, paged with `page`. No `created` filter is sent: GitHub's reference says a request filtered by `actor`, `branch`, `check_suite_id`, `created`, `event`, `head_sha` or `status` returns at most 1,000 results, and an unfiltered one has no such cap. The first page is requested through the ETag store (`Fetcher.rest_cached`), so an unchanged repo costs a free 304 whose stored body is processed again harmlessly; an incremental read stops at the first run whose `created_at` is earlier than `watermark - fetch.overlap`, and a first or full read reads every page. A 404 on the list (no Actions data for the repo) is read as an empty list, not `NotFoundError`, so one repo cannot fail an organisation's sync. Then each cached run that is not `completed` and was not in the pages read is re-read with `GET /repos/{owner}/{name}/actions/runs/{id}` (no ETag); a 404 there (the run was deleted) removes its row. The runs read, the re-read runs and the removed ids go in one transaction with the state (`Cache.write_workflow_runs`). A run's fields are `id`, `path` (as `workflow_path`), `name`, `event`, `head_branch`, `status`, `conclusion`, `created_at`, `updated_at`, `run_started_at` and `run_attempt`.
+   - `star_events`: specified with step 10.
+3. *The watermark is a server-side timestamp* (for the time-windowed resources, from step 6) taken at the start of the sync, not the newest item seen, and the overlap (default one hour) absorbs clock skew and in-flight updates. For `pull_requests` and `issues` it is the `Date` header of the first page's response for that repo and resource (`GitHubClient.graphql_dated`): an item that changes while later pages are read has an `updatedAt` after it, so the next sync reads it. For `workflow_runs` it is the `Date` header of the first page's response, 200 or 304 (`RestResponse.date`; `Fetcher.rest_cached` returns it with the body); a response without a parseable `Date` raises `GraphQLError` (`MALFORMED`) as `graphql_dated` does, since there is no REST-specific malformed-response error.
 4. *Atomic advance.* Rows and the new watermark are written in one SQLite transaction per repo and resource, only after the last page succeeds. An interrupted or rate-limited run leaves the old watermark, so the next run resumes from it and re-fetching is harmless because writes are upserts.
-5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh` (`sync(..., full_refresh=True)`). Commits are the exception to the interval: the compare above sees every rewrite, so they are fully re-read only on a rewrite or `--full-refresh`. A full re-read of `pull_requests` or `issues` reads every page and replaces the repo's rows in the same transaction as its state (`replace=True`), so an issue deleted or transferred on GitHub leaves the cache, and sets `full_synced_at` to now; an incremental read keeps the stored `full_synced_at`.
+5. *Deletions cannot be seen incrementally* (deleted or transferred issues, unstarred repos, deleted releases). Each resource is therefore fully re-read when `now - full_synced_at > fetch.full_refresh_after`, or when the user passes `--full-refresh` (`sync(..., full_refresh=True)`). Commits are the exception to the interval: the compare above sees every rewrite, so they are fully re-read only on a rewrite or `--full-refresh`. Releases are always read in full (step 2), so for them the interval only forces a read the probe would skip. A full re-read of `workflow_runs` reads every page and replaces the repo's rows (`replace=True`), so a deleted run leaves the cache. A full re-read of `pull_requests` or `issues` reads every page and replaces the repo's rows in the same transaction as its state (`replace=True`), so an issue deleted or transferred on GitHub leaves the cache, and sets `full_synced_at` to now; an incremental read keeps the stored `full_synced_at`.
 6. *Offline and bounded.* `--no-fetch` renders from the cache alone; `--max-age` skips the network for a subject synced more recently than that.
 
 **Cache identity.** `meta` records `schema_version` (`SCHEMA_VERSION` in `cache.py`), the wambatic version (`wambatic.version.VERSION`), and `query:<NAME>` = the SHA-256 hex digest of each query text constant in `queries.py`. A new file has its identity written; opening a file whose recorded identity differs in any key from the running code raises `CacheVersionError` naming each differing key with both values, unless `ignore_version` is passed. Provenance reads the same values from `Cache.identity()`.
 
 **Secrets.** The token is read from the environment only, never written to the cache, logs or reports ([security rules](../../../.agents/claude/rules/security.md)). Requests are logged at `debug` as method, URL and status only, never headers. The client logs through `loguru.logger.patch(...)` with a patcher that applies `redact` to each record's message, so a token that reaches a message by any path is replaced by `***`.
 
-**Testing.** Unit tests replay fixture responses from an `aiohttp.web.Application` served by `aiohttp.test_utils.TestServer`, which ships with aiohttp, and point `GitHubClient` at it with `api_url`; async tests run their body with `asyncio.run`, so no pytest async plugin is added. Fixture responses live in `src/tests/fixtures/fetch/` as Python modules. Successful responses are recorded once from the live API (date of recording in a comment, trimmed to the fields used, no token or personal data beyond public logins); error responses (401, 403, 404, 429, 202, `RATE_LIMITED`) are written from the shapes in GitHub's documentation, each with the page it came from. The opt-in live tests, skipped when `GITHUB_TOKEN` is unset and marked `live`, run one small query against the public `octocat` account, and sync `octocat/Hello-World` into a temporary cache and check that its summed non-merge additions and deletions equal the sums of REST `stats/code_frequency`. Sync tests drive `Fetcher` with a `GitHubClient` pointed at the replay server and a `Cache` in a temporary directory. The step 6 responses (`PULL_REQUESTS` and `ISSUES` pages, and the listing with its newest-update fields) are hand-written from the GraphQL reference ([PullRequest](https://docs.github.com/en/graphql/reference/objects#pullrequest), [Issue](https://docs.github.com/en/graphql/reference/objects#issue), [Bot](https://docs.github.com/en/graphql/reference/objects#bot)) until a session with network access records them, like the step 3 stand-ins.
+**Testing.** Unit tests replay fixture responses from an `aiohttp.web.Application` served by `aiohttp.test_utils.TestServer`, which ships with aiohttp, and point `GitHubClient` at it with `api_url`; async tests run their body with `asyncio.run`, so no pytest async plugin is added. Fixture responses live in `src/tests/fixtures/fetch/` as Python modules. Successful responses are recorded once from the live API (date of recording in a comment, trimmed to the fields used, no token or personal data beyond public logins); error responses (401, 403, 404, 429, 202, `RATE_LIMITED`) are written from the shapes in GitHub's documentation, each with the page it came from. The opt-in live tests, skipped when `GITHUB_TOKEN` is unset and marked `live`, run one small query against the public `octocat` account, and sync `octocat/Hello-World` into a temporary cache and check that its summed non-merge additions and deletions equal the sums of REST `stats/code_frequency`. Sync tests drive `Fetcher` with a `GitHubClient` pointed at the replay server and a `Cache` in a temporary directory. The step 6 responses (`PULL_REQUESTS` and `ISSUES` pages, and the listing with its newest-update fields) are hand-written from the GraphQL reference ([PullRequest](https://docs.github.com/en/graphql/reference/objects#pullrequest), [Issue](https://docs.github.com/en/graphql/reference/objects#issue), [Bot](https://docs.github.com/en/graphql/reference/objects#bot)) until a session with network access records them, like the step 3 stand-ins. The step 8 responses (`RELEASES` pages, the listing with its release probe, `PULL_REQUESTS` pages with labels and first commits, and the REST workflow-run list and single-run responses) are hand-written in the same way, from the GraphQL reference ([Release](https://docs.github.com/en/graphql/reference/objects#release), [PullRequestCommit](https://docs.github.com/en/graphql/reference/objects#pullrequestcommit)) and the REST reference ([workflow runs](https://docs.github.com/en/rest/actions/workflow-runs)), and checked against GitHub's published schemas (`@octokit/graphql-schema` and `@octokit/openapi`).
 
 ## Settings
 

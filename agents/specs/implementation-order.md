@@ -1,6 +1,6 @@
 # Implementation order
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** proposed
 **Date:** 2026-10-30
 
@@ -25,10 +25,11 @@ The order in which wambatic is built, with what each step delivers, what it depe
 | 5 | Terminal report and CLI | [reports](reports/spec.md) | 4 | done: [tasks-1](../tasks/reports/tasks-1.md) |
 | 6 | Flow data and stats (PRs, issues) | fetch-and-cache, stats | 3, 4 | done: [tasks-2](../tasks/stats/tasks-2.md) |
 | 7 | Static HTML report | [reports](reports/spec.md) | 5 | done: [tasks-2](../tasks/reports/tasks-2.md) |
-| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats | 6 | not started |
+| 8 | Delivery data and stats (releases, Actions, DORA proxies) | fetch-and-cache, stats, reports | 6, 7 | not started: [tasks-3](../tasks/stats/tasks-3.md) |
 | 9 | Local web app | [reports](reports/spec.md) | 7 | not started |
+| 10 | Popularity data and stats (stars, forks, watchers, languages) | fetch-and-cache, stats, reports | 7 | not specified |
 
-Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done.
+Steps 6 and 7 are independent and may be built in either order or in parallel once 5 is done. Step 10 was split from step 8 on 2026-10-30 (stats review 3): its fetch resources are not specified yet, and the two together were more than one task list. Steps 9 and 10 are independent of each other.
 
 ## Step detail
 
@@ -50,7 +51,7 @@ Done when: a second run of the same fixture fetches nothing; an interrupted run 
 
 ### 4. Activity stats
 
-Deliver: `Granularity`, `bucket_for` and `bucket_range` (ISO weeks, timezones, partial buckets), the stats errors, `Fetcher.provenance`, and `compute` for the `activity` group's commit metrics: commits, contributors, active days, lines added, deleted and net, per-repo and `by_author` breakdowns, and the top-contributors table. Groups and metrics not built yet are listed as `unavailable`; stars, forks, watchers and languages wait for step 8.
+Deliver: `Granularity`, `bucket_for` and `bucket_range` (ISO weeks, timezones, partial buckets), the stats errors, `Fetcher.provenance`, and `compute` for the `activity` group's commit metrics: commits, contributors, active days, lines added, deleted and net, per-repo and `by_author` breakdowns, and the top-contributors table. Groups and metrics not built yet are listed as `unavailable`; stars, forks, watchers and languages wait for step 10.
 Done when: hypothesis tests show buckets partition any date range with no gaps or overlaps, and known-good fixture totals match by hand.
 
 ### 5. Terminal report and CLI
@@ -70,8 +71,13 @@ Done when: the file opens offline with no network request, shows all four granul
 
 ### 8. Delivery data and stats
 
-Deliver: `releases()`, `workflow_runs()`, `star_events()`, the `delivery` group, DORA proxies emitted only when configured, and the `activity` metrics step 4 left unavailable (stars, forks, watchers, languages; the fetch spec needs resources for forks, watchers and languages first, and `PullRequest` fields for labels and its first commit's time, which the hotfix and lead-time proxies read; adding them is a cache schema increase).
-Done when: unconfigured proxies are listed as `unavailable` with a reason, and in-progress runs are refreshed on the next sync.
+Deliver: the `Release` and `WorkflowRun` records and tables, the `PullRequest` fields `labels` and `first_commit_at`, the listing's release probe and `sync_state.probe` (cache schema 3), `releases()` (full read when the probe changes) and `workflow_runs()` (REST, a free 304 when unchanged, in-progress runs re-read), `releases` and `workflow_runs` in `BUILT_RESOURCES`, the `delivery` group (Actions and release metrics, and the DORA proxies emitted only when their inputs exist), the terminal's Delivery by period and DORA proxies by period tables, the HTML page's delivery tiles, charts and tables, the release and run counts in `cache info`, and the README's delivery section. Fetch spec 1.6, stats spec 1.3 and reports spec 1.5; the choices are in the [stats review 3](stats/review-3.md).
+Done when: unconfigured proxies are listed as `unavailable` with a reason, in-progress runs are refreshed on the next sync, an unchanged repo's workflow runs cost one 304 and its releases no request, and `--groups delivery` renders in the terminal, JSON and HTML formats.
+
+### 10. Popularity data and stats
+
+Deliver: fetch resources for stars (`star_events`), forks, watchers and languages, specified first (GitHub records when a star or a fork was made but not when someone started watching, so watchers can be a current count only; the counts and languages can come with the repo listing, the star and fork histories cost a request per 100 per repo), the `activity` metrics step 4 left unavailable, or a group of their own if the spec moves them there, and the languages chart (reports spec, Visualisation choices).
+Done when: specified with its task list.
 
 ### 9. Local web app
 
