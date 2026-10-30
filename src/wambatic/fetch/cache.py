@@ -13,7 +13,7 @@ import wambatic.fetch.errors
 import wambatic.fetch.queries
 import wambatic.version
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS repos (
     issues_updated_at TEXT,
     releases_count INTEGER NOT NULL DEFAULT 0,
     releases_updated_at TEXT,
+    stargazer_count INTEGER NOT NULL DEFAULT 0,
+    fork_count INTEGER NOT NULL DEFAULT 0,
+    watcher_count INTEGER NOT NULL DEFAULT 0,
+    languages TEXT NOT NULL DEFAULT '[]',
+    languages_size INTEGER NOT NULL DEFAULT 0,
     missing INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS repos_owner ON repos (owner);
@@ -95,6 +100,20 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 );
 CREATE INDEX IF NOT EXISTS workflow_runs_repo_created_at ON workflow_runs (repo, created_at);
 CREATE INDEX IF NOT EXISTS workflow_runs_repo_status ON workflow_runs (repo, status);
+CREATE TABLE IF NOT EXISTS star_events (
+    repo TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    starred_at TEXT NOT NULL,
+    PRIMARY KEY (repo, user_id)
+);
+CREATE INDEX IF NOT EXISTS star_events_repo_starred_at ON star_events (repo, starred_at);
+CREATE TABLE IF NOT EXISTS forks (
+    repo TEXT NOT NULL,
+    id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (repo, id)
+);
+CREATE INDEX IF NOT EXISTS forks_repo_created_at ON forks (repo, created_at);
 CREATE TABLE IF NOT EXISTS etags (url TEXT PRIMARY KEY, etag TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_state (
     repo TEXT NOT NULL,
@@ -149,9 +168,12 @@ WORKFLOW_RUN_COLUMNS = (
     'run_started_at',
     'run_attempt',
 )
+STAR_EVENT_COLUMNS = ('repo', 'user_id', 'starred_at')
+FORK_COLUMNS = ('repo', 'id', 'created_at')
 REPO_COLUMNS = (
     'name_with_owner, default_branch, head_oid, is_archived, is_fork, pushed_at, updated_at, '
-    'pull_requests_updated_at, issues_updated_at, releases_count, releases_updated_at, missing'
+    'pull_requests_updated_at, issues_updated_at, releases_count, releases_updated_at, '
+    'stargazer_count, fork_count, watcher_count, languages, languages_size, missing'
 )
 
 
@@ -215,6 +237,11 @@ def repo_from_row(row: tuple[object, ...]) -> wambatic.fetch.base.Repo:
         issues_at,
         releases_count,
         releases_at,
+        stargazers,
+        forks,
+        watchers,
+        languages,
+        languages_size,
         missing,
     ) = row
     return wambatic.fetch.base.Repo(
@@ -229,6 +256,11 @@ def repo_from_row(row: tuple[object, ...]) -> wambatic.fetch.base.Repo:
         issues_updated_at=optional_from_text(None if issues_at is None else str(issues_at)),
         releases_count=int(str(releases_count)),
         releases_updated_at=optional_from_text(None if releases_at is None else str(releases_at)),
+        stargazer_count=int(str(stargazers)),
+        fork_count=int(str(forks)),
+        watcher_count=int(str(watchers)),
+        languages=tuple((str(name), int(size)) for name, size in json.loads(str(languages))),
+        languages_size=int(str(languages_size)),
         missing=bool(missing),
     )
 
@@ -304,6 +336,20 @@ def workflow_run_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.
         updated_at=from_text(str(updated)),
         run_started_at=optional_from_text(None if started is None else str(started)),
         run_attempt=int(str(attempt)),
+    )
+
+
+def star_event_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.StarEvent:
+    user_id, starred_at = row
+    return wambatic.fetch.base.StarEvent(
+        repo=repo, user_id=str(user_id), starred_at=from_text(str(starred_at))
+    )
+
+
+def fork_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.Fork:
+    fork_id, created_at = row
+    return wambatic.fetch.base.Fork(
+        repo=repo, id=int(str(fork_id)), created_at=from_text(str(created_at))
     )
 
 
@@ -387,8 +433,9 @@ class Cache:
             self.connection.executemany(
                 'INSERT OR REPLACE INTO repos (name_with_owner, owner, default_branch, head_oid, '
                 'is_archived, is_fork, pushed_at, updated_at, pull_requests_updated_at, '
-                'issues_updated_at, releases_count, releases_updated_at, missing) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+                'issues_updated_at, releases_count, releases_updated_at, stargazer_count, '
+                'fork_count, watcher_count, languages, languages_size, missing) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
                 [
                     (
                         repo.name_with_owner,
@@ -403,6 +450,11 @@ class Cache:
                         optional_to_text(repo.issues_updated_at),
                         repo.releases_count,
                         optional_to_text(repo.releases_updated_at),
+                        repo.stargazer_count,
+                        repo.fork_count,
+                        repo.watcher_count,
+                        json.dumps([list(language) for language in repo.languages]),
+                        repo.languages_size,
                     )
                     for repo in repos
                 ],
@@ -670,6 +722,46 @@ class Cache:
             gone=gone,
         )
 
+    def write_star_events(
+        self,
+        repo: str,
+        stars: list[wambatic.fetch.base.StarEvent],
+        state: wambatic.fetch.base.SyncState,
+        *,
+        replace: bool,
+    ) -> int:
+        """As `write_commits`, upserting by `user_id`."""
+        return self.write_rows(
+            'star_events',
+            STAR_EVENT_COLUMNS,
+            ('repo', 'user_id'),
+            repo,
+            stars,
+            lambda star: (star.repo, star.user_id, to_text(star.starred_at)),
+            state,
+            replace=replace,
+        )
+
+    def write_forks(
+        self,
+        repo: str,
+        forks: list[wambatic.fetch.base.Fork],
+        state: wambatic.fetch.base.SyncState,
+        *,
+        replace: bool,
+    ) -> int:
+        """As `write_commits`, upserting by id."""
+        return self.write_rows(
+            'forks',
+            FORK_COLUMNS,
+            ('repo', 'id'),
+            repo,
+            forks,
+            lambda fork: (fork.repo, fork.id, to_text(fork.created_at)),
+            state,
+            replace=replace,
+        )
+
     def read_commits(
         self, repo: str, since: datetime.datetime | None, until: datetime.datetime | None
     ) -> list[wambatic.fetch.base.Commit]:
@@ -738,6 +830,30 @@ class Cache:
         )
         return [workflow_run_from_row(repo, row) for row in rows]
 
+    def read_star_events(self, repo: str) -> list[wambatic.fetch.base.StarEvent]:
+        """All the repo's rows, oldest `starred_at` first."""
+        rows = self.read_rows(
+            'star_events',
+            ', '.join(STAR_EVENT_COLUMNS[1:]),
+            repo,
+            None,
+            time_column='starred_at',
+            order='starred_at, user_id',
+        )
+        return [star_event_from_row(repo, row) for row in rows]
+
+    def read_forks(self, repo: str) -> list[wambatic.fetch.base.Fork]:
+        """All the repo's rows, oldest `created_at` first."""
+        rows = self.read_rows(
+            'forks',
+            ', '.join(FORK_COLUMNS[1:]),
+            repo,
+            None,
+            time_column='created_at',
+            order='created_at, id',
+        )
+        return [fork_from_row(repo, row) for row in rows]
+
     def unfinished_runs(self, repo: str) -> list[int]:
         """Ids of the repo's runs whose status is not `completed`, ascending."""
         with self.lock:
@@ -776,6 +892,8 @@ class CacheInfo:
     issues: int
     releases: int
     workflow_runs: int
+    star_events: int
+    forks: int
     last_synced_at: datetime.datetime | None
 
 
@@ -807,6 +925,8 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
         issues = scalar('issues', 'SELECT COUNT(*) FROM issues')
         releases = scalar('releases', 'SELECT COUNT(*) FROM releases')
         workflow_runs = scalar('workflow_runs', 'SELECT COUNT(*) FROM workflow_runs')
+        star_events = scalar('star_events', 'SELECT COUNT(*) FROM star_events')
+        forks = scalar('forks', 'SELECT COUNT(*) FROM forks')
     finally:
         connection.close()
     identity = {key: value for key, value in meta.items() if key != OVERRIDE_KEY}
@@ -823,6 +943,8 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
         issues=int(str(issues or 0)),
         releases=int(str(releases or 0)),
         workflow_runs=int(str(workflow_runs or 0)),
+        star_events=int(str(star_events or 0)),
+        forks=int(str(forks or 0)),
         last_synced_at=None if last_synced is None else from_text(str(last_synced)),
     )
 

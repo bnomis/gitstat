@@ -17,10 +17,10 @@ if typing.TYPE_CHECKING:
     import wambatic.fetch.cache
 
 RESOURCES = frozenset(
-    {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
+    {'commits', 'forks', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
 BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests', 'releases', 'workflow_runs'})
-UNBUILT_RESOURCE_STEPS = {'star_events': 10}
+UNBUILT_RESOURCE_STEPS = {'forks': 10, 'star_events': 10}
 PAGE_SIZE = 100
 BOT_SUFFIX = '[bot]'
 
@@ -57,6 +57,11 @@ class Repo:
     issues_updated_at: datetime.datetime | None = None
     releases_count: int = 0
     releases_updated_at: datetime.datetime | None = None
+    stargazer_count: int = 0
+    fork_count: int = 0
+    watcher_count: int = 0
+    languages: tuple[tuple[str, int], ...] = ()
+    languages_size: int = 0
     missing: bool = False
 
 
@@ -124,6 +129,24 @@ class WorkflowRun:
     updated_at: datetime.datetime
     run_started_at: datetime.datetime | None
     run_attempt: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StarEvent:
+    """A star a user gave a repo; the user is its GraphQL node id, no login is stored."""
+
+    repo: str
+    user_id: str
+    starred_at: datetime.datetime
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Fork:
+    """A direct fork of a repo, from the REST fork list."""
+
+    repo: str
+    id: int
+    created_at: datetime.datetime
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

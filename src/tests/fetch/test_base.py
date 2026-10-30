@@ -59,6 +59,7 @@ def test_commit_records_merges() -> None:
 def test_resources_are_the_spec_names() -> None:
     assert wambatic.fetch.base.RESOURCES == {
         'commits',
+        'forks',
         'issues',
         'pull_requests',
         'releases',
@@ -105,6 +106,21 @@ def test_release_and_workflow_run_are_frozen_and_slotted() -> None:
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(record, field, 2)
         assert not hasattr(record, '__dict__')
+
+
+def test_star_event_and_fork_are_frozen_and_slotted() -> None:
+    star = wambatic.fetch.base.StarEvent('octocat/Hello-World', 'MDQ6VXNlcjE=', NOW)
+    fork = wambatic.fetch.base.Fork('octocat/Hello-World', 1, NOW)
+    for record, field in ((star, 'user_id'), (fork, 'id')):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(record, field, 2)
+        assert not hasattr(record, '__dict__')
+
+
+def test_a_repo_built_without_the_popularity_fields_has_their_defaults() -> None:
+    repo = wambatic.fetch.base.Repo('octocat/Hello-World', 'main', None, False, False, None, NOW)
+    assert (repo.stargazer_count, repo.fork_count, repo.watcher_count) == (0, 0, 0)
+    assert (repo.languages, repo.languages_size) == ((), 0)
 
 
 def test_a_pull_request_and_a_sync_state_built_without_the_new_fields_have_defaults() -> None:
