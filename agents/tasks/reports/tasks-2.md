@@ -144,7 +144,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 3: `Figure`, the palette and the per-period charts
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** large
 **Spec Reference:** API (`Figure`, `build_figures`); Static HTML (Charts, Partial buckets, Palette and themes, Labels and hover, Testing: validators); review-2.md decision 1 and choices 5, 6, 8, 9, 10 and 11
@@ -182,6 +182,10 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Key files: `src/wambatic/reports/figures.py`, `src/tests/reports/test_figures.py`, `src/tests/fixtures/reports.py`
 - plotly.js: [bar](https://plotly.com/javascript/reference/bar/) (`marker.pattern`), [scatter](https://plotly.com/javascript/reference/scatter/) (`connectgaps`, `marker.symbol`), [layout](https://plotly.com/javascript/reference/layout/) (`barmode`, `hovermode`, `annotations`), [`meta`](https://plotly.com/javascript/reference/scatter/#scatter-meta)
 - `figures.py` does not import `plotly`; only the tests do, to validate (review-2.md decision 1).
+- Choices the spec left open: a chart whose series have no value in any bucket is left out (an empty chart says nothing), and the caption sits below the plot as a layout annotation named `caption`, at paper coordinates, so the page script can find it. A line is labelled at its last bucket that has a value, not at a gap.
+- `PALETTE` holds a `Theme` dataclass per theme (`dataclasses.asdict` gives the page script its JSON). `wambatic.reports` is still being imported while its modules load, so `figures.py` reaches `wambatic.reports.rows` and `base` only inside functions.
+- The org fixture has no partial buckets, so its known-good figures carry none; a test sets `provenance['partial_buckets']` for the hatch, open-marker and caption checks.
+- The `activity-lines` test failed first because deleted lines were not negated; fixed in the builder.
 
 ---
 
