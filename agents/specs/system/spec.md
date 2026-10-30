@@ -1,8 +1,8 @@
 # System
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** proposed
-**Date:** 2026-10-29
+**Date:** 2026-10-30
 
 wambatic reports statistics from github.com for a user, a repository or an organisation, as a terminal report, a static HTML report or a local web app, with the numbers bucketed by year, month, week or day. This spec is the top of the set: it fixes the architecture, the boundaries between components, the data flow, the stack and the build order. The detail of each component is in its own spec; where this spec and a component spec differ, the component spec wins and this one is amended.
 
@@ -68,7 +68,7 @@ Rules that hold across the system:
 ## Data flow
 
 1. The CLI or web handler parses `<target>` into a `Subject` and the flags into a `StatsRequest`.
-2. Unless `--no-fetch` applies, the front end calls `Fetcher.sync` for the resources the requested groups need (`stats.resources_for`: commits for activity, pull requests and issues for flow, releases, workflow runs and star events for delivery).
+2. Unless `--no-fetch` applies, the front end calls `Fetcher.sync` for the resources the requested groups need (`stats.resources_for`: commits for activity, pull requests and issues for flow, releases, workflow runs and pull requests for delivery; star events, with the other popularity data, from step 10).
 3. `Fetcher` backfills everything on a subject's first sync and afterwards fetches only the delta since each per-repo, per-resource watermark, and writes it back atomically. `compute` then asks `Fetcher` for the subject's repositories and their typed records, which come from the cache alone; `compute` never syncs.
 4. `compute` normalises timestamps to the request timezone, assigns each record to a bucket, aggregates per group, and returns the `StatsResult`.
 5. A renderer presents the result. The web app repeats steps 1 to 5 per request; the cache makes repeats cheap.
