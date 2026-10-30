@@ -7,14 +7,15 @@ import wambatic.stats.activity
 import wambatic.stats.base
 import wambatic.stats.buckets
 import wambatic.stats.errors
+import wambatic.stats.flow
 
 RESOURCES_BY_GROUP = {
     'activity': frozenset({'commits'}),
     'flow': frozenset({'issues', 'pull_requests'}),
     'delivery': frozenset({'releases', 'star_events', 'workflow_runs'}),
 }
-BUILT_GROUPS = frozenset({'activity'})
-UNBUILT_GROUP_STEPS = {'flow': 6, 'delivery': 8}
+BUILT_GROUPS = frozenset({'activity', 'flow'})
+UNBUILT_GROUP_STEPS = {'delivery': 8}
 UNBUILT_ACTIVITY_METRICS = (
     ('stars', 'stars come from star_events, which step 8 fetches'),
     ('forks', 'forks has no fetch resource yet; it is specified before step 8'),
@@ -77,6 +78,29 @@ async def read_commits(
     return kept
 
 
+async def read_flow(
+    subject: wambatic.fetch.base.Subject,
+    fetcher: wambatic.fetch.base.Fetcher,
+    repos: list[wambatic.fetch.base.Repo],
+    request: wambatic.stats.base.StatsRequest,
+) -> tuple[list[wambatic.fetch.base.PullRequest], list[wambatic.fetch.base.Issue]]:
+    """The cached pull requests and issues updated since a day before the requested start (every
+    event of an item is at or before its `updated_at`), from the subject's own items only for a
+    user subject. The flow aggregation keeps the events whose local date is in the range."""
+    lo = None if request.since is None else utc_midnight(request.since) - ONE_DAY
+    login = subject.login.casefold()
+
+    def wanted(author: str | None) -> bool:
+        return subject.kind != 'user' or (author or '').casefold() == login
+
+    pulls: list[wambatic.fetch.base.PullRequest] = []
+    issues: list[wambatic.fetch.base.Issue] = []
+    for repo in repos:
+        pulls.extend([p async for p in fetcher.pull_requests(repo, lo) if wanted(p.author_login)])
+        issues.extend([i async for i in fetcher.issues(repo, lo) if wanted(i.author_login)])
+    return pulls, issues
+
+
 async def compute(
     subject: wambatic.fetch.base.Subject,
     fetcher: wambatic.fetch.base.Fetcher,
@@ -105,15 +129,26 @@ async def compute(
         raise wambatic.stats.errors.EmptySubjectError(
             f'the cache holds no repositories for {subject.login}'
         )
-    commits = await read_commits(subject, fetcher, repos, request)
-    if not commits:
-        raise wambatic.stats.errors.EmptySubjectError('no commits in the cache for this range')
+    commits: list[wambatic.fetch.base.Commit] = []
+    pulls: list[wambatic.fetch.base.PullRequest] = []
+    issues: list[wambatic.fetch.base.Issue] = []
+    if 'activity' in built:
+        commits = await read_commits(subject, fetcher, repos, request)
+    if 'flow' in built:
+        pulls, issues = await read_flow(subject, fetcher, repos, request)
+    empty = wambatic.stats.errors.EmptySubjectError(
+        f'no {" or ".join(sorted(built))} records in the cache for this range'
+    )
+    if not (commits or pulls or issues):
+        raise empty
     now = (clock or (lambda: datetime.datetime.now(datetime.UTC)))()
     tz = request.tz
     granularity = request.granularity
     since = request.since
     if since is None:
-        earliest = min(commit.authored_at for commit in commits).astimezone(tz).date()
+        firsts = [commit.authored_at for commit in commits]
+        firsts += [pull.created_at for pull in pulls] + [issue.created_at for issue in issues]
+        earliest = min(firsts).astimezone(tz).date()
         since = (
             earliest
             if granularity is wambatic.stats.base.Granularity.TOTAL
@@ -123,17 +158,25 @@ async def compute(
     if since > until:
         raise wambatic.stats.errors.InvalidRangeError(f'since {since} is after until {until}')
     commits = [c for c in commits if since <= c.authored_at.astimezone(tz).date() <= until]
-    if not commits:
-        raise wambatic.stats.errors.EmptySubjectError('no commits in the cache for this range')
+    flow_found = wambatic.stats.flow.has_event_in_range(pulls, issues, tz, since, until)
+    if not (commits or flow_found):
+        raise empty
     buckets = wambatic.stats.buckets.bucket_range(since, until, granularity)
-    series, tables = wambatic.stats.activity.aggregate(
-        commits,
-        buckets,
-        tz,
-        request.settings,
-        by_author=request.by_author,
-        by_repo=subject.kind != 'repo',
-    )
+    series: list[wambatic.stats.base.Series] = []
+    tables: dict[str, list[dict[str, typing.Any]]] = {}
+    if 'activity' in built:
+        series, tables = wambatic.stats.activity.aggregate(
+            commits,
+            buckets,
+            tz,
+            request.settings,
+            by_author=request.by_author,
+            by_repo=subject.kind != 'repo',
+        )
+    if 'flow' in built:
+        totals = len(wambatic.stats.activity.TOTAL_METRICS) if 'activity' in built else 0
+        flow = wambatic.stats.flow.aggregate(pulls, issues, buckets, tz, since, until)
+        series = [*series[:totals], *flow, *series[totals:]]
     tables['unavailable'] = unavailable(request.groups)
     provenance = await fetcher.provenance(subject, resources_for(built))
     provenance['computed_at'] = now.astimezone(datetime.UTC).isoformat()

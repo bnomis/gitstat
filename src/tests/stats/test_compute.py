@@ -12,6 +12,7 @@ import wambatic.fetch.base
 import wambatic.stats
 import wambatic.stats.base
 import wambatic.stats.errors
+import wambatic.stats.flow
 
 Granularity = wambatic.stats.base.Granularity
 Request = wambatic.stats.base.StatsRequest
@@ -19,6 +20,7 @@ UTC = datetime.UTC
 BERLIN = zoneinfo.ZoneInfo('Europe/Berlin')
 ALPHA_SUBJECT = wambatic.fetch.base.Subject('repo', 'octo-org', 'alpha')
 ACTIVITY = frozenset({'activity'})
+FLOW = frozenset({'flow'})
 TOTALS = ('commits', 'contributors', 'active_days', 'lines_added', 'lines_deleted', 'lines_net')
 BREAKDOWN = ('commits', 'lines_added', 'lines_deleted', 'lines_net')
 
@@ -211,13 +213,14 @@ def test_a_commit_after_today_is_left_out_when_the_end_is_open(
     assert pick(result, 'commits')['2027-01'] == 1  # a6; b4 on the 15th is in the future
 
 
-def test_the_default_request_lists_flow_as_unavailable_and_still_returns_activity(
+def test_the_default_request_returns_flow_beside_activity_with_no_flow_row_unavailable(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = asyncio.run(wambatic.stats.compute(fixture.ORG, stats_fetcher, Request(), clock=clock))
     assert pick(result, 'commits')
+    assert pick(result, 'prs_opened')
     rows = {row['metric']: row['reason'] for row in result.tables['unavailable']}
-    assert 'step 6' in rows['flow']
+    assert 'flow' not in rows
     assert {'stars', 'forks', 'watchers', 'languages'} <= rows.keys()
     assert 'step 8' in rows['stars']
     assert 'delivery' not in rows
@@ -228,8 +231,128 @@ def test_every_requested_group_is_in_the_series_or_unavailable(
 ) -> None:
     result = compute(stats_fetcher, groups=frozenset({'activity', 'flow', 'delivery'}))
     rows = {row['metric'] for row in result.tables['unavailable']}
-    assert {'flow', 'delivery'} <= rows
+    assert 'delivery' in rows
+    assert 'flow' not in rows
     assert pick(result, 'commits')
+    assert pick(result, 'prs_opened')
+
+
+def flow_only(
+    fetcher: wambatic.fetch.base.Fetcher,
+    subject: wambatic.fetch.base.Subject = fixture.ORG,
+    **changes: object,
+) -> wambatic.stats.base.StatsResult:
+    return compute(fetcher, subject, groups=FLOW, **changes)
+
+
+def test_the_org_flow_series_equal_the_hand_written_values_in_utc(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=frozenset({'activity', 'flow'}))
+    for metric, expected in fixture.ORG_FLOW_BY_MONTH_UTC.items():
+        assert pick(result, metric) == pytest.approx(expected), metric
+
+
+def test_the_org_flow_series_equal_the_hand_written_values_in_berlin(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = flow_only(stats_fetcher, tz=BERLIN)
+    for metric, expected in fixture.ORG_FLOW_BY_MONTH_UTC.items():
+        expected = fixture.ORG_FLOW_BY_MONTH_BERLIN.get(metric, expected)
+        assert pick(result, metric) == pytest.approx(expected), metric
+
+
+def test_a_user_subject_counts_only_the_users_own_pull_requests_and_issues(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = flow_only(stats_fetcher, fixture.USER, granularity=Granularity.TOTAL)
+    for metric, expected in fixture.USER_FLOW_TOTAL_UTC.items():
+        assert pick(result, metric) == pytest.approx({'total': expected}), metric
+
+
+def test_flow_alone_with_no_start_begins_at_the_earliest_pull_request_or_issue(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = flow_only(stats_fetcher, since=None, until=fixture.UNTIL)
+    assert result.since == datetime.date(2026, 8, 1)  # alpha's pull request created on 08-01
+    assert list(pick(result, 'prs_opened'))[:3] == ['2026-08', '2026-09', '2026-10']
+    assert pick(result, 'prs_opened')['2026-08'] == 1
+    assert pick(result, 'prs_merged')['2026-08'] == 1
+
+
+def test_a_range_with_pull_requests_but_no_commits_gives_zero_activity_and_the_flow_values(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(
+        stats_fetcher,
+        groups=frozenset({'activity', 'flow'}),
+        since=datetime.date(2026, 11, 1),
+        until=datetime.date(2026, 11, 30),
+    )
+    assert pick(result, 'commits') == {'2026-11': 0}
+    assert pick(result, 'lines_net') == {'2026-11': 0}
+    assert pick(result, 'prs_opened') == {'2026-11': 1}
+    assert pick(result, 'issues_closed') == {'2026-11': 1}
+    assert result.tables['top_contributors'] == []
+
+
+def test_a_range_with_neither_commits_nor_flow_events_is_empty(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='activity or flow.*range'):
+        compute(
+            stats_fetcher,
+            groups=frozenset({'activity', 'flow'}),
+            since=datetime.date(2025, 1, 1),
+            until=datetime.date(2025, 2, 1),
+        )
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='flow.*range'):
+        flow_only(stats_fetcher, since=datetime.date(2025, 1, 1), until=datetime.date(2025, 2, 1))
+
+
+def test_a_pull_request_updated_in_range_but_with_every_event_outside_it_is_not_a_record(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError):
+        flow_only(
+            stats_fetcher, since=datetime.date(2026, 12, 1), until=datetime.date(2026, 12, 29)
+        )
+
+
+def test_the_provenance_carries_a_fetched_at_for_each_flow_resource(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=frozenset({'activity', 'flow'}))
+    for resource in ('commits', 'issues', 'pull_requests'):
+        assert result.provenance[f'fetched_at:{resource}'] == fixture.ALPHA_SYNCED_AT.isoformat()
+    assert 'fetched_at:issues' not in compute(stats_fetcher).provenance
+
+
+def test_the_series_come_in_the_order_activity_flow_breakdowns(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(stats_fetcher, groups=frozenset({'activity', 'flow'}), by_author=True)
+    names = [(s.metric, s.by_kind) for s in result.series]
+    totals = [name for name, kind in names if kind is None]
+    assert totals == list(TOTALS) + [name for name, _ in wambatic.stats.flow.FLOW_METRICS]
+    first_breakdown = next(i for i, (_, kind) in enumerate(names) if kind is not None)
+    assert first_breakdown == len(totals)
+    assert names[first_breakdown][1] == 'author'
+
+
+def test_a_flow_only_result_has_no_activity_series_or_tables_beyond_unavailable(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = flow_only(stats_fetcher, by_author=True)
+    assert [s.metric for s in result.series] == [n for n, _ in wambatic.stats.flow.FLOW_METRICS]
+    assert set(result.tables) == {'unavailable'}
+
+
+def test_delivery_alone_still_raises_naming_step_8(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
+        compute(stats_fetcher, groups=frozenset({'delivery'}))
 
 
 def test_the_provenance_records_the_cache_the_clock_the_zone_and_the_partial_buckets(
@@ -258,10 +381,8 @@ def test_every_error_in_the_validation_order_comes_before_the_cache_is_read() ->
         untouched(fixture.USER, by_author=True, since=fixture.UNTIL, until=fixture.SINCE)
     with pytest.raises(wambatic.stats.errors.InvalidRangeError):
         untouched(since=fixture.UNTIL, until=fixture.SINCE)
-    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'flow \(step 6\)'):
-        untouched(groups=frozenset({'flow'}))
     with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
-        untouched(groups=frozenset({'delivery', 'flow'}))
+        untouched(groups=frozenset({'delivery'}))
 
 
 def test_a_subject_with_no_repositories_is_empty(

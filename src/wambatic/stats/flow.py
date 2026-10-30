@@ -33,6 +33,24 @@ def p90(values: collections.abc.Sequence[float]) -> float:
     return statistics.quantiles(list(values), n=10, method='inclusive')[8]
 
 
+def has_event_in_range(
+    pull_requests: collections.abc.Iterable[wambatic.fetch.base.PullRequest],
+    issues: collections.abc.Iterable[wambatic.fetch.base.Issue],
+    tz: datetime.tzinfo,
+    since: datetime.date,
+    until: datetime.date,
+) -> bool:
+    """Whether any record has an event that a flow series counts, on a local date in the range."""
+    moments: list[datetime.datetime | None] = []
+    for pull in pull_requests:
+        moments += [pull.created_at, pull.first_review_at, pull.merged_at]
+    for issue in issues:
+        moments += [issue.created_at, issue.closed_at]
+    return any(
+        moment is not None and since <= moment.astimezone(tz).date() <= until for moment in moments
+    )
+
+
 def aggregate(
     pull_requests: collections.abc.Iterable[wambatic.fetch.base.PullRequest],
     issues: collections.abc.Iterable[wambatic.fetch.base.Issue],
