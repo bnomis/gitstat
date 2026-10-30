@@ -97,3 +97,13 @@ def test_the_step_6_fetch_records_are_exported(name: str) -> None:
 
 def test_the_built_resources_include_issues_and_pull_requests() -> None:
     assert {'issues', 'pull_requests'} <= wambatic.fetch.BUILT_RESOURCES
+
+
+@pytest.mark.parametrize('name', ['Release', 'WorkflowRun'])
+def test_the_step_8_fetch_records_are_exported(name: str) -> None:
+    assert name in wambatic.fetch.__all__
+    assert getattr(wambatic.fetch, name)
+
+
+def test_the_built_resources_include_releases_and_workflow_runs() -> None:
+    assert {'releases', 'workflow_runs'} <= wambatic.fetch.BUILT_RESOURCES

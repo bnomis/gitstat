@@ -1,5 +1,7 @@
 import dataclasses
 
+import pytest
+
 import tests.fixtures.stats as fixture
 import wambatic.reports.rows
 import wambatic.stats.base
@@ -192,3 +194,120 @@ def test_the_provenance_lines_start_with_the_computed_time(
         provenance={**org_result.provenance, 'version_override_at': '2027-01-20T12:00:00+00:00'},
     )
     assert 'ignore-cache-version' in wambatic.reports.rows.provenance_lines(warned)[-1]
+
+
+def delivery_expected(
+    metrics: tuple[str, ...], *sources: dict[str, dict[str, float]]
+) -> dict[str, dict[str, float | None]]:
+    """The hand-worked values by month for `metrics`, `None` where no source has one."""
+    merged = {metric: values for source in sources for metric, values in source.items()}
+    return {
+        label: {metric: merged[metric].get(label) for metric in metrics} for label in fixture.LABELS
+    }
+
+
+def assert_cells_match(
+    actual: dict[str, dict[str, float | None]], expected: dict[str, dict[str, float | None]]
+) -> None:
+    assert actual.keys() == expected.keys()
+    for label, cells in expected.items():
+        for metric, value in cells.items():
+            found = actual[label][metric]
+            if value is None:
+                assert found is None, (label, metric)
+            else:
+                assert found == pytest.approx(value), (label, metric)
+
+
+def test_the_delivery_rows_are_the_hand_worked_months_with_no_value_as_none(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    table = wambatic.reports.rows.delivery_table(delivery_result)
+    assert table is not None
+    assert table.title == 'Delivery by period'
+    assert table.metrics == wambatic.reports.rows.DELIVERY_TABLE_METRICS
+    assert table.headers == (
+        'Runs',
+        'Success',
+        'Duration p50',
+        'Duration p90',
+        'Releases',
+        'Release interval p50',
+    )
+    assert_cells_match(
+        table_by_label(table), delivery_expected(table.metrics, fixture.ORG_DELIVERY_BY_MONTH_UTC)
+    )
+    assert table_by_label(table)['2026-11']['workflow_success_rate'] is None
+
+
+def test_the_delivery_total_row_adds_runs_and_releases_only(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    table = wambatic.reports.rows.delivery_table(delivery_result)
+    assert table is not None
+    assert table.total is not None
+    total = dict(zip(table.metrics, table.total, strict=True))
+    assert total == {
+        'workflow_runs': sum(fixture.ORG_DELIVERY_BY_MONTH_UTC['workflow_runs'].values()),
+        'workflow_success_rate': None,
+        'workflow_duration_p50': None,
+        'workflow_duration_p90': None,
+        'release_count': sum(fixture.ORG_DELIVERY_BY_MONTH_UTC['release_count'].values()),
+        'release_interval_p50': None,
+    }
+
+
+def test_the_dora_rows_are_the_hand_worked_months_of_the_release_deployments(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    table = wambatic.reports.rows.dora_table(delivery_result)
+    assert table is not None
+    assert table.title == 'DORA proxies by period'
+    assert table.metrics == wambatic.reports.rows.DORA_TABLE_METRICS
+    assert table.headers == (
+        'Deployments',
+        'Lead time p50',
+        'Lead time p90',
+        'Change failure',
+        'Restore p50',
+        'Restore p90',
+    )
+    assert_cells_match(
+        table_by_label(table),
+        delivery_expected(table.metrics, fixture.ORG_DORA_RELEASES_BY_MONTH_UTC),
+    )
+    assert table.total is not None
+    assert table.total[0] == sum(fixture.ORG_DORA_RELEASES_BY_MONTH_UTC['deployments'].values())
+    assert all(value is None for value in table.total[1:])
+
+
+def test_the_dora_table_has_only_the_columns_of_the_proxies_the_result_has(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    kept = [s for s in delivery_result.series if s.metric != 'change_failure_rate']
+    table = wambatic.reports.rows.dora_table(dataclasses.replace(delivery_result, series=kept))
+    assert table is not None
+    assert 'change_failure_rate' not in table.metrics
+    assert 'Change failure' not in table.headers
+    assert len(table.metrics) == len(wambatic.reports.rows.DORA_TABLE_METRICS) - 1
+
+
+def test_a_result_without_delivery_or_proxy_series_has_neither_table(
+    org_result: wambatic.stats.base.StatsResult, delivery_result: wambatic.stats.base.StatsResult
+) -> None:
+    assert not wambatic.reports.rows.has_delivery(org_result)
+    assert not wambatic.reports.rows.has_dora(org_result)
+    assert wambatic.reports.rows.delivery_table(org_result) is None
+    assert wambatic.reports.rows.dora_table(org_result) is None
+    runs_only = [s for s in delivery_result.series if s.metric == 'workflow_runs']
+    only = dataclasses.replace(delivery_result, series=runs_only)
+    assert wambatic.reports.rows.has_delivery(only)
+    assert wambatic.reports.rows.dora_table(only) is None
+
+
+def test_the_trend_metrics_end_with_the_three_delivery_counts() -> None:
+    assert wambatic.reports.rows.TREND_METRICS[-3:] == (
+        'workflow_runs',
+        'release_count',
+        'deployments',
+    )

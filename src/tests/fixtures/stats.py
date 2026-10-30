@@ -264,6 +264,8 @@ def pull(
     closed: str | None = None,
     updated: str | None = None,
     size: tuple[int, int] = (1, 1),
+    labels: tuple[str, ...] = (),
+    first_commit: str | None = None,
 ) -> wambatic.fetch.base.PullRequest:
     """A pull request; `closed` defaults to `merged`, and `updated` to its last event."""
     events = [created, review, merged, closed]
@@ -279,6 +281,8 @@ def pull(
         first_review_at=None if review is None else moment(review),
         additions=size[0],
         deletions=size[1],
+        labels=labels,
+        first_commit_at=None if first_commit is None else moment(first_commit),
     )
 
 
@@ -309,6 +313,7 @@ PULL_REQUESTS = [
         review='2026-10-05T14:00',
         merged='2026-10-06T10:00',
         size=(10, 5),
+        first_commit='2026-10-04T10:00',
     ),  # review 4h, merge 24h, size 15
     pull(
         ALPHA,
@@ -318,6 +323,7 @@ PULL_REQUESTS = [
         review='2026-10-10T20:00',
         merged='2026-10-12T08:00',
         size=(30, 10),
+        labels=('bug', 'Hotfix'),  # a hotfix, matched whatever its case
     ),  # review 12h, merge 48h, size 40
     pull(
         ALPHA,
@@ -327,6 +333,7 @@ PULL_REQUESTS = [
         review='2026-10-21T09:00',
         merged='2026-10-23T09:00',
         size=(8, 2),
+        first_commit='2026-10-19T09:00',
     ),  # review 24h, merge 72h, size 10
     pull(ALPHA, 4, 'octocat', '2026-10-25T09:00', closed='2026-10-26T09:00'),  # closed unmerged
     # created in September: merged in October, but reviewed (and created) outside the range
@@ -338,6 +345,7 @@ PULL_REQUESTS = [
         review='2026-09-29T12:00',
         merged='2026-10-02T12:00',
         size=(50, 50),
+        first_commit='2026-09-27T12:00',
     ),  # merge 96h, size 100
     pull(ALPHA, 6, 'hubot', '2026-11-10T09:00'),  # open all through November
     # merged at 23:30 UTC on 12-31, which is 00:30 on 01-01 in Berlin
@@ -367,6 +375,7 @@ PULL_REQUESTS = [
         review='2027-01-12T10:00',
         merged='2027-01-13T09:00',
         size=(12, 3),
+        first_commit='2027-01-11T09:00',
     ),  # review 1h, merge 24h, size 15
     # created and reviewed inside the range, merged the day after it ends
     pull(
@@ -377,6 +386,7 @@ PULL_REQUESTS = [
         review='2027-01-31T09:00',
         merged='2027-02-01T08:00',
         size=(7, 7),
+        labels=('hotfix',),  # restored on 02-01, after the range
     ),  # review 24h
     # gamma, owned by the user octocat
     pull(
@@ -485,3 +495,216 @@ USER_FLOW_TOTAL_UTC: dict[str, float] = {
     'time_to_close_p90': 72.0,
     'pr_size_p50': 10,
 }
+
+
+def release(
+    repo_name: str, tag: str, published: str, *, prerelease: bool = False
+) -> wambatic.fetch.base.Release:
+    """A release created an hour before it was published."""
+    when = moment(published)
+    return wambatic.fetch.base.Release(
+        repo=repo_name,
+        tag_name=tag,
+        created_at=when - datetime.timedelta(hours=1),
+        published_at=when,
+        is_prerelease=prerelease,
+    )
+
+
+RELEASES = [
+    # alpha
+    release(ALPHA, 'v0.9.0', '2026-09-20T10:00'),  # before the range
+    release(ALPHA, 'v1.0.0', '2026-10-06T12:00'),
+    release(ALPHA, 'v1.1.0-rc1', '2026-10-20T12:00', prerelease=True),
+    release(ALPHA, 'v1.1.0', '2026-10-25T10:00'),
+    release(ALPHA, 'v1.2.0', '2026-12-31T23:45'),  # 2027-01-01 00:45 in Berlin
+    # beta
+    release(BETA, 'b1.0', '2026-10-15T16:00'),
+    release(BETA, 'b1.1', '2027-01-14T12:00'),
+    # gamma, owned by the user octocat
+    release(GAMMA, 'g1.0', '2026-10-12T12:00'),
+]
+
+WORKFLOW_PATHS = {
+    'ci': ('.github/workflows/ci.yml', 'CI'),
+    'deploy': ('.github/workflows/deploy.yml', 'Deploy'),
+}
+
+
+def run(
+    repo_name: str,
+    run_id: int,
+    created: str,
+    conclusion: str | None,
+    minutes: int,
+    *,
+    status: str = 'completed',
+    started: bool = True,
+    workflow: str = 'ci',
+) -> wambatic.fetch.base.WorkflowRun:
+    """A run that started when it was created (unless `started` is false) and last updated
+    `minutes` later."""
+    when = moment(created)
+    path, name = WORKFLOW_PATHS[workflow]
+    return wambatic.fetch.base.WorkflowRun(
+        repo=repo_name,
+        id=run_id,
+        workflow_path=path,
+        name=name,
+        event='push',
+        head_branch='main',
+        status=status,
+        conclusion=conclusion,
+        created_at=when,
+        updated_at=when + datetime.timedelta(minutes=minutes),
+        run_started_at=when if started else None,
+        run_attempt=1,
+    )
+
+
+WORKFLOW_RUNS = [
+    # alpha
+    run(ALPHA, 101, '2026-10-05T10:00', 'success', 6),
+    run(ALPHA, 102, '2026-10-05T15:00', 'failure', 10),
+    run(ALPHA, 103, '2026-10-20T09:00', 'success', 12),
+    run(ALPHA, 104, '2026-10-20T09:30', 'cancelled', 1),  # not an outcome of the code
+    run(ALPHA, 105, '2026-10-06T12:00', 'success', 8, workflow='deploy'),
+    run(ALPHA, 106, '2026-10-25T10:00', 'skipped', 2),  # not an outcome of the code
+    run(ALPHA, 107, '2026-12-31T23:30', None, 10, status='in_progress'),  # 01-01 in Berlin
+    run(ALPHA, 108, '2027-01-10T09:00', None, 0, status='queued', started=False),
+    run(ALPHA, 109, '2027-01-12T10:00', 'timed_out', 30),
+    run(ALPHA, 110, '2027-01-12T11:00', 'startup_failure', 0, started=False),
+    run(ALPHA, 111, '2026-09-30T12:00', 'success', 3),  # before the range
+    # beta
+    run(BETA, 201, '2026-10-15T09:00', 'success', 4),
+    run(BETA, 202, '2027-01-14T12:00', 'success', 20, workflow='deploy'),
+    run(BETA, 203, '2027-01-31T23:30', 'success', 5),  # 02-01 in Berlin, after the range
+    # gamma, owned by the user octocat
+    run(GAMMA, 301, '2026-10-10T09:00', 'success', 5),
+    run(GAMMA, 302, '2026-11-05T09:00', 'failure', 9),
+]
+
+# The org (alpha and beta) by month in UTC, the Actions and release series: metric -> label ->
+# value, a month with no value left out. Checked by hand on 2026-10-30. Percentiles are as in
+# ORG_FLOW_BY_MONTH_UTC: median, and (v[j] * (10 - d) + v[j + 1] * d) / 10 with
+# j, d = divmod(9 * m, 10) for the 90th, m being the last index of the sorted values.
+ORG_DELIVERY_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    # by creation date. Oct: 101 102 103 104 105 106 201 (111 is on 09-30). Dec: 107.
+    # Jan: 108 109 110 202 203
+    'workflow_runs': {'2026-10': 7, '2026-11': 0, '2026-12': 1, '2027-01': 5},
+    # completed runs that are a success, failure, timed_out or startup_failure.
+    # Oct: 101 s, 102 f, 103 s, 105 s, 201 s (104 cancelled and 106 skipped are left out): 4 / 5.
+    # Dec: 107 is in progress. Jan: 109 f, 110 f, 202 s, 203 s (108 is queued): 2 / 4
+    'workflow_success_rate': {'2026-10': 4 / 5, '2027-01': 2 / 4},
+    # completed runs that started, updated_at less run_started_at in minutes.
+    # Oct [6, 10, 12, 1, 8, 2, 4] sorted [1, 2, 4, 6, 8, 10, 12]: p50 6, p90 (10 * 6 + 12 * 4) / 10
+    # = 10.8. Jan 109 30, 202 20, 203 5 (110 never started) sorted [5, 20, 30]: p50 20,
+    # p90 (20 * 2 + 30 * 8) / 10 = 28
+    'workflow_duration_p50': {'2026-10': 6.0, '2027-01': 20.0},
+    'workflow_duration_p90': {'2026-10': 10.8, '2027-01': 28.0},
+    # by publication date, the prerelease included. Oct: v1.0.0 v1.1.0-rc1 v1.1.0 b1.0.
+    # Dec: v1.2.0. Jan: b1.1 (v0.9.0 is on 09-20)
+    'release_count': {'2026-10': 4, '2026-11': 0, '2026-12': 1, '2027-01': 1},
+    # whole days since the repo's previous release, by the later one. alpha: v0.9.0 -> v1.0.0
+    # 16 days 2 h; -> rc1 14 days; -> v1.1.0 4 days 22 h; -> v1.2.0 67 days 13 h 45 min.
+    # beta: b1.0 -> b1.1 90 days 20 h. Oct [16, 14, 4]: median_low 14. Dec [67]. Jan [90]
+    'release_interval_p50': {'2026-10': 14, '2026-12': 67, '2027-01': 90},
+}
+
+# In Europe/Berlin run 107 (23:30 UTC on 12-31) and v1.2.0 (23:45) are on 2027-01-01 and run 203
+# (23:30 UTC on 01-31) is on 02-01, after the range. Jan runs: 107 108 109 110 202.
+ORG_DELIVERY_BY_MONTH_BERLIN: dict[str, dict[str, float]] = {
+    'workflow_runs': {'2026-10': 7, '2026-11': 0, '2026-12': 0, '2027-01': 5},
+    # Jan 109 f, 110 f, 202 s: 1 / 3
+    'workflow_success_rate': {'2026-10': 4 / 5, '2027-01': 1 / 3},
+    # Jan [30, 20] sorted [20, 30]: p50 25, p90 (20 * 1 + 30 * 9) / 10 = 29
+    'workflow_duration_p50': {'2026-10': 6.0, '2027-01': 25.0},
+    'workflow_duration_p90': {'2026-10': 10.8, '2027-01': 29.0},
+    'release_count': {'2026-10': 4, '2026-11': 0, '2026-12': 0, '2027-01': 2},  # v1.2.0 b1.1
+    # Jan [67, 90]: median_low 67
+    'release_interval_p50': {'2026-10': 14, '2027-01': 67},
+}
+
+# DORA proxies of the org by month in UTC, with the releases that are not prereleases as the
+# deployments: v1.0.0, v1.1.0, v1.2.0, b1.0, b1.1 (and v0.9.0 before the range).
+ORG_DORA_RELEASES_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    'deployments': {'2026-10': 3, '2026-11': 0, '2026-12': 1, '2027-01': 1},  # v1.0.0 v1.1.0 b1.0
+    # merged pull requests to the first later deployment of their repo, in hours, from the first
+    # commit (the creation when there is none), by the deployment's date:
+    # alpha-p1 10-04T10:00 -> v1.0.0 10-06T12:00: 50. alpha-p2 10-10T08:00 -> v1.1.0 (the rc is
+    # not a deployment) 10-25T10:00: 362. alpha-p3 10-19T09:00 -> v1.1.0: 145. alpha-p5
+    # 09-27T12:00 -> v1.0.0: 216. beta-p1 10-15T09:00 -> b1.0 10-15T16:00: 7.
+    # alpha-p7 12-30T10:00 -> v1.2.0 12-31T23:45: 37.75. beta-p2 01-11T09:00 -> b1.1
+    # 01-14T12:00: 75. alpha-p9 (merged 08-05) -> v0.9.0 on 09-20, before the range. alpha-p4 was
+    # not merged, alpha-p6 and p8 are open and beta-p3 merged after the last deployment.
+    # Oct [7, 50, 145, 216, 362]: p50 145, p90 (216 * 4 + 362 * 6) / 10 = 303.6
+    'lead_time_p50': {'2026-10': 145.0, '2026-12': 37.75, '2027-01': 75.0},
+    'lead_time_p90': {'2026-10': 303.6, '2026-12': 37.75, '2027-01': 75.0},
+    # the hotfix pull requests are alpha-p2 (label Hotfix, opened 10-10T08:00) and beta-p3
+    # (opened 01-30T09:00). v1.0.0 (10-06T12:00) is followed by alpha-p2 within 7 days; v1.1.0
+    # and b1.0 are not (no later hotfix of their repo); v1.2.0 (window ends 01-07) and b1.1
+    # (window ends 01-21) are followed by none: Oct 1 / 3, Dec 0 / 1, Jan 0 / 1
+    'change_failure_rate': {'2026-10': 1 / 3, '2026-12': 0.0, '2027-01': 0.0},
+    # hotfix pull requests, opened to merged, by merge date. alpha-p2 10-10T08:00 -> 10-12T08:00:
+    # 48 in Oct. beta-p3 merges on 02-01, after the range
+    'time_to_restore_p50': {'2026-10': 48.0},
+    'time_to_restore_p90': {'2026-10': 48.0},
+}
+
+# In Berlin v1.2.0 is a deployment of 2027-01-01 (Jan: v1.2.0, b1.1), so alpha-p7's lead time
+# moves to January: [37.75, 75], p50 56.375, p90 (37.75 * 1 + 75 * 9) / 10 = 71.275
+ORG_DORA_RELEASES_BY_MONTH_BERLIN: dict[str, dict[str, float]] = {
+    'deployments': {'2026-10': 3, '2026-11': 0, '2026-12': 0, '2027-01': 2},
+    'lead_time_p50': {'2026-10': 145.0, '2027-01': 56.375},
+    'lead_time_p90': {'2026-10': 303.6, '2027-01': 71.275},
+    'change_failure_rate': {'2026-10': 1 / 3, '2027-01': 0.0},  # Jan 0 / 2
+    'time_to_restore_p50': {'2026-10': 48.0},
+    'time_to_restore_p90': {'2026-10': 48.0},
+}
+
+# With `deploy_workflow` set to deploy.yml (or Deploy), the deployments are the successful
+# completed runs of that workflow, at updated_at: run 105 at 10-06T12:08 (alpha) and run 202 at
+# 01-14T12:20 (beta).
+ORG_DORA_WORKFLOW_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    'deployments': {'2026-10': 1, '2026-11': 0, '2026-12': 0, '2027-01': 1},
+    # alpha-p1 10-04T10:00 -> 10-06T12:08: 50 h 8 min. alpha-p5 09-27T12:00 -> 10-06T12:08:
+    # 216 h 8 min. alpha-p9 08-01T09:00 -> 10-06T12:08: 66 days 3 h 8 min = 1587 h 8 min (no
+    # earlier deployment). beta-p1 10-15T09:00 -> 01-14T12:20: 91 days 3 h 20 min = 2187 h 20 min.
+    # beta-p2 01-11T09:00 -> 01-14T12:20: 75 h 20 min. alpha-p2, p3 and p7 merge after run 105 and
+    # beta-p3 after run 202: no deployment follows them.
+    # Oct [50.1333, 216.1333, 1587.1333]: p50 216.1333, p90 (216.1333 * 2 + 1587.1333 * 8) / 10
+    # = 1312.9333. Jan [75.3333, 2187.3333]: p50 1131.3333, p90 (75.3333 + 2187.3333 * 9) / 10
+    # = 1976.1333
+    'lead_time_p50': {'2026-10': 216 + 8 / 60, '2027-01': (75 + 20 / 60 + 2187 + 20 / 60) / 2},
+    'lead_time_p90': {
+        '2026-10': ((216 + 8 / 60) * 2 + (1587 + 8 / 60) * 8) / 10,
+        '2027-01': ((75 + 20 / 60) + (2187 + 20 / 60) * 9) / 10,
+    },
+    # run 105 is followed by alpha-p2 within 7 days: Oct 1 / 1. Run 202: Jan 0 / 1
+    'change_failure_rate': {'2026-10': 1.0, '2027-01': 0.0},
+    'time_to_restore_p50': {'2026-10': 48.0},
+    'time_to_restore_p90': {'2026-10': 48.0},
+}
+
+# The user octocat's delivery over the whole range as one bucket, which counts every item of
+# gamma whoever made it. Runs 301 s, 302 f: 1 / 2; minutes [5, 9]: p50 7, p90 (5 + 9 * 9) / 10
+# = 8.6. One release, so no interval. gamma-p1 10-10T09:00 -> g1.0 10-12T12:00: 51 h; gamma-p2
+# merges after it. No pull request has a hotfix label.
+USER_DELIVERY_TOTAL_UTC: dict[str, float] = {
+    'workflow_runs': 2,
+    'workflow_success_rate': 0.5,
+    'workflow_duration_p50': 7.0,
+    'workflow_duration_p90': 8.6,
+    'release_count': 1,
+    'deployments': 1,
+    'lead_time_p50': 51.0,
+    'lead_time_p90': 51.0,
+}
+
+UNAVAILABLE_NO_HOTFIX: list[dict[str, str]] = [
+    {
+        'metric': metric,
+        'reason': 'no pull request in the cache has a label in stats.hotfix_labels',
+    }
+    for metric in ('change_failure_rate', 'time_to_restore_p50', 'time_to_restore_p90')
+]

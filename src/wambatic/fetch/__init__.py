@@ -6,9 +6,11 @@ from .base import (
     Fetcher,
     Issue,
     PullRequest,
+    Release,
     Repo,
     Subject,
     SyncReport,
+    WorkflowRun,
 )
 from .cache import Cache, CacheInfo, clear_cache, inspect_cache
 from .client import GitHubClient
@@ -38,10 +40,12 @@ __all__ = [
     'NotFoundError',
     'PullRequest',
     'RateLimitError',
+    'Release',
     'Repo',
     'StatsPendingError',
     'Subject',
     'SyncReport',
+    'WorkflowRun',
     'clear_cache',
     'inspect_cache',
     'resolve_token',

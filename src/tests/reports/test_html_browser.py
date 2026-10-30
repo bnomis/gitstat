@@ -57,8 +57,9 @@ def open_report(
     def open_page(
         theme: typing.Literal['auto', 'dark', 'light'] = 'auto',
         scheme: typing.Literal['dark', 'light'] = 'light',
+        report: wambatic.reports.html.HtmlReport = org_report,
     ) -> Opened:
-        out = wambatic.reports.html.render_html(org_report, tmp_path / 'out' / 'report.html', theme)
+        out = wambatic.reports.html.render_html(report, tmp_path / 'out' / 'report.html', theme)
         context = chromium.new_context(color_scheme=scheme)
         contexts.append(context)
         page = context.new_page()
@@ -104,6 +105,22 @@ def test_the_file_opens_offline_without_errors_and_every_chart_is_drawn(
     assert 'activity-calendar' in expected
     for key in expected:
         opened.page.wait_for_selector(f'#{key} .main-svg')
+    assert opened.requests == []
+    assert opened.problems == []
+
+
+def test_a_delivery_report_draws_every_chart_with_no_request_or_error(
+    delivery_report: wambatic.reports.html.HtmlReport,
+    open_report: typing.Callable[..., Opened],
+) -> None:
+    opened = open_report(report=delivery_report)
+    expected = keys(delivery_report)
+    assert {'delivery-runs', 'delivery-lead-time', 'delivery-time-to-restore'} <= set(expected)
+    for key in expected:
+        opened.page.wait_for_selector(f'#{key} .main-svg')
+    for granularity in wambatic.reports.html.PERIODS:
+        opened.page.check(f'input[name=granularity][value={granularity}]')
+        opened.page.wait_for_selector('#delivery-runs .main-svg')
     assert opened.requests == []
     assert opened.problems == []
 

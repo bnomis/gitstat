@@ -92,7 +92,28 @@ def test_a_repo_built_without_the_probe_fields_has_them_none() -> None:
     repo = wambatic.fetch.base.Repo('octocat/Hello-World', 'main', None, False, False, None, NOW)
     assert repo.pull_requests_updated_at is None
     assert repo.issues_updated_at is None
+    assert (repo.releases_count, repo.releases_updated_at) == (0, None)
     assert not hasattr(repo, '__dict__')
+
+
+def test_release_and_workflow_run_are_frozen_and_slotted() -> None:
+    release = wambatic.fetch.base.Release('octocat/Hello-World', 'v1', NOW, NOW, False)
+    run = wambatic.fetch.base.WorkflowRun(
+        'octocat/Hello-World', 1, 'ci.yml', 'CI', 'push', None, 'queued', None, NOW, NOW, None, 1
+    )
+    for record, field in ((release, 'tag_name'), (run, 'id')):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(record, field, 2)
+        assert not hasattr(record, '__dict__')
+
+
+def test_a_pull_request_and_a_sync_state_built_without_the_new_fields_have_defaults() -> None:
+    pull = pull_request()
+    assert (pull.labels, pull.first_commit_at) == ((), None)
+    state = wambatic.fetch.base.SyncState(
+        'octocat/Hello-World', 'commits', None, None, None, NOW, NOW, NOW
+    )
+    assert state.probe is None
 
 
 # Parsing pull requests, issues and the listing probes
@@ -248,3 +269,151 @@ def test_the_hand_written_pages_parse() -> None:
     assert [pull.number for pull in parsed] == [2, 1]
     assert parsed[0].first_review_at is not None
     assert parsed[1].author_login == 'dependabot[bot]'
+
+
+# Labels, first commits, releases, workflow runs and the release probe
+
+
+def test_labels_keep_githubs_order_and_a_pull_request_without_any_has_none() -> None:
+    assert parse_pull(labels=('Hotfix', 'bug', 'ünï')).labels == ('Hotfix', 'bug', 'ünï')
+    assert parse_pull().labels == ()
+
+
+def test_first_commit_at_is_the_first_commits_authored_date_or_none() -> None:
+    assert parse_pull(first_commit_at=NOW - HOUR).first_commit_at == NOW - HOUR
+    assert parse_pull(first_commit_at=None).first_commit_at is None
+
+
+@pytest.mark.parametrize('field', ['labels', 'commits'])
+def test_a_pull_request_without_labels_or_commits_is_malformed(field: str) -> None:
+    node = responses.pull_request_node(1)
+    del node[field]
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
+        wambatic.fetch.base.parse_pull_request(HELLO, node)
+
+
+def test_a_release_parses_and_keeps_the_prerelease_flag() -> None:
+    release = wambatic.fetch.base.parse_release(
+        HELLO,
+        responses.release_node('v1', created_at=NOW - HOUR, published_at=NOW, is_prerelease=True),
+    )
+    assert release == wambatic.fetch.base.Release(HELLO, 'v1', NOW - HOUR, NOW, True)
+
+
+def test_a_draft_or_a_release_without_publication_time_is_not_stored() -> None:
+    draft = responses.release_node('v2', is_draft=True)
+    unpublished = responses.release_node('v3', published_at=None)
+    assert wambatic.fetch.base.parse_release(HELLO, draft) is None
+    assert wambatic.fetch.base.parse_release(HELLO, unpublished) is None
+
+
+def test_a_release_without_a_tag_is_malformed() -> None:
+    node = responses.release_node('v1')
+    del node['tagName']
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
+        wambatic.fetch.base.parse_release(HELLO, node)
+
+
+def test_the_hand_written_release_page_parses_without_drafts() -> None:
+    nodes = responses.RELEASES_OK['data']['repository']['releases']['nodes']  # type: ignore[index]
+    parsed = [wambatic.fetch.base.parse_release(HELLO, node) for node in nodes]
+    assert [release.tag_name for release in parsed if release] == ['v1.1.0', 'v1.1.0-rc.1']
+    assert [release.is_prerelease for release in parsed if release] == [False, True]
+
+
+def test_a_workflow_run_parses_every_field() -> None:
+    run = wambatic.fetch.base.parse_workflow_run(
+        HELLO,
+        responses.workflow_run_object(
+            7,
+            path='.github/workflows/deploy.yml',
+            name='Deploy',
+            event='workflow_dispatch',
+            head_branch='release',
+            created_at=NOW,
+            updated_at=NOW + HOUR,
+            run_started_at=NOW + HOUR / 2,
+            run_attempt=2,
+        ),
+    )
+    assert run == wambatic.fetch.base.WorkflowRun(
+        HELLO,
+        7,
+        '.github/workflows/deploy.yml',
+        'Deploy',
+        'workflow_dispatch',
+        'release',
+        'completed',
+        'success',
+        NOW,
+        NOW + HOUR,
+        NOW + HOUR / 2,
+        2,
+    )
+
+
+def test_an_unfinished_run_has_no_conclusion_and_a_queued_one_no_start() -> None:
+    running = wambatic.fetch.base.parse_workflow_run(
+        HELLO, responses.workflow_run_object(1, status='in_progress', conclusion=None)
+    )
+    queued = wambatic.fetch.base.parse_workflow_run(
+        HELLO,
+        responses.workflow_run_object(2, status='queued', conclusion=None, run_started_at=None),
+    )
+    assert (running.status, running.conclusion) == ('in_progress', None)
+    assert (queued.status, queued.run_started_at) == ('queued', None)
+
+
+def test_a_run_with_null_name_status_and_branch_and_no_attempt_still_parses() -> None:
+    node = responses.workflow_run_object(3, name=None, status=None, head_branch=None)
+    del node['run_attempt']
+    run = wambatic.fetch.base.parse_workflow_run(HELLO, node)
+    assert (run.name, run.status, run.head_branch, run.run_attempt) == ('', '', None, 1)
+
+
+@pytest.mark.parametrize('field', ['id', 'path', 'event', 'created_at', 'updated_at'])
+def test_a_malformed_run_raises(field: str) -> None:
+    node = responses.workflow_run_object(1)
+    del node[field]
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
+        wambatic.fetch.base.parse_workflow_run(HELLO, node)
+
+
+def test_the_hand_written_run_pages_parse() -> None:
+    runs = responses.WORKFLOW_RUNS_OK['workflow_runs']
+    assert isinstance(runs, list)
+    parsed = [wambatic.fetch.base.parse_workflow_run(HELLO, node) for node in runs]
+    assert [run.id for run in parsed] == [103, 102, 101, 100]
+    assert [run.status for run in parsed] == ['in_progress', 'completed', 'completed', 'queued']
+    single = wambatic.fetch.base.parse_workflow_run(HELLO, responses.WORKFLOW_RUN_OK)
+    assert (single.id, single.status, single.conclusion) == (103, 'completed', 'success')
+
+
+def test_the_release_probe_reads_the_count_and_the_newest_update() -> None:
+    with_releases = wambatic.fetch.base.parse_repo(
+        responses.repo_node(
+            'octocat/x',
+            head=None,
+            pushed_at=None,
+            updated_at=NOW,
+            releases_count=3,
+            releases_updated_at=NOW - HOUR,
+        )
+    )
+    assert (with_releases.releases_count, with_releases.releases_updated_at) == (3, NOW - HOUR)
+    assert wambatic.fetch.base.release_probe(with_releases) == '3 2026-10-29T11:00:00+00:00'
+    without = wambatic.fetch.base.parse_repo(
+        responses.repo_node('octocat/x', head=None, pushed_at=None, updated_at=NOW)
+    )
+    assert wambatic.fetch.base.release_probe(without) == '0 none'
+
+
+def test_a_listing_node_without_the_release_probe_is_malformed() -> None:
+    node = responses.repo_node('octocat/x', head=None, pushed_at=None, updated_at=NOW)
+    del node['releases']
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
+        wambatic.fetch.base.parse_repo(node)
+    node = responses.repo_node('octocat/x', head=None, pushed_at=None, updated_at=NOW)
+    del node['releases']['totalCount']  # type: ignore[attr-defined]
+    with pytest.raises(wambatic.fetch.errors.GraphQLError):
+        wambatic.fetch.base.parse_repo(node)

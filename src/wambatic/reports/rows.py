@@ -6,6 +6,7 @@ import typing
 
 import wambatic.stats.activity
 import wambatic.stats.base
+import wambatic.stats.delivery
 import wambatic.stats.flow
 
 TOTAL_METRICS = tuple(metric for metric, _ in wambatic.stats.activity.TOTAL_METRICS)
@@ -17,7 +18,11 @@ SIGNED_METRICS = frozenset({'lines_net'})
 FLOW_COUNTS = wambatic.stats.flow.COUNT_METRICS
 FLOW_TIMES = wambatic.stats.flow.TIME_METRICS
 SIZE_METRIC = wambatic.stats.flow.SIZE_METRIC
-TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS)
+DELIVERY_COUNTS = ('workflow_runs', 'release_count', 'deployments')
+DELIVERY_TABLE_METRICS = wambatic.stats.delivery.ACTIONS_RELEASE_METRICS
+DORA_TABLE_METRICS = wambatic.stats.delivery.DORA_METRICS
+DELIVERY_UNITS = wambatic.stats.delivery.UNITS
+TREND_METRICS = (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS)
 NO_DATA = '-'
 ACTIVITY_HEADERS = ('Commits', 'Contributors', 'Active days', 'Added', 'Deleted', 'Net')
 FLOW_HEADERS = ('PRs opened', 'PRs merged', 'Issues opened', 'Issues closed')
@@ -33,6 +38,21 @@ FLOW_TIMES_HEADERS = (
 )
 BREAKDOWN_HEADERS = ('Name', 'Commits', 'Added', 'Deleted', 'Net')
 CONTRIBUTOR_HEADERS = ('Login', 'Commits', 'Added', 'Deleted', 'Net', 'Active days')
+DELIVERY_HEADERS = {
+    'workflow_runs': 'Runs',
+    'workflow_success_rate': 'Success',
+    'workflow_duration_p50': 'Duration p50',
+    'workflow_duration_p90': 'Duration p90',
+    'release_count': 'Releases',
+    'release_interval_p50': 'Release interval p50',
+    'deployments': 'Deployments',
+    'lead_time_p50': 'Lead time p50',
+    'lead_time_p90': 'Lead time p90',
+    'change_failure_rate': 'Change failure',
+    'time_to_restore_p50': 'Restore p50',
+    'time_to_restore_p90': 'Restore p90',
+}
+DELIVERY_TOTALS = frozenset({'workflow_runs', 'release_count', 'deployments'})
 UNAVAILABLE_HEADERS = ('Metric', 'Reason')
 
 
@@ -100,10 +120,20 @@ def has_flow(result: wambatic.stats.base.StatsResult) -> bool:
     return any(s.metric == 'prs_opened' and s.by is None for s in result.series)
 
 
+def has_delivery(result: wambatic.stats.base.StatsResult) -> bool:
+    """Whether the result holds the delivery group's Actions and release series."""
+    return any(s.metric == 'workflow_runs' and s.by is None for s in result.series)
+
+
+def has_dora(result: wambatic.stats.base.StatsResult) -> bool:
+    """Whether the result holds at least one DORA proxy series."""
+    return any(s.metric in DORA_TABLE_METRICS and s.by is None for s in result.series)
+
+
 def bucket_list(result: wambatic.stats.base.StatsResult) -> list[wambatic.stats.base.Bucket]:
     """The result's buckets, from whichever total series is present."""
     series = total_series(result)
-    for metric in (*TOTAL_METRICS, *FLOW_COUNTS):
+    for metric in (*TOTAL_METRICS, *FLOW_COUNTS, *DELIVERY_COUNTS):
         if metric in series:
             return [bucket for bucket, _ in series[metric]]
     return []
@@ -182,6 +212,44 @@ def flow_times_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | N
         for bucket in bucket_list(result)
     )
     return PeriodTable('Flow times by period', FLOW_TIMES_HEADERS, FLOW_TIMES_METRICS, rows, None)
+
+
+def delivery_period_table(
+    result: wambatic.stats.base.StatsResult, title: str, wanted: tuple[str, ...]
+) -> PeriodTable | None:
+    """A table of the delivery series in `wanted` that the result has, a bucket with no value
+    `None`; the footer adds up the counts and is `None` in the other columns."""
+    series = total_series(result)
+    metrics = tuple(metric for metric in wanted if metric in series)
+    if not metrics:
+        return None
+    partial = partial_labels(result)
+    points = {metric: dict(series[metric]) for metric in metrics}
+    rows = tuple(
+        period_row(bucket.label, partial, (points[metric].get(bucket) for metric in metrics))
+        for bucket in bucket_list(result)
+    )
+    total: tuple[float | None, ...] | None = None
+    if len(rows) > 1:
+        total = tuple(
+            sum(points[metric].values()) if metric in DELIVERY_TOTALS else None
+            for metric in metrics
+        )
+    return PeriodTable(title, tuple(DELIVERY_HEADERS[m] for m in metrics), metrics, rows, total)
+
+
+def delivery_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
+    """Delivery by period; None without delivery series."""
+    if not has_delivery(result):
+        return None
+    return delivery_period_table(result, 'Delivery by period', DELIVERY_TABLE_METRICS)
+
+
+def dora_table(result: wambatic.stats.base.StatsResult) -> PeriodTable | None:
+    """DORA proxies by period, with the columns of the proxies the result has; None without any."""
+    if not has_dora(result):
+        return None
+    return delivery_period_table(result, 'DORA proxies by period', DORA_TABLE_METRICS)
 
 
 def breakdown_rows(result: wambatic.stats.base.StatsResult, kind: str) -> list[BreakdownRow] | None:

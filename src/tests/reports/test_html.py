@@ -512,3 +512,87 @@ def test_the_script_has_no_dollar_that_string_template_would_read() -> None:
     assert template.is_valid()
     assert template.get_identifiers() == []
     assert '$' not in script
+
+
+def only_delivery(
+    report: wambatic.reports.html.HtmlReport, keep: typing.Callable[[str], bool]
+) -> wambatic.reports.html.HtmlReport:
+    """`report` with only the series whose metric `keep` accepts."""
+
+    def trimmed(result: wambatic.stats.base.StatsResult) -> wambatic.stats.base.StatsResult:
+        return dataclasses.replace(result, series=[s for s in result.series if keep(s.metric)])
+
+    return wambatic.reports.html.HtmlReport(
+        total=trimmed(report.total),
+        periods={g: trimmed(r) for g, r in report.periods.items()},
+        initial=report.initial,
+    )
+
+
+def test_the_delivery_section_and_tiles_appear_only_with_delivery_series(
+    org_report: wambatic.reports.html.HtmlReport,
+    delivery_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    without = wambatic.reports.html.html_document(org_report, 'auto')
+    assert 'id="delivery"' not in without
+    assert 'Workflow runs' not in Page(without).tiles
+    page = Page(wambatic.reports.html.html_document(delivery_report, 'auto'))
+    assert page.by_id('delivery')
+    assert page.tiles['Workflow runs'] == '13'
+    assert page.tiles['Success rate'] == '66.7%'  # 6 of 9 completed runs
+    assert page.tiles['Releases'] == '6'
+    assert page.tiles['Deployments'] == '5'
+    assert page.tiles['Median lead time (hours)'] != '-'
+    assert page.tiles['Commits'] == '10'
+
+
+def test_every_delivery_figure_has_its_element_and_the_section_holds_its_charts(
+    delivery_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    document = wambatic.reports.html.html_document(delivery_report, 'auto')
+    page = Page(document)
+    keys = {
+        f.key
+        for result in delivery_report.periods.values()
+        for f in wambatic.reports.figures.build_figures(result)
+        if f.group == 'delivery'
+    }
+    assert 'delivery-lead-time' in keys
+    for key in keys:
+        assert page.by_id(key)['role'] == 'img'
+    section = document.split('id="delivery"')[1].split('</section>')[0]
+    assert all(f'id="{key}"' in section for key in keys)
+
+
+def test_the_delivery_tables_hold_the_rows_of_rows_py_once_per_granularity(
+    delivery_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    document = wambatic.reports.html.html_document(delivery_report, 'auto')
+    section = document.split('id="delivery"')[1].split('</section>')[0]
+    for title in ('Delivery by period', 'DORA proxies by period'):
+        assert section.count(f'<caption>{title}') == 4, title
+    assert section.count(' hidden') == 6  # all but the initial granularity of two tables
+    assert (
+        '<td>2026-10</td><td class=num>7</td><td class=num>80.0%</td>'
+        '<td class=num>6.0</td><td class=num>10.8</td><td class=num>4</td>'
+    ) in section
+    assert '<td>Total</td><td class=num>13</td>' in section
+    assert 'minutes and days; - no data' in section
+    assert 'proxies: see the README; hours; - no data' in section
+    assert 'class="proxies"' in section
+
+
+def test_a_page_with_delivery_but_no_proxy_has_no_proxy_table_or_line(
+    delivery_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    plain = only_delivery(
+        delivery_report,
+        lambda metric: (
+            not metric.startswith(('deployments', 'lead_time', 'change_failure', 'time_to_restore'))
+        ),
+    )
+    document = wambatic.reports.html.html_document(plain, 'auto')
+    assert 'Delivery by period' in document
+    assert 'DORA proxies by period' not in document
+    assert 'class="proxies"' not in document
+    assert 'Deployments' not in Page(document).tiles

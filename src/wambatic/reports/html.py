@@ -24,6 +24,7 @@ Theme = typing.Literal['auto', 'dark', 'light']
 PERIODS = (Granularity.YEAR, Granularity.MONTH, Granularity.WEEK, Granularity.DAY)
 SAFE_FILENAME = re.compile(r'[^A-Za-z0-9._-]')
 FILE_MODE = 0o644
+PROXIES_LINE = 'The DORA figures are proxies; how each is measured is described in the README.'
 JSON_ESCAPES = {'<': '\\u003c', '>': '\\u003e', '&': '\\u0026'}
 
 
@@ -213,6 +214,14 @@ def partial_note(table: wambatic.reports.rows.PeriodTable) -> str:
     return '* partial period' if table.has_partial else ''
 
 
+def delivery_note(table: wambatic.reports.rows.PeriodTable) -> str:
+    return wambatic.reports.terminal.delivery_caption(table, 'minutes and days')
+
+
+def dora_note(table: wambatic.reports.rows.PeriodTable) -> str:
+    return wambatic.reports.terminal.delivery_caption(table, 'proxies: see the README; hours')
+
+
 def breakdown_html(result: wambatic.stats.base.StatsResult) -> str:
     pieces = []
     for kind, title in wambatic.reports.rows.BREAKDOWN_TITLES:
@@ -326,6 +335,23 @@ def tiles_html(total: wambatic.stats.base.StatsResult) -> str:
                 ),
             ),
         ]
+    if wambatic.reports.rows.has_delivery(total):
+        format_cell = wambatic.reports.terminal.format_cell
+        pieces += [
+            tile('Workflow runs', format_number(value('workflow_runs') or 0)),
+            tile(
+                'Success rate', format_cell('workflow_success_rate', value('workflow_success_rate'))
+            ),
+            tile('Releases', format_number(value('release_count') or 0)),
+        ]
+        if 'deployments' in series:
+            pieces.append(tile('Deployments', format_number(value('deployments') or 0)))
+        if 'lead_time_p50' in series:
+            pieces.append(
+                tile(
+                    'Median lead time (hours)', format_cell('lead_time_p50', value('lead_time_p50'))
+                )
+            )
     return f'<dl class="tiles">{"".join(pieces)}</dl>' if pieces else ''
 
 
@@ -396,6 +422,19 @@ def sections_html(report: HtmlReport) -> str:
                 wambatic.reports.rows.flow_times_table,
                 wambatic.reports.terminal.flow_times_caption,
             ),
+            '</section>',
+        ]
+        sections.append(''.join(pieces))
+    if wambatic.reports.rows.delivery_table(total) is not None:
+        has_dora = wambatic.reports.rows.dora_table(total) is not None
+        pieces = [
+            '<section id="delivery"><h2>Delivery</h2>',
+            f'<p class="proxies">{escape(PROXIES_LINE)}</p>' if has_dora else '',
+            '<div class="charts">',
+            *(figure_html(f) for f in figures if f.group == 'delivery'),
+            '</div>',
+            period_tables_html(report, wambatic.reports.rows.delivery_table, delivery_note),
+            period_tables_html(report, wambatic.reports.rows.dora_table, dora_note),
             '</section>',
         ]
         sections.append(''.join(pieces))

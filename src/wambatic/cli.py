@@ -414,6 +414,8 @@ def cache_info_table(info: wambatic.fetch.cache.CacheInfo) -> rich.table.Table:
         ('commits', wambatic.reports.terminal.format_number(info.commits)),
         ('pull requests', wambatic.reports.terminal.format_number(info.pull_requests)),
         ('issues', wambatic.reports.terminal.format_number(info.issues)),
+        ('releases', wambatic.reports.terminal.format_number(info.releases)),
+        ('workflow runs', wambatic.reports.terminal.format_number(info.workflow_runs)),
         (
             'last synced',
             'never' if info.last_synced_at is None else info.last_synced_at.isoformat(),

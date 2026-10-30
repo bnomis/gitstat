@@ -10,6 +10,7 @@ import wambatic.fetch.base
 import wambatic.stats.base
 import wambatic.stats.buckets
 import wambatic.stats.flow
+import wambatic.stats.percentile
 
 Granularity = wambatic.stats.base.Granularity
 Series = wambatic.stats.base.Series
@@ -234,7 +235,7 @@ def test_every_duration_point_lies_between_the_minimum_and_maximum_of_its_bucket
         assert p50.keys() == p90.keys()
         for bucket in buckets:
             values = [
-                wambatic.stats.flow.hours(p.created_at, getattr(p, end))
+                wambatic.stats.percentile.hours(p.created_at, getattr(p, end))
                 for p in pulls
                 if bucket_of(getattr(p, end), granularity) == bucket
             ]

@@ -40,6 +40,7 @@ UsageError = wambatic.reports.errors.UsageError
 SettingsError = wambatic.settings.SettingsError
 COMMITS = frozenset({'commits'})
 BUILT = frozenset({'commits', 'issues', 'pull_requests'})
+DELIVERY_RESOURCES = frozenset({'pull_requests', 'releases', 'workflow_runs'})
 LOGINS = st.from_regex(r'[A-Za-z0-9-]{1,39}', fullmatch=True)
 REPO_NAMES = st.from_regex(r'[A-Za-z0-9._-]{1,100}', fullmatch=True)
 
@@ -803,21 +804,6 @@ def test_ignore_cache_version_reports_a_refused_cache_with_a_warning(
     assert '--ignore-cache-version' in warning
 
 
-def test_a_group_that_needs_no_built_resource_syncs_nothing_and_finds_nothing_to_report(
-    monkeypatch: pytest.MonkeyPatch,
-    make_client: tests.conftest.MakeClient,
-    stats_cache_path: pathlib.Path,
-) -> None:
-    with pytest.raises(wambatic.stats.EmptySubjectError, match=r'delivery \(step 8\)'):
-        run_report(
-            monkeypatch,
-            make_client,
-            stats_cache_path,
-            ['repo:octo-org/alpha', '--groups', 'delivery'],
-            online=False,
-        )
-
-
 def test_the_flow_group_alone_prints_the_flow_tables_from_the_cache_with_no_fetch(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,
@@ -968,11 +954,32 @@ def test_cache_info_lists_the_counts_and_no_differences(stats_cache_path: pathli
     assert rows['commits'] == [str(len(tests.fixtures.stats.COMMITS))]
     assert rows['pull'] == ['requests', str(len(tests.fixtures.stats.PULL_REQUESTS))]
     assert rows['issues'] == [str(len(tests.fixtures.stats.ISSUES))]
+    assert rows['releases'] == [str(len(tests.fixtures.stats.RELEASES))]
+    assert rows['workflow'] == ['runs', str(len(tests.fixtures.stats.WORKFLOW_RUNS))]
     assert rows['differences'] == ['none']
     assert rows['last'] == ['synced', tests.fixtures.stats.BETA_SYNCED_AT.isoformat()]
     assert rows['schema_version'] == [str(wambatic.fetch.cache.SCHEMA_VERSION)]
     assert str(stats_cache_path) in output
     assert 'differs' not in output
+
+
+def test_cache_info_of_a_schema_2_file_counts_the_missing_tables_as_zero(
+    tmp_path: pathlib.Path,
+) -> None:
+    path = tmp_path / 'old.sqlite3'
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        connection.execute("INSERT INTO meta VALUES ('schema_version', '2')")
+        connection.execute('CREATE TABLE issues (repo TEXT, number INTEGER)')
+        connection.execute("INSERT INTO issues VALUES ('a/b', 1)")
+    connection.close()
+    output, _ = run_cache('info', path)
+    rows = {line.split()[0]: line.split()[1:] for line in output.splitlines() if line.strip()}
+    assert rows['issues'] == ['1']
+    assert rows['releases'] == ['0']
+    assert rows['workflow'] == ['runs', '0']
+    assert 'differs: schema_version' in output
 
 
 def test_cache_info_shows_why_a_cache_is_refused_and_leaves_it_alone(
@@ -1346,6 +1353,23 @@ def test_html_writes_the_default_file_and_prints_exactly_its_path(
     assert 'id="activity-commits"' in text
 
 
+def test_html_of_the_delivery_group_alone_has_the_delivery_section_and_no_other(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    out_dir = html_config(tmp_path, monkeypatch, stats_cache_path)
+    argv = ['report', 'org:octo-org', '--no-fetch', '--format', 'html', '--groups', 'delivery']
+    assert wambatic.cli.main([*argv, *ALPHA_FLAGS]) == 0
+    capsys.readouterr()
+    text = (out_dir / 'org-octo-org.html').read_text(encoding='utf-8')
+    assert 'id="delivery"' in text
+    assert 'id="delivery-runs"' in text
+    assert 'id="activity"' not in text
+    assert 'id="flow"' not in text
+
+
 def test_out_names_a_file_or_an_existing_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1445,3 +1469,164 @@ def test_an_out_that_cannot_be_written_returns_1_with_one_error_line_and_no_temp
     assert errors[0].startswith('ERROR: cannot write ')
     assert [path.name for path in tmp_path.glob('**/*.tmp')] == []
     assert blocker.read_text() == 'a file, not a directory'
+
+
+DELIVERY_FLAGS = ['--groups', 'delivery', '--since', '2026-10-01', '--until', '2026-10-31']
+
+
+def delivery_upstream() -> tests.fixtures.fetch.upstream.Upstream:
+    """A fake GitHub with one repository that has a merged pull request, a release and runs."""
+    at = datetime.datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
+    repo = tests.fixtures.fetch.upstream.FakeRepo(
+        'octo-org/alpha',
+        [tests.fixtures.fetch.upstream.FakeCommit('c0ffee', at)],
+        pushed_at=at,
+        updated_at=at,
+        pulls=[
+            tests.fixtures.fetch.upstream.FakePull(
+                1,
+                at,
+                state='MERGED',
+                created_at=at - datetime.timedelta(days=2),
+                merged_at=at,
+                closed_at=at,
+            )
+        ],
+        releases=[
+            tests.fixtures.fetch.upstream.FakeRelease(
+                'v1.0.0', at + datetime.timedelta(days=1), at + datetime.timedelta(days=1)
+            )
+        ],
+        runs=[
+            tests.fixtures.fetch.upstream.FakeRun(
+                1,
+                at,
+                updated_at=at + datetime.timedelta(minutes=6),
+                run_started_at=at,
+            ),
+            tests.fixtures.fetch.upstream.FakeRun(
+                2,
+                at + datetime.timedelta(hours=2),
+                conclusion='failure',
+                updated_at=at + datetime.timedelta(hours=2, minutes=10),
+                run_started_at=at + datetime.timedelta(hours=2),
+            ),
+        ],
+    )
+    upstream = tests.fixtures.fetch.upstream.Upstream([repo])
+    upstream.now = at + datetime.timedelta(days=10)
+    return upstream
+
+
+def run_delivery_report(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    cache_path: pathlib.Path,
+    upstream: tests.fixtures.fetch.upstream.Upstream,
+    *argv: str,
+    online: bool = True,
+) -> tuple[Ran, list[str]]:
+    """`run_report` for the delivery upstream with its info-level log lines."""
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    messages: list[str] = []
+    sink = loguru.logger.add(
+        lambda message: messages.append(message.record['message']), level='INFO'
+    )
+    try:
+        ran = run_report(
+            monkeypatch,
+            make_client,
+            cache_path,
+            ['repo:octo-org/alpha', *DELIVERY_FLAGS, *argv],
+            clock=datetime.datetime(2026, 11, 1, tzinfo=UTC),
+            upstream=upstream,
+            online=online,
+        )
+    finally:
+        loguru.logger.remove(sink)
+    return ran, messages
+
+
+def test_a_delivery_report_syncs_the_three_resources_logs_their_rows_and_prints_the_table(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    ran, messages = run_delivery_report(
+        monkeypatch, make_client, tmp_path / 'cache.sqlite3', delivery_upstream()
+    )
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), DELIVERY_RESOURCES, False)]
+    (message,) = [m for m in messages if m.startswith('Synced')]
+    assert 'pull_requests 1' in message
+    assert 'releases 1' in message
+    assert 'workflow_runs 2' in message
+    assert 'Delivery by period' in ran.console
+    assert 'DORA proxies by period' in ran.console
+    assert 'Activity by period' not in ran.console
+    assert 'Flow by period' not in ran.console
+    row = [line.split() for line in ran.console.splitlines() if line.startswith('  2026-10')]
+    assert row[0] == [
+        '2026-10',
+        '2',
+        '50.0%',
+        '8.0',
+        '9.6',
+        '1',
+        '-',
+    ]  # 6 and 10 minutes: p90 6 + 0.9 * 4
+
+
+def test_a_second_delivery_report_costs_one_run_request_answered_304_and_no_release_request(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    cache = tmp_path / 'cache.sqlite3'
+    upstream = delivery_upstream()
+    first, _ = run_delivery_report(monkeypatch, make_client, cache, upstream)
+    second, messages = run_delivery_report(monkeypatch, make_client, cache, upstream)
+    assert not any('workflow_runs' in m and 'workflow_runs 0' not in m for m in messages)
+    assert 'releases' not in second.queries
+    assert 'pull_requests' not in second.queries
+    runs = [path for path in second.paths if path.endswith('/actions/runs')]
+    assert runs == ['/repos/octo-org/alpha/actions/runs']
+    assert second.console.split('Provenance')[0] == first.console.split('Provenance')[0]
+
+
+def test_a_delivery_report_with_no_fetch_on_the_warm_cache_makes_no_request(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    cache = tmp_path / 'cache.sqlite3'
+    upstream = delivery_upstream()
+    run_delivery_report(monkeypatch, make_client, cache, upstream)
+    ran, _ = run_delivery_report(
+        monkeypatch, make_client, cache, upstream, '--no-fetch', online=False
+    )
+    assert ran.paths == []
+    assert ran.syncs == []
+    assert 'Delivery by period' in ran.console
+
+
+def test_a_json_delivery_report_has_the_delivery_series(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    ran, _ = run_delivery_report(
+        monkeypatch,
+        make_client,
+        tmp_path / 'cache.sqlite3',
+        delivery_upstream(),
+        '--format',
+        'json',
+    )
+    data = json.loads(ran.stdout)
+    metrics = {series['metric']: series for series in data['series']}
+    assert data['request']['groups'] == ['delivery']
+    assert metrics['workflow_runs']['points'][0]['value'] == 2
+    assert metrics['workflow_success_rate']['unit'] == 'ratio'
+    assert metrics['workflow_success_rate']['points'][0]['value'] == 0.5
+    assert metrics['release_count']['points'][0]['value'] == 1
+    assert 'activity' not in data['request']['groups']

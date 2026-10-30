@@ -169,8 +169,8 @@ def test_rest_cached_revalidates_with_the_stored_etag(
     async def scenario() -> tuple[object, object, list[tests.fixtures.fetch.server.Received]]:
         async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
             async with make_fetcher(server) as fetcher:
-                first = await fetcher.rest_cached(REST_PATH, {'b': '2', 'a': '1'})
-                second = await fetcher.rest_cached(REST_PATH, {'a': '1', 'b': '2'})
+                first, _ = await fetcher.rest_cached(REST_PATH, {'b': '2', 'a': '1'})
+                second, _ = await fetcher.rest_cached(REST_PATH, {'a': '1', 'b': '2'})
             return first, second, server.received
 
     first, second, received = asyncio.run(scenario())
@@ -192,8 +192,8 @@ def test_rest_cached_keeps_one_etag_per_query_string(
     async def scenario() -> tuple[object, object, list[tests.fixtures.fetch.server.Received]]:
         async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
             async with make_fetcher(server) as fetcher:
-                first = await fetcher.rest_cached(REST_PATH, {'page': '1'})
-                second = await fetcher.rest_cached(REST_PATH, {'page': '2'})
+                first, _ = await fetcher.rest_cached(REST_PATH, {'page': '1'})
+                second, _ = await fetcher.rest_cached(REST_PATH, {'page': '2'})
             return first, second, server.received
 
     first, second, received = asyncio.run(scenario())
@@ -210,8 +210,8 @@ def test_rest_cached_without_an_etag_stores_nothing(
         async with tests.fixtures.fetch.server.ReplayServer(routes) as server:
             async with make_fetcher(server) as fetcher:
                 return (
-                    await fetcher.rest_cached(REST_PATH, {}),
-                    await fetcher.rest_cached(REST_PATH, {}),
+                    (await fetcher.rest_cached(REST_PATH, {}))[0],
+                    (await fetcher.rest_cached(REST_PATH, {}))[0],
                 )
 
     assert asyncio.run(scenario()) == ({'a': 1}, {'a': 2})
@@ -1021,22 +1021,14 @@ def test_an_unknown_resource_raises_before_any_request(
     assert asyncio.run(scenario()) == 0
 
 
-@pytest.mark.parametrize(
-    ('resource', 'step'),
-    [
-        ('releases', 8),
-        ('star_events', 8),
-        ('workflow_runs', 8),
-    ],
-)
 def test_a_resource_not_built_yet_raises_before_any_request(
-    make_fetcher: tests.conftest.MakeFetcher, resource: str, step: int
+    make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
     async def scenario() -> int:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
             async with make_fetcher(server) as fetcher:
-                with pytest.raises(NotImplementedError, match=f'{resource} \\(step {step}\\)'):
-                    await fetcher.sync(OWNER, frozenset({'commits', resource}))
+                with pytest.raises(NotImplementedError, match='star_events \\(step 10\\)'):
+                    await fetcher.sync(OWNER, frozenset({'commits', 'star_events'}))
             return len(server.received)
 
     assert asyncio.run(scenario()) == 0
@@ -1590,14 +1582,400 @@ def test_unchanged_for_a_flow_resource_follows_the_probe_the_state_and_the_inter
     assert check(**{probe: None}) is False
 
 
-@pytest.mark.parametrize('resource', ['releases', 'star_events', 'workflow_runs'])
-def test_the_later_step_resources_still_raise_not_implemented(
-    make_fetcher: tests.conftest.MakeFetcher, resource: str
-) -> None:
-    async def scenario() -> None:
-        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            async with make_fetcher(server) as fetcher:
-                with pytest.raises(NotImplementedError, match='step 8'):
-                    await fetcher.sync(OWNER, frozenset({'issues', resource}))
+# Releases and workflow runs of one repo
 
-    asyncio.run(scenario())
+FakeRelease = tests.fixtures.fetch.upstream.FakeRelease
+FakeRun = tests.fixtures.fetch.upstream.FakeRun
+DELIVERY = frozenset({'releases', 'workflow_runs'})
+RUNS_FROM = SERVER_DATE - datetime.timedelta(days=60)
+
+
+@dataclasses.dataclass
+class DeliveryRun:
+    written: int
+    kinds: list[str]
+    received: list[tests.fixtures.fetch.server.Received]
+    cache: wambatic.fetch.cache.Cache
+    rest_remaining: int | None
+
+
+def delivery_repo(releases: int = 3, runs: int = 5) -> FakeRepo:
+    return FakeRepo(
+        HELLO,
+        history('h', 1),
+        releases=[
+            FakeRelease(f'v{n}', at(n), published_at=at(n) + datetime.timedelta(minutes=5))
+            for n in range(1, releases + 1)
+        ],
+        runs=[FakeRun(n, RUNS_FROM + datetime.timedelta(hours=n)) for n in range(1, runs + 1)],
+    )
+
+
+def delivery_upstream(**repo_changes: int) -> Upstream:
+    upstream = Upstream([delivery_repo(**repo_changes)])
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def sync_delivery(
+    make_fetcher: tests.conftest.MakeFetcher,
+    upstream: Upstream,
+    method: str,
+    *,
+    full_refresh: bool = False,
+    cache: wambatic.fetch.cache.Cache | None = None,
+    **kwargs: object,
+) -> DeliveryRun:
+    """Run `Fetcher.sync_releases` or `Fetcher.sync_workflow_runs` against the upstream."""
+
+    async def scenario() -> DeliveryRun:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server, cache=cache, **kwargs)
+            async with fetcher:
+                written = await getattr(fetcher, method)(listed(upstream), full_refresh)
+            return DeliveryRun(
+                written,
+                upstream.requests(server),
+                server.received,
+                fetcher.cache,
+                fetcher.client.rest_limit.remaining,
+            )
+
+    return asyncio.run(scenario())
+
+
+def tags(cache: wambatic.fetch.cache.Cache) -> list[str]:
+    return [release.tag_name for release in cache.read_releases(HELLO)]
+
+
+def run_ids(cache: wambatic.fetch.cache.Cache) -> list[int]:
+    return [run.id for run in cache.read_workflow_runs(HELLO, None)]
+
+
+def test_a_first_release_sync_stores_the_published_releases_and_not_the_draft(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    upstream.repos[HELLO].releases.append(FakeRelease('v9', at(9), is_draft=True))
+    run = sync_delivery(make_fetcher, upstream, 'sync_releases')
+    assert run.written == 3
+    assert tags(run.cache) == ['v1', 'v2', 'v3']
+    state = run.cache.sync_state(HELLO, 'releases')
+    assert state is not None
+    assert state.probe == wambatic.fetch.base.release_probe(listed(upstream))
+    assert (state.head_oid, state.watermark, state.full_synced_at) == (None, None, CLOCK)
+
+
+def test_a_second_sync_with_the_same_probe_makes_no_releases_request(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}))
+    assert first.kinds == ['listing', 'releases']
+    second = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}), cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report.repos_skipped == 1
+    assert tags(second.cache) == ['v1', 'v2', 'v3']
+
+
+def test_a_changed_release_count_reads_every_page_and_a_deleted_release_leaves(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    upstream.release_page_size = 2
+    first = sync_delivery(make_fetcher, upstream, 'sync_releases')
+    assert first.kinds == ['releases', 'releases']
+    del upstream.repos[HELLO].releases[0]
+    upstream.repos[HELLO].releases.append(FakeRelease('v4', at(4), published_at=at(4)))
+    second = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}), cache=first.cache)
+    assert second.kinds == ['listing', 'releases', 'releases']
+    assert tags(second.cache) == ['v2', 'v3', 'v4']
+
+
+def test_publishing_the_newest_draft_is_picked_up_by_its_changed_update_time(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(releases=0)
+    draft = FakeRelease('v1', at(1), is_draft=True)
+    upstream.repos[HELLO].releases.append(draft)
+    first = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}))
+    assert tags(first.cache) == []
+    draft.is_draft = False
+    draft.published_at = at(5)
+    draft.updated_at = at(5)
+    second = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}), cache=first.cache)
+    assert second.kinds == ['listing', 'releases']
+    assert tags(second.cache) == ['v1']
+
+
+def test_a_passed_full_refresh_interval_reads_releases_again_with_an_equal_probe(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}))
+    age_full_sync(first.cache, 'releases', 31)
+    second = sync_once(make_fetcher, upstream, resources=frozenset({'releases'}), cache=first.cache)
+    assert second.kinds == ['listing', 'releases']
+    state = second.cache.sync_state(HELLO, 'releases')
+    assert state is not None
+    assert state.full_synced_at == CLOCK
+
+
+def test_an_interrupted_release_read_leaves_the_old_rows_and_state(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_releases')
+    state = first.cache.sync_state(HELLO, 'releases')
+    upstream.repos[HELLO].releases.append(FakeRelease('v4', at(4), published_at=at(4)))
+    upstream.release_page_size = 2
+    upstream.failing_release_cursors = {'2'}
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_delivery(make_fetcher, upstream, 'sync_releases', cache=first.cache)
+    assert tags(first.cache) == ['v1', 'v2', 'v3']
+    assert first.cache.sync_state(HELLO, 'releases') == state
+
+
+def test_fetcher_releases_reads_the_cache_oldest_first(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_releases')
+
+    async def scenario() -> list[str]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=first.cache)
+            return [release.tag_name async for release in fetcher.releases(listed(upstream))]
+
+    assert asyncio.run(scenario()) == ['v1', 'v2', 'v3']
+
+
+def test_a_first_run_sync_reads_every_page_stores_every_run_and_sends_no_created_filter(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=205)
+    run = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    assert run.kinds == ['runs', 'runs', 'runs']
+    assert run.written == 205
+    assert run_ids(run.cache) == list(range(1, 206))
+    assert all('created' not in item.query for item in run.received)
+    assert all(item.query['exclude_pull_requests'] == 'true' for item in run.received)
+    state = run.cache.sync_state(HELLO, 'workflow_runs')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+    assert (state.head_oid, state.full_synced_at) == (None, CLOCK)
+
+
+def test_an_unchanged_second_run_sync_is_one_conditional_request_answered_304(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    before = first.cache.read_workflow_runs(HELLO, None)
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.kinds == ['runs']
+    assert second.received[0].headers['If-None-Match'].startswith('"')
+    assert second.rest_remaining is None
+    assert first.rest_remaining is not None
+    assert second.cache.read_workflow_runs(HELLO, None) == before
+    state = second.cache.sync_state(HELLO, 'workflow_runs')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+
+
+def test_a_new_run_on_the_first_page_stops_paging_at_the_cutoff(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=205)
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    upstream.repos[HELLO].runs.append(FakeRun(500, SERVER_DATE - datetime.timedelta(minutes=10)))
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.kinds == ['runs']
+    assert second.written == 1
+    assert 500 in run_ids(second.cache)
+    assert len(run_ids(second.cache)) == 206
+
+
+def test_a_run_inside_the_overlap_window_is_read_again_and_rewritten_harmlessly(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=0)
+    inside = SERVER_DATE - datetime.timedelta(minutes=30)
+    upstream.repos[HELLO].runs.append(FakeRun(1, inside))
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    before = first.cache.read_workflow_runs(HELLO, None)
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.written == 1
+    assert second.cache.read_workflow_runs(HELLO, None) == before
+
+
+def unfinished_upstream() -> Upstream:
+    upstream = delivery_upstream(runs=0)
+    upstream.repos[HELLO].runs.extend(
+        [
+            FakeRun(1, at(1), status='in_progress', conclusion=None),
+            FakeRun(2, at(5)),
+        ]
+    )
+    return upstream
+
+
+def test_an_unfinished_run_not_on_the_pages_read_is_read_again_by_id_and_completes(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = unfinished_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    assert first.cache.unfinished_runs(HELLO) == [1]
+    finished = upstream.repos[HELLO].runs[0]
+    finished.status, finished.conclusion = 'completed', 'failure'
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.kinds == ['runs', 'run']
+    assert second.received[1].path.endswith('/actions/runs/1')
+    assert 'If-None-Match' not in second.received[1].headers
+    assert second.cache.unfinished_runs(HELLO) == []
+    rerun = second.cache.read_workflow_runs(HELLO, None)[0]
+    assert (rerun.id, rerun.status, rerun.conclusion) == (1, 'completed', 'failure')
+
+
+def test_an_unfinished_run_that_github_no_longer_has_is_removed(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = unfinished_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    del upstream.repos[HELLO].runs[0]
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.kinds == ['runs', 'run']
+    assert run_ids(second.cache) == [2]
+
+
+def test_no_actions_data_is_an_empty_list_with_no_watermark_from_the_local_clock(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    upstream.repos[HELLO].has_actions = False
+    run = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    assert (run.written, run.kinds) == (0, ['runs'])
+    state = run.cache.sync_state(HELLO, 'workflow_runs')
+    assert state is not None
+    assert state.watermark is None
+    assert state.synced_at == CLOCK
+
+
+def test_a_missing_list_later_keeps_the_rows_and_the_previous_watermark(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    upstream.repos[HELLO].has_actions = False
+    upstream.now = SERVER_DATE + datetime.timedelta(hours=5)
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.written == 0
+    assert run_ids(second.cache) == [1, 2, 3, 4, 5]
+    state = second.cache.sync_state(HELLO, 'workflow_runs')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+
+
+def test_full_refresh_reads_every_page_and_drops_a_run_github_no_longer_lists(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=205)
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    del upstream.repos[HELLO].runs[0]
+    incremental = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert incremental.kinds == ['runs']
+    assert 1 in run_ids(incremental.cache)
+    forced = sync_delivery(
+        make_fetcher, upstream, 'sync_workflow_runs', full_refresh=True, cache=first.cache
+    )
+    assert forced.kinds == ['runs', 'runs', 'runs']
+    assert run_ids(forced.cache) == list(range(2, 206))
+
+
+def test_the_full_refresh_interval_reads_every_page_of_runs(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=205)
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    del upstream.repos[HELLO].runs[0]
+    age_full_sync(first.cache, 'workflow_runs', 31)
+    second = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs', cache=first.cache)
+    assert second.kinds == ['runs', 'runs', 'runs']
+    assert 1 not in run_ids(second.cache)
+    state = second.cache.sync_state(HELLO, 'workflow_runs')
+    assert state is not None
+    assert state.full_synced_at == CLOCK
+
+
+def test_a_list_response_without_a_date_is_malformed(
+    make_fetcher: tests.conftest.MakeFetcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wambatic.fetch.client, 'header_date', lambda response: None)
+    with pytest.raises(wambatic.fetch.errors.GraphQLError, match='Date'):
+        sync_delivery(make_fetcher, delivery_upstream(), 'sync_workflow_runs')
+
+
+def test_an_interrupted_run_read_keeps_the_old_rows_and_watermark(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream(runs=205)
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    state = first.cache.sync_state(HELLO, 'workflow_runs')
+    upstream.repos[HELLO].runs.append(FakeRun(900, at(30)))
+    upstream.failing_run_pages = {2}
+    upstream.now = SERVER_DATE + datetime.timedelta(hours=3)
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_delivery(
+            make_fetcher, upstream, 'sync_workflow_runs', full_refresh=True, cache=first.cache
+        )
+    assert run_ids(first.cache) == list(range(1, 206))
+    assert first.cache.sync_state(HELLO, 'workflow_runs') == state
+
+
+def test_sync_of_releases_and_runs_reports_rows_for_both_and_never_skips_a_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_once(make_fetcher, upstream, resources=DELIVERY)
+    assert first.report.rows_written == {'releases': 3, 'workflow_runs': 5}
+    assert first.kinds == ['listing', 'releases', 'runs']
+    second = sync_once(make_fetcher, upstream, resources=DELIVERY, cache=first.cache)
+    assert second.kinds == ['listing', 'runs']
+    assert second.report.repos_skipped == 0
+    assert second.report.rows_written['releases'] == 0
+
+
+def test_fetcher_workflow_runs_reads_the_cache_from_since_oldest_first(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+
+    async def scenario() -> list[int]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=first.cache)
+            since = RUNS_FROM + datetime.timedelta(hours=3)
+            return [run.id async for run in fetcher.workflow_runs(listed(upstream), since)]
+
+    assert asyncio.run(scenario()) == [3, 4, 5]
+
+
+def test_workflow_runs_are_never_unchanged(make_fetcher: tests.conftest.MakeFetcher) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_workflow_runs')
+    assert unchanged_for(make_fetcher, first.cache, listed(upstream), 'workflow_runs') is False
+
+
+def test_releases_are_unchanged_only_for_an_equal_probe_inside_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = delivery_upstream()
+    first = sync_delivery(make_fetcher, upstream, 'sync_releases')
+    repo = listed(upstream)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'releases') is True
+    more = dataclasses.replace(repo, releases_count=repo.releases_count + 1)
+    assert unchanged_for(make_fetcher, first.cache, more, 'releases') is False
+    later = dataclasses.replace(repo, releases_updated_at=at(20))
+    assert unchanged_for(make_fetcher, first.cache, later, 'releases') is False
+    age_full_sync(first.cache, 'releases', 31)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'releases') is False

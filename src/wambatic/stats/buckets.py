@@ -1,7 +1,10 @@
 import bisect
+import collections.abc
 import datetime
 
 import wambatic.stats.base
+
+ONE_DAY = datetime.timedelta(days=1)
 
 
 def bucket_start(day: datetime.date, granularity: wambatic.stats.base.Granularity) -> datetime.date:
@@ -32,7 +35,7 @@ def next_start(start: datetime.date, granularity: wambatic.stats.base.Granularit
         case wambatic.stats.base.Granularity.WEEK:
             return start + datetime.timedelta(days=7)
         case wambatic.stats.base.Granularity.DAY:
-            return start + datetime.timedelta(days=1)
+            return start + ONE_DAY
         case _:
             raise ValueError(f'{granularity} has no next bucket')
 
@@ -92,7 +95,7 @@ def partial_buckets(
     if since > buckets[0].start:
         partial.append(buckets[0])
     last = buckets[-1]
-    if until < next_start(last.start, granularity) - datetime.timedelta(days=1) and (
+    if until < next_start(last.start, granularity) - ONE_DAY and (
         not partial or last is not partial[0]
     ):
         partial.append(last)
@@ -124,3 +127,25 @@ def locate(day: datetime.date, starts: list[datetime.date], end: datetime.date |
     if index < 0 or (end is not None and day >= end):
         raise ValueError(f'{day} is outside the buckets')
     return index
+
+
+def placer(
+    buckets: list[wambatic.stats.base.Bucket],
+    tz: datetime.tzinfo,
+    since: datetime.date,
+    until: datetime.date,
+) -> collections.abc.Callable[[datetime.datetime | None], int | None]:
+    """A function giving the index of the bucket holding a moment's local date in `tz`, or None
+    for no moment or a date outside `since` to `until` (the buckets may reach beyond it)."""
+    starts = [bucket.start for bucket in buckets]
+    end = bucket_end(buckets)
+
+    def place(moment: datetime.datetime | None) -> int | None:
+        if moment is None:
+            return None
+        day = moment.astimezone(tz).date()
+        if not since <= day <= until:
+            return None
+        return locate(day, starts, end)
+
+    return place

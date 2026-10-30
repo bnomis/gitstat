@@ -24,6 +24,18 @@ ORDER = [
     'flow-close-time',
     'flow-pr-size',
 ]
+DELIVERY_ORDER = [
+    'delivery-runs',
+    'delivery-success-rate',
+    'delivery-duration',
+    'delivery-releases',
+    'delivery-release-interval',
+    'delivery-deployments',
+    'delivery-lead-time',
+    'delivery-change-failure-rate',
+    'delivery-time-to-restore',
+]
+PROXY_METRICS = ('deployments', 'lead_time', 'change_failure_rate', 'time_to_restore')
 HEX = re.compile(r'#[0-9a-f]{6}')
 
 
@@ -427,3 +439,74 @@ def test_the_range_and_calendar_figures_are_valid_plotly_and_colourless(
         assert json.loads(json.dumps(figure.data)) == figure.data
         found = keys_in(figure.data) | keys_in(figure.layout)
         assert not {key for key in found if 'color' in key.lower() and key != 'colorbar'}
+
+
+def delivery_figures(
+    result: wambatic.stats.base.StatsResult,
+) -> list[wambatic.reports.figures.Figure]:
+    return wambatic.reports.figures.build_figures(result)
+
+
+def test_the_delivery_figures_come_in_the_specs_order_and_belong_to_delivery(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = delivery_figures(delivery_result)
+    assert [f.key for f in figures] == DELIVERY_ORDER
+    assert {f.group for f in figures} == {'delivery'}
+    assert all(f.description.endswith('.') for f in figures)
+
+
+def test_every_delivery_figure_is_valid_plotly_plain_json_and_colourless(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    for figure in delivery_figures(with_partial(delivery_result, '2027-01')):
+        plotly.graph_objects.Figure(data=figure.data, layout=figure.layout)
+        assert json.loads(json.dumps(figure.data)) == figure.data
+        assert json.loads(json.dumps(figure.layout)) == figure.layout
+        assert not HEX.search(json.dumps([figure.data, figure.layout]))
+
+
+def test_the_ratios_are_plotted_as_per_cent_on_a_fixed_axis(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = {f.key: f for f in delivery_figures(delivery_result)}
+    success = figures['delivery-success-rate']
+    (trace,) = success.data
+    # 4 / 5 in October and 2 / 4 in January; November and December have no completed run
+    assert trace['y'] == [80.0, None, None, 50.0]
+    failure = figures['delivery-change-failure-rate']
+    y = failure.data[0]['y']
+    assert y[0] == pytest.approx(100 / 3)  # type: ignore[index]
+    assert y[1:] == [None, 0.0, 0.0]  # type: ignore[index]
+    for figure in (success, failure):
+        assert figure.layout['yaxis']['range'] == [0, 100]  # type: ignore[index]
+
+
+def test_the_counts_and_days_of_the_delivery_figures_are_whole_numbers(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    figures = {f.key: f for f in delivery_figures(delivery_result)}
+    assert figures['delivery-runs'].data[0]['y'] == [7, 0, 1, 5]
+    assert figures['delivery-releases'].data[0]['y'] == [4, 0, 1, 1]
+    assert figures['delivery-deployments'].data[0]['y'] == [3, 0, 1, 1]
+    assert figures['delivery-release-interval'].data[0]['y'] == [14, None, 67, 90]
+
+
+def test_a_chart_of_a_proxy_that_is_not_emitted_is_left_out(
+    delivery_result: wambatic.stats.base.StatsResult,
+) -> None:
+    kept = [s for s in delivery_result.series if not s.metric.startswith(PROXY_METRICS)]
+    figures = delivery_figures(dataclasses.replace(delivery_result, series=kept))
+    assert [f.key for f in figures] == [
+        'delivery-runs',
+        'delivery-success-rate',
+        'delivery-duration',
+        'delivery-releases',
+        'delivery-release-interval',
+    ]
+
+
+def test_a_result_without_delivery_series_has_no_delivery_figure(
+    org_result: wambatic.stats.base.StatsResult,
+) -> None:
+    assert not any(f.group == 'delivery' for f in delivery_figures(org_result))

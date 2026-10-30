@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import datetime
 
 import tests.fixtures.stats as fixture
@@ -112,7 +113,7 @@ def test_every_record_was_updated_at_or_after_each_of_its_events() -> None:
         assert max(item.created_at, item.closed_at or item.created_at) <= item.updated_at
 
 
-def count_in_month(moments: list[datetime.datetime | None], label: str) -> int:
+def count_in_month(moments: collections.abc.Sequence[datetime.datetime | None], label: str) -> int:
     return sum(1 for m in moments if m is not None and m.strftime('%Y-%m') == label)
 
 
@@ -203,3 +204,103 @@ def test_each_repo_has_a_sync_state_for_every_flow_resource_at_its_sync_time(
             state = stats_cache.sync_state(name, resource)
             assert state is not None
             assert state.synced_at == synced_at
+
+
+# Delivery
+
+
+def test_every_delivery_record_belongs_to_a_fixture_repo() -> None:
+    names = {repo.name_with_owner for repo in fixture.REPOS}
+    assert {release.repo for release in fixture.RELEASES} <= names
+    assert {run.repo for run in fixture.WORKFLOW_RUNS} <= names
+
+
+def test_a_release_is_published_at_or_after_it_was_created() -> None:
+    for release in fixture.RELEASES:
+        assert release.published_at >= release.created_at
+
+
+def test_every_completed_run_has_a_conclusion_and_no_other_run_has() -> None:
+    for run in fixture.WORKFLOW_RUNS:
+        assert (run.status == 'completed') == (run.conclusion is not None), run.id
+        assert run.updated_at >= run.created_at
+        assert run.run_started_at is None or run.run_started_at >= run.created_at
+
+
+def test_run_ids_and_release_tags_are_unique_within_a_repo() -> None:
+    assert len({(run.repo, run.id) for run in fixture.WORKFLOW_RUNS}) == len(fixture.WORKFLOW_RUNS)
+    assert len({(r.repo, r.tag_name) for r in fixture.RELEASES}) == len(fixture.RELEASES)
+
+
+def test_the_fixtures_cover_what_each_delivery_rule_tells_apart() -> None:
+    conclusions = {run.conclusion for run in fixture.WORKFLOW_RUNS}
+    assert {'success', 'failure', 'timed_out', 'startup_failure', 'cancelled', 'skipped'} <= (
+        conclusions
+    )
+    assert {'in_progress', 'queued'} <= {run.status for run in fixture.WORKFLOW_RUNS}
+    assert any(run.run_started_at is None for run in fixture.WORKFLOW_RUNS)
+    assert any(release.is_prerelease for release in fixture.RELEASES)
+    assert any(
+        release.published_at < fixture.moment('2026-10-01T00:00') for release in fixture.RELEASES
+    )
+    assert any(
+        run.workflow_path.endswith('/deploy.yml') and run.name == 'Deploy'
+        for run in fixture.WORKFLOW_RUNS
+    )
+    hotfix = [
+        p for p in fixture.PULL_REQUESTS if 'hotfix' in {name.casefold() for name in p.labels}
+    ]
+    assert {'Hotfix', 'hotfix'} <= {name for p in hotfix for name in p.labels}
+
+
+def test_the_utc_and_berlin_months_differ_only_where_a_record_crosses_midnight() -> None:
+    assert (
+        fixture.ORG_DELIVERY_BY_MONTH_UTC['workflow_runs']
+        != (fixture.ORG_DELIVERY_BY_MONTH_BERLIN['workflow_runs'])
+    )
+    for name, by_label in fixture.ORG_DELIVERY_BY_MONTH_BERLIN.items():
+        assert by_label['2026-10'] == fixture.ORG_DELIVERY_BY_MONTH_UTC[name]['2026-10']
+
+
+def test_every_delivery_series_has_a_value_somewhere_and_a_percentile_or_ratio_has_a_gap() -> None:
+    expected = {
+        **fixture.ORG_DELIVERY_BY_MONTH_UTC,
+        **fixture.ORG_DORA_RELEASES_BY_MONTH_UTC,
+    }
+    assert set(expected) == {
+        'workflow_runs',
+        'workflow_success_rate',
+        'workflow_duration_p50',
+        'workflow_duration_p90',
+        'release_count',
+        'release_interval_p50',
+        'deployments',
+        'lead_time_p50',
+        'lead_time_p90',
+        'change_failure_rate',
+        'time_to_restore_p50',
+        'time_to_restore_p90',
+    }
+    for name, by_label in expected.items():
+        assert by_label, name
+        if name not in ('workflow_runs', 'release_count', 'deployments'):
+            assert len(by_label) < len(fixture.LABELS), name
+
+
+def test_the_month_counts_equal_a_direct_count_over_the_org_records() -> None:
+    org = {fixture.ALPHA, fixture.BETA}
+    runs = [run.created_at for run in fixture.WORKFLOW_RUNS if run.repo in org]
+    published = [release.published_at for release in fixture.RELEASES if release.repo in org]
+    deployed = [r.published_at for r in fixture.RELEASES if r.repo in org and not r.is_prerelease]
+    for label in fixture.LABELS:
+        expected = fixture.ORG_DELIVERY_BY_MONTH_UTC
+        assert count_in_month(runs, label) == expected['workflow_runs'][label]
+        assert count_in_month(published, label) == expected['release_count'][label]
+        dora = fixture.ORG_DORA_RELEASES_BY_MONTH_UTC
+        assert count_in_month(deployed, label) == dora['deployments'][label]
+
+
+def test_a_gamma_release_and_runs_are_the_users_whole_delivery() -> None:
+    assert [r.tag_name for r in fixture.RELEASES if r.repo == fixture.GAMMA] == ['g1.0']
+    assert [run.id for run in fixture.WORKFLOW_RUNS if run.repo == fixture.GAMMA] == [301, 302]
+    assert not any(p.labels for p in fixture.PULL_REQUESTS if p.repo == fixture.GAMMA)

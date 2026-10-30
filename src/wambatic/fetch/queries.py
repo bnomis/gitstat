@@ -13,6 +13,10 @@ query OwnerRepositories($login: String!, $cursor: String) {
           nodes { updatedAt }
         }
         issues(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }
+        releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
+          totalCount
+          nodes { updatedAt }
+        }
       }
     }
   }
@@ -29,6 +33,10 @@ query Repository($owner: String!, $name: String!) {
       nodes { updatedAt }
     }
     issues(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { updatedAt } }
+    releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes { updatedAt }
+    }
   }
   rateLimit { cost remaining resetAt }
 }
@@ -73,6 +81,8 @@ query PullRequests($owner: String!, $name: String!, $cursor: String) {
         reviews(first: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
           nodes { submittedAt author { __typename login } }
         }
+        labels(first: 20) { nodes { name } }
+        commits(first: 1) { nodes { commit { authoredDate } } }
       }
     }
   }
@@ -89,6 +99,18 @@ query Issues($owner: String!, $name: String!, $cursor: String) {
         number state createdAt updatedAt closedAt
         author { __typename login }
       }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}
+"""
+
+RELEASES = """
+query Releases($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    releases(first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { tagName createdAt publishedAt isDraft isPrerelease }
     }
   }
   rateLimit { cost remaining resetAt }

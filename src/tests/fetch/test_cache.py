@@ -98,11 +98,49 @@ def issue(
     return wambatic.fetch.base.Issue(**fields)  # type: ignore[arg-type]
 
 
+def release(
+    tag_name: str, hours: int = 0, repo_name: str = HELLO, **changes: object
+) -> wambatic.fetch.base.Release:
+    created = T0 + datetime.timedelta(hours=hours)
+    fields: dict[str, object] = {
+        'repo': repo_name,
+        'tag_name': tag_name,
+        'created_at': created,
+        'published_at': created + datetime.timedelta(minutes=5),
+        'is_prerelease': False,
+    }
+    fields.update(changes)
+    return wambatic.fetch.base.Release(**fields)  # type: ignore[arg-type]
+
+
+def workflow_run(
+    run_id: int, hours: int = 0, repo_name: str = HELLO, **changes: object
+) -> wambatic.fetch.base.WorkflowRun:
+    created = T0 + datetime.timedelta(hours=hours)
+    fields: dict[str, object] = {
+        'repo': repo_name,
+        'id': run_id,
+        'workflow_path': '.github/workflows/ci.yml',
+        'name': 'CI',
+        'event': 'push',
+        'head_branch': 'main',
+        'status': 'completed',
+        'conclusion': 'success',
+        'created_at': created,
+        'updated_at': created + datetime.timedelta(minutes=4),
+        'run_started_at': created + datetime.timedelta(seconds=10),
+        'run_attempt': 1,
+    }
+    fields.update(changes)
+    return wambatic.fetch.base.WorkflowRun(**fields)  # type: ignore[arg-type]
+
+
 def state(
     repo_name: str = HELLO,
     head: str | None = 'a' * 40,
     hours: int = 0,
     resource: str = 'commits',
+    probe: str | None = None,
 ) -> wambatic.fetch.base.SyncState:
     return wambatic.fetch.base.SyncState(
         repo=repo_name,
@@ -113,6 +151,7 @@ def state(
         updated_at=T0 + datetime.timedelta(hours=1),
         synced_at=T0 + datetime.timedelta(hours=hours),
         full_synced_at=T0,
+        probe=probe,
     )
 
 
@@ -632,15 +671,219 @@ def test_the_repo_probe_fields_round_trip_through_upsert_and_read(
     assert rows[1].issues_updated_at is None
 
 
-def test_a_cache_stamped_with_schema_version_1_is_refused(cache_path: pathlib.Path) -> None:
+@pytest.mark.parametrize('old', ['1', '2'])
+def test_a_cache_stamped_with_an_earlier_schema_version_is_refused(
+    cache_path: pathlib.Path, old: str
+) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
     connection = sqlite3.connect(cache_path)
     with connection:
-        connection.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+        connection.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (old,))
     connection.close()
     with pytest.raises(wambatic.fetch.errors.CacheVersionError) as caught:
         wambatic.fetch.cache.Cache.open(cache_path)
-    assert caught.value.differences['schema_version'] == ('1', str(CURRENT_SCHEMA_VERSION))
+    assert caught.value.differences['schema_version'] == (old, str(CURRENT_SCHEMA_VERSION))
+
+
+# Labels, releases and workflow runs
+
+
+def test_pull_requests_round_trip_with_labels_and_a_first_commit(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    pulls = [
+        pull_request(
+            1, 2, labels=('Hotfix', 'bug'), first_commit_at=T0 - datetime.timedelta(days=1)
+        ),
+        pull_request(2, 3, labels=('ünïcode ✓',)),
+        pull_request(3, 4, labels=(), first_commit_at=None),
+    ]
+    cache.write_pull_requests(HELLO, pulls, state(resource='pull_requests'), replace=False)
+    read = cache.read_pull_requests(HELLO, None)
+    assert read == pulls
+    assert read[0].labels == ('Hotfix', 'bug')
+    assert read[1].labels == ('ünïcode ✓',)
+    assert read[2].labels == ()
+    assert read[2].first_commit_at is None
+
+
+def test_releases_round_trip_oldest_published_first_then_tag(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    releases = [
+        release('v2', 5),
+        release('v1.1', 1, is_prerelease=True),
+        release('b', 3, published_at=T0 + datetime.timedelta(hours=9)),
+        release('a', 4, published_at=T0 + datetime.timedelta(hours=9)),
+    ]
+    assert cache.write_releases(HELLO, releases, state(resource='releases')) == 4
+    assert [r.tag_name for r in cache.read_releases(HELLO)] == ['v1.1', 'v2', 'a', 'b']
+    assert sorted(cache.read_releases(HELLO), key=lambda r: r.tag_name) == sorted(
+        releases, key=lambda r: r.tag_name
+    )
+
+
+def test_write_releases_replaces_the_repos_rows_and_leaves_another_repo_alone(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_releases(HELLO, [release('v1'), release('v2', 1)], state(resource='releases'))
+    cache.write_releases(SPOON, [release('s1', repo_name=SPOON)], state(SPOON, resource='releases'))
+    cache.write_releases(HELLO, [release('v3', 2)], state(resource='releases'))
+    assert [r.tag_name for r in cache.read_releases(HELLO)] == ['v3']
+    assert [r.tag_name for r in cache.read_releases(SPOON)] == ['s1']
+
+
+def test_workflow_runs_round_trip_with_none_fields(cache: wambatic.fetch.cache.Cache) -> None:
+    runs = [
+        workflow_run(1, 1),
+        workflow_run(
+            2,
+            2,
+            status='in_progress',
+            conclusion=None,
+            head_branch=None,
+            run_attempt=3,
+        ),
+        workflow_run(3, 3, status='queued', conclusion=None, run_started_at=None),
+    ]
+    assert (
+        cache.write_workflow_runs(HELLO, runs, state(resource='workflow_runs'), replace=False) == 3
+    )
+    assert cache.read_workflow_runs(HELLO, None) == runs
+
+
+def test_write_workflow_runs_upserts_and_replace_controls_unlisted_runs(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    runs_state = state(resource='workflow_runs')
+    cache.write_workflow_runs(
+        HELLO, [workflow_run(1, 1), workflow_run(2, 2)], runs_state, replace=False
+    )
+    cache.write_workflow_runs(
+        HELLO, [workflow_run(2, 2, conclusion='failure')], runs_state, replace=False
+    )
+    read = cache.read_workflow_runs(HELLO, None)
+    assert [(run.id, run.conclusion) for run in read] == [(1, 'success'), (2, 'failure')]
+    cache.write_workflow_runs(HELLO, [workflow_run(2, 2)], runs_state, replace=True)
+    assert [run.id for run in cache.read_workflow_runs(HELLO, None)] == [2]
+
+
+def test_write_workflow_runs_removes_the_gone_ids_either_way(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    runs_state = state(resource='workflow_runs')
+    cache.write_workflow_runs(
+        HELLO,
+        [workflow_run(1, 1), workflow_run(2, 2), workflow_run(3, 3)],
+        runs_state,
+        replace=False,
+    )
+    cache.write_workflow_runs(
+        SPOON,
+        [workflow_run(1, 1, repo_name=SPOON)],
+        state(SPOON, resource='workflow_runs'),
+        replace=False,
+    )
+    cache.write_workflow_runs(HELLO, [], runs_state, replace=False, gone={1})
+    assert [run.id for run in cache.read_workflow_runs(HELLO, None)] == [2, 3]
+    cache.write_workflow_runs(HELLO, [workflow_run(4, 4)], runs_state, replace=True, gone={2, 4})
+    assert [run.id for run in cache.read_workflow_runs(HELLO, None)] == []
+    assert [run.id for run in cache.read_workflow_runs(SPOON, None)] == [1]
+
+
+def test_read_workflow_runs_with_since_keeps_exactly_the_rows_at_or_after_it(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    runs = [workflow_run(10, 3), workflow_run(11, 1), workflow_run(12, 2)]
+    cache.write_workflow_runs(HELLO, runs, state(resource='workflow_runs'), replace=False)
+    since = T0 + datetime.timedelta(hours=2)
+    assert [run.id for run in cache.read_workflow_runs(HELLO, since)] == [12, 10]
+    assert [run.id for run in cache.read_workflow_runs(HELLO, None)] == [11, 12, 10]
+
+
+def test_unfinished_runs_lists_queued_and_in_progress_ids_ascending(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    runs = [
+        workflow_run(9, 1, status='in_progress', conclusion=None),
+        workflow_run(3, 2),
+        workflow_run(5, 3, status='queued', conclusion=None),
+        workflow_run(7, 4, repo_name=SPOON, status='queued', conclusion=None),
+    ]
+    cache.write_workflow_runs(HELLO, runs[:3], state(resource='workflow_runs'), replace=False)
+    cache.write_workflow_runs(
+        SPOON, runs[3:], state(SPOON, resource='workflow_runs'), replace=False
+    )
+    assert cache.unfinished_runs(HELLO) == [5, 9]
+    assert cache.unfinished_runs('octocat/none') == []
+
+
+def test_the_sync_state_probe_and_the_repo_release_probe_round_trip(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_releases(HELLO, [], state(resource='releases', probe='2 2026-10-01T10:00:00+00:00'))
+    stored = cache.sync_state(HELLO, 'releases')
+    assert stored is not None
+    assert stored.probe == '2 2026-10-01T10:00:00+00:00'
+    cache.write_commits(HELLO, [], state(), replace=False)
+    commits_state = cache.sync_state(HELLO, 'commits')
+    assert commits_state is not None
+    assert commits_state.probe is None
+    probed = repo(releases_count=3, releases_updated_at=T0 + datetime.timedelta(hours=4))
+    cache.upsert_repos('octocat', [probed, repo(SPOON)], complete=True)
+    rows = cache.read_repos(wambatic.fetch.base.Subject('user', 'octocat'))
+    assert rows == [probed, repo(SPOON)]
+    assert (rows[1].releases_count, rows[1].releases_updated_at) == (0, None)
+
+
+def test_a_release_or_run_or_state_for_another_repo_raises_and_writes_nothing(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_releases(
+            HELLO, [release('v1'), release('v2', repo_name=SPOON)], state(resource='releases')
+        )
+    with pytest.raises(ValueError, match='must belong to'):
+        cache.write_releases(HELLO, [release('v1')], state(SPOON, resource='releases'))
+    for replace in (False, True):
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_workflow_runs(
+                HELLO,
+                [workflow_run(1), workflow_run(2, repo_name=SPOON)],
+                state(resource='workflow_runs'),
+                replace=replace,
+            )
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_workflow_runs(
+                HELLO, [workflow_run(1)], state(SPOON, resource='workflow_runs'), replace=replace
+            )
+    assert table_rows(cache_path, 'releases') == []
+    assert table_rows(cache_path, 'workflow_runs') == []
+    for resource in ('releases', 'workflow_runs'):
+        assert cache.sync_state(HELLO, resource) is None
+        assert cache.sync_state(SPOON, resource) is None
+
+
+def test_a_failure_mid_write_of_runs_leaves_rows_and_state_unchanged(
+    cache: wambatic.fetch.cache.Cache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = state(resource='workflow_runs', hours=1)
+    cache.write_workflow_runs(HELLO, [workflow_run(1, 1)], old, replace=False)
+
+    def fail(new_state: wambatic.fetch.base.SyncState) -> None:
+        raise sqlite3.OperationalError('disk full')
+
+    monkeypatch.setattr(cache, 'put_state', fail)
+    with pytest.raises(sqlite3.OperationalError):
+        cache.write_workflow_runs(
+            HELLO,
+            [workflow_run(2, 2)],
+            state(resource='workflow_runs', hours=2),
+            replace=True,
+            gone={1},
+        )
+    assert [run.id for run in cache.read_workflow_runs(HELLO, None)] == [1]
+    assert cache.sync_state(HELLO, 'workflow_runs') == old
 
 
 # ETags
@@ -739,6 +982,21 @@ def test_inspect_cache_counts_pull_requests_and_issues(
     assert (info.pull_requests, info.issues) == (2, 1)
 
 
+def test_inspect_cache_counts_releases_and_runs(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    cache.write_releases(HELLO, [release('v1'), release('v2', 1)], state(resource='releases'))
+    cache.write_workflow_runs(
+        HELLO,
+        [workflow_run(1), workflow_run(2, 1), workflow_run(3, 2)],
+        state(resource='workflow_runs'),
+        replace=False,
+    )
+    info = wambatic.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert (info.releases, info.workflow_runs) == (2, 3)
+
+
 def test_inspect_cache_gives_zero_pull_requests_and_issues_on_a_file_that_lacks_the_tables(
     cache_path: pathlib.Path,
 ) -> None:
@@ -753,6 +1011,7 @@ def test_inspect_cache_gives_zero_pull_requests_and_issues_on_a_file_that_lacks_
     info = wambatic.fetch.cache.inspect_cache(cache_path)
     assert info is not None
     assert (info.pull_requests, info.issues) == (0, 0)
+    assert (info.releases, info.workflow_runs) == (0, 0)
 
 
 def test_inspect_cache_of_an_empty_sqlite_file_has_zero_counts_and_adds_no_tables(

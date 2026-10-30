@@ -13,7 +13,7 @@ import wambatic.fetch.errors
 import wambatic.fetch.queries
 import wambatic.version
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS repos (
     updated_at TEXT NOT NULL,
     pull_requests_updated_at TEXT,
     issues_updated_at TEXT,
+    releases_count INTEGER NOT NULL DEFAULT 0,
+    releases_updated_at TEXT,
     missing INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS repos_owner ON repos (owner);
@@ -53,6 +55,8 @@ CREATE TABLE IF NOT EXISTS pull_requests (
     first_review_at TEXT,
     additions INTEGER NOT NULL,
     deletions INTEGER NOT NULL,
+    labels TEXT NOT NULL DEFAULT '[]',
+    first_commit_at TEXT,
     PRIMARY KEY (repo, number)
 );
 CREATE INDEX IF NOT EXISTS pull_requests_repo_updated_at ON pull_requests (repo, updated_at);
@@ -66,6 +70,31 @@ CREATE TABLE IF NOT EXISTS issues (
     PRIMARY KEY (repo, number)
 );
 CREATE INDEX IF NOT EXISTS issues_repo_updated_at ON issues (repo, updated_at);
+CREATE TABLE IF NOT EXISTS releases (
+    repo TEXT NOT NULL,
+    tag_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    is_prerelease INTEGER NOT NULL,
+    PRIMARY KEY (repo, tag_name)
+);
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    repo TEXT NOT NULL,
+    id INTEGER NOT NULL,
+    workflow_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    event TEXT NOT NULL,
+    head_branch TEXT,
+    status TEXT NOT NULL,
+    conclusion TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    run_started_at TEXT,
+    run_attempt INTEGER NOT NULL,
+    PRIMARY KEY (repo, id)
+);
+CREATE INDEX IF NOT EXISTS workflow_runs_repo_created_at ON workflow_runs (repo, created_at);
+CREATE INDEX IF NOT EXISTS workflow_runs_repo_status ON workflow_runs (repo, status);
 CREATE TABLE IF NOT EXISTS etags (url TEXT PRIMARY KEY, etag TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_state (
     repo TEXT NOT NULL,
@@ -76,6 +105,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at TEXT NOT NULL,
     synced_at TEXT NOT NULL,
     full_synced_at TEXT NOT NULL,
+    probe TEXT,
     PRIMARY KEY (repo, resource)
 );
 """
@@ -100,8 +130,29 @@ PULL_REQUEST_COLUMNS = (
     'first_review_at',
     'additions',
     'deletions',
+    'labels',
+    'first_commit_at',
 )
 ISSUE_COLUMNS = ('repo', 'number', 'author_login', 'created_at', 'updated_at', 'closed_at')
+RELEASE_COLUMNS = ('repo', 'tag_name', 'created_at', 'published_at', 'is_prerelease')
+WORKFLOW_RUN_COLUMNS = (
+    'repo',
+    'id',
+    'workflow_path',
+    'name',
+    'event',
+    'head_branch',
+    'status',
+    'conclusion',
+    'created_at',
+    'updated_at',
+    'run_started_at',
+    'run_attempt',
+)
+REPO_COLUMNS = (
+    'name_with_owner, default_branch, head_oid, is_archived, is_fork, pushed_at, updated_at, '
+    'pull_requests_updated_at, issues_updated_at, releases_count, releases_updated_at, missing'
+)
 
 
 def expected_identity() -> dict[str, str]:
@@ -152,7 +203,20 @@ class Record(typing.Protocol):
 
 
 def repo_from_row(row: tuple[object, ...]) -> wambatic.fetch.base.Repo:
-    name, branch, head, archived, fork, pushed_at, updated_at, pulls_at, issues_at, missing = row
+    (
+        name,
+        branch,
+        head,
+        archived,
+        fork,
+        pushed_at,
+        updated_at,
+        pulls_at,
+        issues_at,
+        releases_count,
+        releases_at,
+        missing,
+    ) = row
     return wambatic.fetch.base.Repo(
         name_with_owner=str(name),
         default_branch=None if branch is None else str(branch),
@@ -163,6 +227,8 @@ def repo_from_row(row: tuple[object, ...]) -> wambatic.fetch.base.Repo:
         updated_at=from_text(str(updated_at)),
         pull_requests_updated_at=optional_from_text(None if pulls_at is None else str(pulls_at)),
         issues_updated_at=optional_from_text(None if issues_at is None else str(issues_at)),
+        releases_count=int(str(releases_count)),
+        releases_updated_at=optional_from_text(None if releases_at is None else str(releases_at)),
         missing=bool(missing),
     )
 
@@ -181,7 +247,9 @@ def commit_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.C
 
 
 def pull_request_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.PullRequest:
-    number, login, created, updated, merged, closed, review, additions, deletions = row
+    number, login, created, updated, merged, closed, review, additions, deletions, labels, first = (
+        row
+    )
     return wambatic.fetch.base.PullRequest(
         repo=repo,
         number=int(str(number)),
@@ -193,6 +261,8 @@ def pull_request_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.
         first_review_at=optional_from_text(None if review is None else str(review)),
         additions=int(str(additions)),
         deletions=int(str(deletions)),
+        labels=tuple(str(label) for label in json.loads(str(labels))),
+        first_commit_at=optional_from_text(None if first is None else str(first)),
     )
 
 
@@ -205,6 +275,35 @@ def issue_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.Is
         created_at=from_text(str(created)),
         updated_at=from_text(str(updated)),
         closed_at=optional_from_text(None if closed is None else str(closed)),
+    )
+
+
+def release_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.Release:
+    tag_name, created, published, is_prerelease = row
+    return wambatic.fetch.base.Release(
+        repo=repo,
+        tag_name=str(tag_name),
+        created_at=from_text(str(created)),
+        published_at=from_text(str(published)),
+        is_prerelease=bool(is_prerelease),
+    )
+
+
+def workflow_run_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.WorkflowRun:
+    run_id, path, name, event, branch, status, conclusion, created, updated, started, attempt = row
+    return wambatic.fetch.base.WorkflowRun(
+        repo=repo,
+        id=int(str(run_id)),
+        workflow_path=str(path),
+        name=str(name),
+        event=str(event),
+        head_branch=None if branch is None else str(branch),
+        status=str(status),
+        conclusion=None if conclusion is None else str(conclusion),
+        created_at=from_text(str(created)),
+        updated_at=from_text(str(updated)),
+        run_started_at=optional_from_text(None if started is None else str(started)),
+        run_attempt=int(str(attempt)),
     )
 
 
@@ -288,7 +387,8 @@ class Cache:
             self.connection.executemany(
                 'INSERT OR REPLACE INTO repos (name_with_owner, owner, default_branch, head_oid, '
                 'is_archived, is_fork, pushed_at, updated_at, pull_requests_updated_at, '
-                'issues_updated_at, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+                'issues_updated_at, releases_count, releases_updated_at, missing) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
                 [
                     (
                         repo.name_with_owner,
@@ -301,16 +401,15 @@ class Cache:
                         to_text(repo.updated_at),
                         optional_to_text(repo.pull_requests_updated_at),
                         optional_to_text(repo.issues_updated_at),
+                        repo.releases_count,
+                        optional_to_text(repo.releases_updated_at),
                     )
                     for repo in repos
                 ],
             )
 
     def read_repos(self, subject: wambatic.fetch.base.Subject) -> list[wambatic.fetch.base.Repo]:
-        columns = (
-            'name_with_owner, default_branch, head_oid, is_archived, is_fork, pushed_at, '
-            'updated_at, pull_requests_updated_at, issues_updated_at, missing'
-        )
+        columns = REPO_COLUMNS
         with self.lock:
             if subject.kind == 'repo':
                 rows = self.connection.execute(
@@ -328,13 +427,13 @@ class Cache:
     def sync_state(self, repo: str, resource: str) -> wambatic.fetch.base.SyncState | None:
         with self.lock:
             row = self.connection.execute(
-                'SELECT watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at '
-                'FROM sync_state WHERE repo = ? AND resource = ?',
+                'SELECT watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at, '
+                'probe FROM sync_state WHERE repo = ? AND resource = ?',
                 (repo, resource),
             ).fetchone()
         if row is None:
             return None
-        watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at = row
+        watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at, probe = row
         return wambatic.fetch.base.SyncState(
             repo=repo,
             resource=resource,
@@ -344,13 +443,14 @@ class Cache:
             updated_at=from_text(updated_at),
             synced_at=from_text(synced_at),
             full_synced_at=from_text(full_synced_at),
+            probe=probe,
         )
 
     def put_state(self, state: wambatic.fetch.base.SyncState) -> None:
         """Write a `sync_state` row inside the caller's transaction."""
         self.connection.execute(
             'INSERT OR REPLACE INTO sync_state (repo, resource, watermark, head_oid, pushed_at, '
-            'updated_at, synced_at, full_synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            'updated_at, synced_at, full_synced_at, probe) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 state.repo,
                 state.resource,
@@ -360,6 +460,7 @@ class Cache:
                 to_text(state.updated_at),
                 to_text(state.synced_at),
                 to_text(state.full_synced_at),
+                state.probe,
             ),
         )
 
@@ -374,9 +475,11 @@ class Cache:
         state: wambatic.fetch.base.SyncState,
         *,
         replace: bool,
+        gone: collections.abc.Collection[int] = (),
     ) -> int:
         """In one transaction: with `replace`, delete the repo's rows from `table` first; upsert
-        each record by `key`; write `state`. Returns the number of rows written."""
+        each record by `key`; delete the rows whose second key column is in `gone`; write `state`.
+        Returns the number of rows written."""
         if any(record.repo != repo for record in records) or state.repo != repo:
             raise ValueError(f'every record and the state must belong to {repo}')
         updates = ', '.join(f'{name} = excluded.{name}' for name in columns if name not in key)
@@ -389,6 +492,10 @@ class Cache:
             if replace:
                 self.connection.execute(f'DELETE FROM {table} WHERE repo = ?', (repo,))
             self.connection.executemany(sql, [values(record) for record in records])
+            self.connection.executemany(
+                f'DELETE FROM {table} WHERE repo = ? AND {key[1]} = ?',
+                [(repo, identifier) for identifier in sorted(gone)],
+            )
             self.put_state(state)
         return len(records)
 
@@ -470,6 +577,8 @@ class Cache:
                 optional_to_text(pull.first_review_at),
                 pull.additions,
                 pull.deletions,
+                json.dumps(list(pull.labels)),
+                optional_to_text(pull.first_commit_at),
             ),
             state,
             replace=replace,
@@ -500,6 +609,65 @@ class Cache:
             ),
             state,
             replace=replace,
+        )
+
+    def write_releases(
+        self,
+        repo: str,
+        releases: list[wambatic.fetch.base.Release],
+        state: wambatic.fetch.base.SyncState,
+    ) -> int:
+        """As `write_commits` with `replace`: every read of releases is a full read."""
+        return self.write_rows(
+            'releases',
+            RELEASE_COLUMNS,
+            ('repo', 'tag_name'),
+            repo,
+            releases,
+            lambda release: (
+                release.repo,
+                release.tag_name,
+                to_text(release.created_at),
+                to_text(release.published_at),
+                release.is_prerelease,
+            ),
+            state,
+            replace=True,
+        )
+
+    def write_workflow_runs(
+        self,
+        repo: str,
+        runs: list[wambatic.fetch.base.WorkflowRun],
+        state: wambatic.fetch.base.SyncState,
+        *,
+        replace: bool,
+        gone: collections.abc.Collection[int] = (),
+    ) -> int:
+        """As `write_commits`, upserting by id; the runs whose ids are in `gone` are deleted."""
+        return self.write_rows(
+            'workflow_runs',
+            WORKFLOW_RUN_COLUMNS,
+            ('repo', 'id'),
+            repo,
+            runs,
+            lambda run: (
+                run.repo,
+                run.id,
+                run.workflow_path,
+                run.name,
+                run.event,
+                run.head_branch,
+                run.status,
+                run.conclusion,
+                to_text(run.created_at),
+                to_text(run.updated_at),
+                optional_to_text(run.run_started_at),
+                run.run_attempt,
+            ),
+            state,
+            replace=replace,
+            gone=gone,
         )
 
     def read_commits(
@@ -544,6 +712,41 @@ class Cache:
         )
         return [issue_from_row(repo, row) for row in rows]
 
+    def read_releases(self, repo: str) -> list[wambatic.fetch.base.Release]:
+        """All the repo's rows, oldest `published_at` first."""
+        rows = self.read_rows(
+            'releases',
+            ', '.join(RELEASE_COLUMNS[1:]),
+            repo,
+            None,
+            time_column='published_at',
+            order='published_at, tag_name',
+        )
+        return [release_from_row(repo, row) for row in rows]
+
+    def read_workflow_runs(
+        self, repo: str, since: datetime.datetime | None
+    ) -> list[wambatic.fetch.base.WorkflowRun]:
+        """Rows with `created_at >= since` (all when None), oldest first."""
+        rows = self.read_rows(
+            'workflow_runs',
+            ', '.join(WORKFLOW_RUN_COLUMNS[1:]),
+            repo,
+            since,
+            time_column='created_at',
+            order='created_at, id',
+        )
+        return [workflow_run_from_row(repo, row) for row in rows]
+
+    def unfinished_runs(self, repo: str) -> list[int]:
+        """Ids of the repo's runs whose status is not `completed`, ascending."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT id FROM workflow_runs WHERE repo = ? AND status != 'completed' ORDER BY id",
+                (repo,),
+            ).fetchall()
+        return [int(row[0]) for row in rows]
+
     def etag(self, url: str) -> tuple[str, object] | None:
         """The stored ETag and parsed body for a REST URL."""
         with self.lock:
@@ -571,6 +774,8 @@ class CacheInfo:
     commits: int
     pull_requests: int
     issues: int
+    releases: int
+    workflow_runs: int
     last_synced_at: datetime.datetime | None
 
 
@@ -600,6 +805,8 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
         commits = scalar('commits', 'SELECT COUNT(*) FROM commits')
         pull_requests = scalar('pull_requests', 'SELECT COUNT(*) FROM pull_requests')
         issues = scalar('issues', 'SELECT COUNT(*) FROM issues')
+        releases = scalar('releases', 'SELECT COUNT(*) FROM releases')
+        workflow_runs = scalar('workflow_runs', 'SELECT COUNT(*) FROM workflow_runs')
     finally:
         connection.close()
     identity = {key: value for key, value in meta.items() if key != OVERRIDE_KEY}
@@ -614,6 +821,8 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
         commits=int(str(commits or 0)),
         pull_requests=int(str(pull_requests or 0)),
         issues=int(str(issues or 0)),
+        releases=int(str(releases or 0)),
+        workflow_runs=int(str(workflow_runs or 0)),
         last_synced_at=None if last_synced is None else from_text(str(last_synced)),
     )
 

@@ -91,11 +91,11 @@ hours; - no data
 Unavailable
 
   Metric      Reason
- ────────────────────────────────────────────────────────────────────────────────
-  stars       stars come from star_events, which step 8 fetches
-  forks       forks has no fetch resource yet; it is specified before step 8
-  watchers    watchers has no fetch resource yet; it is specified before step 8
-  languages   languages has no fetch resource yet; it is specified before step 8
+ ───────────────────────────────────────────────────────────────────────────────────
+  stars       stars come from star_events, which step 10 fetches
+  forks       forks has no fetch resource yet; step 10 specifies and fetches it
+  watchers    watchers has no fetch resource yet; step 10 specifies and fetches it
+  languages   languages has no fetch resource yet; step 10 specifies and fetches it
 
 
 Provenance

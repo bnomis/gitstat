@@ -9,12 +9,15 @@ comes from.
 import dataclasses
 import datetime
 import email.utils
+import hashlib
+import json
 import re
 
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 
 COMPARE_PATH = re.compile(r'/repos/(?P<name>[^/]+/[^/]+)/compare/(?P<base>\w+)\.\.\.(?P<head>\w+)')
+RUNS_PATH = re.compile(r'/repos/(?P<name>[^/]+/[^/]+)/actions/runs(?:/(?P<id>\d+))?')
 
 
 @dataclasses.dataclass(slots=True)
@@ -38,6 +41,8 @@ class FakePull:
     login: str | None = 'octocat'
     additions: int = 5
     deletions: int = 2
+    labels: tuple[str, ...] = ()
+    first_commit_at: datetime.datetime | None = None
 
 
 @dataclasses.dataclass(slots=True)
@@ -51,6 +56,32 @@ class FakeIssue:
 
 
 @dataclasses.dataclass(slots=True)
+class FakeRelease:
+    tag_name: str
+    created_at: datetime.datetime
+    published_at: datetime.datetime | None = None
+    updated_at: datetime.datetime | None = None
+    is_draft: bool = False
+    is_prerelease: bool = False
+
+    @property
+    def changed_at(self) -> datetime.datetime:
+        return self.updated_at or self.published_at or self.created_at
+
+
+@dataclasses.dataclass(slots=True)
+class FakeRun:
+    id: int
+    created_at: datetime.datetime
+    status: str = 'completed'
+    conclusion: str | None = 'success'
+    path: str = '.github/workflows/ci.yml'
+    name: str = 'CI'
+    updated_at: datetime.datetime | None = None
+    run_started_at: datetime.datetime | None = None
+
+
+@dataclasses.dataclass(slots=True)
 class FakeRepo:
     name: str
     history: list[FakeCommit]
@@ -61,12 +92,16 @@ class FakeRepo:
     branch: str = 'main'
     pulls: list[FakePull] = dataclasses.field(default_factory=list)
     issues: list[FakeIssue] = dataclasses.field(default_factory=list)
+    releases: list[FakeRelease] = dataclasses.field(default_factory=list)
+    runs: list[FakeRun] = dataclasses.field(default_factory=list)
+    has_actions: bool = True
 
     @property
     def head(self) -> str | None:
         return self.history[-1].oid if self.history else None
 
     def node(self) -> dict[str, object]:
+        newest = max(self.releases, key=lambda r: r.created_at, default=None)
         return tests.fixtures.fetch.responses.repo_node(
             self.name,
             head=self.head if self.history else None,
@@ -77,6 +112,8 @@ class FakeRepo:
             is_archived=self.is_archived,
             pull_requests_updated_at=max((p.updated_at for p in self.pulls), default=None),
             issues_updated_at=max((i.updated_at for i in self.issues), default=None),
+            releases_count=len(self.releases),
+            releases_updated_at=None if newest is None else newest.changed_at,
         )
 
     def push(self, *commits: FakeCommit) -> None:
@@ -97,6 +134,10 @@ class Upstream:
         self.dropped_nodes: set[str] = set()
         self.flow_page_size = 100
         self.failing_flow_cursors: set[str] = set()
+        self.release_page_size = 100
+        self.failing_release_cursors: set[str] = set()
+        self.failing_run_pages: set[int] = set()
+        self.run_etags = True
         self.now = tests.fixtures.fetch.responses.NOW
 
     def respond(
@@ -107,6 +148,9 @@ class Upstream:
         match = COMPARE_PATH.fullmatch(received.path)
         if match:
             return self.compare(match, received.query)
+        match = RUNS_PATH.fullmatch(received.path)
+        if match:
+            return self.actions_runs(match, received)
         return tests.fixtures.fetch.server.Canned(404, tests.fixtures.fetch.responses.NOT_FOUND)
 
     def graphql(
@@ -142,6 +186,8 @@ class Upstream:
             return tests.fixtures.fetch.server.Canned(
                 200, self.history_page(name, variables['cursor']), headers, self.history_delay
             )
+        if 'query Releases' in query:
+            return self.release_page(variables, headers)
         if 'query CommitNodes' in query:
             return tests.fixtures.fetch.server.Canned(200, self.nodes(variables['ids']), headers)
         raise AssertionError(f'unexpected query: {query}')
@@ -172,6 +218,8 @@ class Upstream:
                         additions=p.additions,
                         deletions=p.deletions,
                         login=p.login,
+                        labels=p.labels,
+                        first_commit_at=p.first_commit_at,
                     )
                     for p in pulls[start:end]
                 ],
@@ -195,6 +243,85 @@ class Upstream:
                 end < len(items),
                 str(end),
             )
+        return tests.fixtures.fetch.server.Canned(200, body, headers)
+
+    def release_page(
+        self, variables: dict[str, object], headers: dict[str, str]
+    ) -> tests.fixtures.fetch.server.Canned:
+        cursor = str(variables['cursor'] or 0)
+        if cursor in self.failing_release_cursors:
+            return tests.fixtures.fetch.server.Canned(
+                500, tests.fixtures.fetch.responses.SERVER_ERROR
+            )
+        repo = self.repos[f'{variables["owner"]}/{variables["name"]}']
+        responses = tests.fixtures.fetch.responses
+        ordered = sorted(repo.releases, key=lambda r: (r.created_at, r.tag_name), reverse=True)
+        start = int(cursor)
+        end = start + self.release_page_size
+        body = responses.releases_page(
+            [
+                responses.release_node(
+                    r.tag_name,
+                    created_at=r.created_at,
+                    published_at=r.published_at,
+                    is_draft=r.is_draft,
+                    is_prerelease=r.is_prerelease,
+                )
+                for r in ordered[start:end]
+            ],
+            end < len(ordered),
+            str(end),
+        )
+        return tests.fixtures.fetch.server.Canned(200, body, headers)
+
+    def run_object(self, run: FakeRun) -> dict[str, object]:
+        return tests.fixtures.fetch.responses.workflow_run_object(
+            run.id,
+            path=run.path,
+            name=run.name,
+            status=run.status,
+            conclusion=run.conclusion,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+            run_started_at=run.run_started_at or run.created_at,
+        )
+
+    def actions_runs(
+        self, match: re.Match[str], received: tests.fixtures.fetch.server.Received
+    ) -> tests.fixtures.fetch.server.Canned:
+        """`GET /repos/{name}/actions/runs[/{id}]`; the list is newest first and carries an ETag
+        that a matching `If-None-Match` is answered 304 for, without rate headers."""
+        repo = self.repos.get(match['name'])
+        if repo is None or not repo.has_actions:
+            return tests.fixtures.fetch.server.Canned(404, tests.fixtures.fetch.responses.NOT_FOUND)
+        date = {'Date': email.utils.format_datetime(self.now, usegmt=True)}
+        if match['id'] is not None:
+            found = [r for r in repo.runs if r.id == int(match['id'])]
+            if not found:
+                return tests.fixtures.fetch.server.Canned(
+                    404, tests.fixtures.fetch.responses.NOT_FOUND
+                )
+            body: object = self.run_object(found[0])
+            return tests.fixtures.fetch.server.Canned(
+                200, body, {**tests.fixtures.fetch.responses.RATE_HEADERS, **date}
+            )
+        page = int(received.query['page'])
+        if page in self.failing_run_pages:
+            return tests.fixtures.fetch.server.Canned(
+                500, tests.fixtures.fetch.responses.SERVER_ERROR
+            )
+        ordered = sorted(repo.runs, key=lambda r: (r.created_at, r.id), reverse=True)
+        size = int(received.query['per_page'])
+        shown = ordered[(page - 1) * size : page * size]
+        body = tests.fixtures.fetch.responses.workflow_runs_response(
+            [self.run_object(run) for run in shown], total=len(ordered)
+        )
+        headers = {**tests.fixtures.fetch.responses.RATE_HEADERS, **date}
+        if self.run_etags:
+            etag = f'"{hashlib.sha1(json.dumps(body).encode()).hexdigest()}"'
+            if received.headers.get('If-None-Match') == etag:
+                return tests.fixtures.fetch.server.Canned(304, None, date)
+            headers['ETag'] = etag
         return tests.fixtures.fetch.server.Canned(200, body, headers)
 
     def owner_page(self, variables: dict[str, object]) -> dict[str, object]:
@@ -279,11 +406,13 @@ class Upstream:
             'query CommitNodes': 'nodes',
             'query PullRequests': 'pull_requests',
             'query Issues': 'issues',
+            'query Releases': 'releases',
         }
         found: list[str] = []
         for received in server.received:
             if received.path != '/graphql':
-                found.append('compare')
+                match = RUNS_PATH.fullmatch(received.path)
+                found.append('compare' if match is None else 'run' if match['id'] else 'runs')
                 continue
             assert isinstance(received.json, dict)
             query = str(received.json['query'])

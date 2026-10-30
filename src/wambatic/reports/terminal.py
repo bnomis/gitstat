@@ -45,10 +45,16 @@ def format_number(value: float, *, signed: bool = False, decimals: int | None = 
 
 
 def format_cell(metric: str, value: float | None) -> str:
-    """A period table's cell: hours with one decimal place, `lines_net` signed, `-` for no data."""
+    """A period table's cell: hours and minutes with one decimal place, ratios as percentages,
+    `lines_net` signed, `-` for no data."""
     if value is None:
         return wambatic.reports.rows.NO_DATA
     if metric in wambatic.reports.rows.FLOW_TIMES:
+        return format_number(value, decimals=1)
+    unit = wambatic.reports.rows.DELIVERY_UNITS.get(metric)
+    if unit == 'ratio':
+        return f'{value * 100:,.1f}%'
+    if unit in ('minutes', 'hours'):
         return format_number(value, decimals=1)
     return format_number(value, signed=metric in wambatic.reports.rows.SIGNED_METRICS)
 
@@ -243,6 +249,22 @@ def render_flow(result: wambatic.stats.base.StatsResult, console: rich.console.C
     console.print(period_table(times, caption=flow_times_caption(times)))
 
 
+def render_delivery(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
+    """Delivery by period and DORA proxies by period (items 8 and 9 of the terminal layout)."""
+    for table, unit in (
+        (wambatic.reports.rows.delivery_table(result), 'minutes and days'),
+        (wambatic.reports.rows.dora_table(result), 'proxies: see the README; hours'),
+    ):
+        if table is not None:
+            console.print()
+            console.print(period_table(table, caption=delivery_caption(table, unit)))
+
+
+def delivery_caption(table: wambatic.reports.rows.PeriodTable, unit: str) -> str:
+    note = f'{unit}; {wambatic.reports.rows.NO_DATA} no data'
+    return f'* partial period; {note}' if table.has_partial else note
+
+
 def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
     series = wambatic.reports.rows.total_series(result)
     activity = wambatic.reports.rows.activity_table(result)
@@ -259,6 +281,7 @@ def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.conso
         render_breakdowns(result, console)
         render_top_contributors(result, console)
     render_flow(result, console)
+    render_delivery(result, console)
     render_unavailable(result, console)
     heading(console, 'Provenance')
     for line in wambatic.reports.rows.provenance_lines(result):

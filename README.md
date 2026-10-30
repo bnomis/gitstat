@@ -2,7 +2,7 @@
 
 Statistics from github.com for a user, an organisation or a single repository, as a report in your terminal, as one self-contained HTML page or as JSON.
 
-wambatic reads the default-branch history, pull requests and issues from GitHub's GraphQL and REST APIs, keeps them in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, together with how pull requests and issues flow (opened, merged, closed, and how long that takes), by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
+wambatic reads the default-branch history, pull requests, issues, releases and GitHub Actions runs from GitHub's GraphQL and REST APIs, keeps them in a local SQLite cache, and reports commits, contributors, active days and lines added, deleted and net, together with how pull requests and issues flow (opened, merged, closed, and how long that takes) and how the project delivers (runs, releases and proxies for the DORA metrics), by year, month, week or day. Only the changes since the last run are fetched, so a repeat run is fast and a report from a warm cache works offline.
 
 ## Install
 
@@ -38,12 +38,13 @@ The first run reads the whole history of the repository and may take a while for
 
 - a title line with the subject, the date range, the period and the time zone;
 - Activity by period: commits, contributors, active days, lines added, deleted and net for each period, with a `Total` row when there is more than one period. A period that the range cuts short ends in `*`, which the caption explains;
-- Trends: a sparkline for each metric that has a value in every period (the activity metrics and the four flow counts), cropped to the width of your terminal;
+- Trends: a sparkline for each metric that has a value in every period (the activity metrics, the flow counts and the delivery counts), cropped to the width of your terminal;
 - By repository (for a user or organisation) and By author (with `--by-author`);
 - Top contributors, with only the first rows shown (the JSON output has every row);
 - Flow by period: pull requests opened and merged and issues opened and closed for each period, with a `Total` row when there is more than one period;
 - Flow times by period: the median and 90th percentile of review, merge and close times in hours, and the median size of merged pull requests, with `-` where a period has no data (see [Flow](#flow));
-- Unavailable: metrics that are not built yet, with the reason;
+- with `--groups delivery`, Delivery by period (runs, success rate, run durations in minutes, releases and the release interval in days) and DORA proxies by period (see [Delivery](#delivery));
+- Unavailable: metrics that are not built yet, or whose inputs are not in the cache, with the reason;
 - where the data came from: when it was computed, when each resource was last fetched, and the wambatic and cache schema versions.
 
 Nothing in the output depends on colour: net lines carry an explicit sign, and partial periods carry a mark.
@@ -79,6 +80,39 @@ The `flow` group counts pull requests and issues. Each event is placed in the pe
 
 `p50` is the median and `p90` the 90th percentile of the values in the period. A period with no value has no point for these (the terminal shows `-`), because a median of nothing is not zero. The review time leaves out reviews by the pull request's author and by bots, so an automatic reviewer does not make every review time a few minutes; a pull request with no other reviewer has no review time. Bots' own pull requests and issues are counted, because `stats.bot_logins` only affects contributor counts. For a user target, only the pull requests and issues the user opened count.
 
+## Delivery
+
+The `delivery` group counts GitHub Actions runs and releases, and derives proxies for the DORA metrics from them. Ask for it with `--groups delivery` (or `--groups activity,flow,delivery` for everything); it is not in the default groups because it reads every workflow run of every repository.
+
+```shell
+wambatic report repo:octocat/Hello-World --groups delivery
+```
+
+Each event is placed in the period of its own date in the report time zone, as in [Flow](#flow).
+
+| Metric | What it is |
+|--------|------------|
+| `workflow_runs` | Workflow runs created in the period, whatever their state |
+| `workflow_success_rate` | Of the completed runs created in the period whose conclusion is success, failure, timed out or startup failure, the share that succeeded; cancelled and skipped runs are not outcomes of the code and are left out. Shown as a percentage |
+| `workflow_duration_p50`, `workflow_duration_p90` | Minutes from a completed run starting to its last update; an approximation, since GitHub does not report a run's end time |
+| `release_count` | Releases published in the period, prereleases included, drafts left out |
+| `release_interval_p50` | The median whole days since the repository's previous release, for the releases published in the period; a repository's first release has none |
+
+`p50` and `p90` are as in Flow, and a period with no value shows `-`. Runs triggered by pull requests are counted like any other. The success rate and the durations have no point in a period without a completed run. For a user target, the runs and releases of the user's own repositories count, whoever made them.
+
+### DORA proxies
+
+[DORA's four keys](https://dora.dev/guides/dora-metrics-four-keys/) are deployment frequency, lead time for changes, change failure rate and time to restore service. GitHub records none of them, so wambatic estimates each from what it does record. They are proxies: use them to see a trend, not to compare teams.
+
+| Metric | How it is measured |
+|--------|--------------------|
+| `deployments` | A deployment is a release that is not a prerelease, at the time it was published. With `stats.deploy_workflow` set it is instead a successful, completed run of that workflow, at the time the run finished. Deployments are counted for each repository |
+| `lead_time_p50`, `lead_time_p90` | Hours from a merged pull request's first commit (its creation, when that is not known) to the first deployment of the same repository at or after the merge, in the period of the deployment. A pull request that no deployment has followed yet is not counted |
+| `change_failure_rate` | Of the deployments in the period, the share followed, within `stats.failure_window`, by a pull request of the same repository that carries a label in `stats.hotfix_labels`. A deployment whose window is still open at the end of the range counts as not failed. Shown as a percentage |
+| `time_to_restore_p50`, `time_to_restore_p90` | Hours from a hotfix pull request being opened to being merged, in the period of the merge |
+
+Each proxy is shown only when what it needs is in the cache, and otherwise appears under Unavailable with the reason. `deployments` and the lead time need at least one deployment: a release, or a successful run of `stats.deploy_workflow`. The change failure rate also needs a pull request with a hotfix label, and the time to restore needs one. That is deliberate: a repository that never labels its hotfixes would otherwise show a change failure rate of 0%, which reads as good news and means nothing.
+
 ## Common workflows
 
 ```shell
@@ -90,6 +124,9 @@ wambatic report org:github --max-age 1d
 
 # A self-contained HTML page, opening on the week view, written to a file of your choice
 wambatic report org:github --format html --by week --out reports/github.html
+
+# How a repository ships: runs, releases and the DORA proxies
+wambatic report repo:OWNER/NAME --groups delivery
 
 # Machine-readable output, with logs kept on stderr
 wambatic report org:github --format json | jq '.series[0].points'
@@ -130,7 +167,7 @@ Global options come before the command: `wambatic -v report ...`.
 | `--by year\|month\|week\|day\|total` | `month` | The period to bucket by; weeks are ISO weeks starting on Monday. With `--format html`, the period shown when the page opens, and `total` is an error |
 | `--since YYYY-MM-DD` | the first commit | First day, inclusive, in the report time zone |
 | `--until YYYY-MM-DD` | today | Last day, inclusive, in the report time zone |
-| `--groups NAMES` | `activity,flow` | Comma-separated metric groups: `activity`, `delivery`, `flow`. `activity` and `flow` are built; `delivery` is not built yet and is listed as unavailable |
+| `--groups NAMES` | `activity,flow` | Comma-separated metric groups: `activity`, `delivery`, `flow`. `delivery` is off by default because it reads every workflow run, which costs requests (see [The cache](#the-cache)) |
 | `--by-author` | off | Break activity down by author; not for a user target |
 | `--tz ZONE` | `stats.timezone` | An [IANA time zone](https://www.iana.org/time-zones) such as `Europe/Berlin` |
 | `--full-refresh` | off | Read all history again and ignore `--max-age`; cannot be used with `--no-fetch` |
@@ -151,9 +188,11 @@ wambatic cache info
 wambatic cache clear
 ```
 
-`cache info` prints the path, the size, the recorded identity, every key that differs from this wambatic (with both values), the number of repositories, commits, pull requests and issues and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
+`cache info` prints the path, the size, the recorded identity, every key that differs from this wambatic (with both values), the number of repositories, commits, pull requests, issues, releases and workflow runs and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
 
-A cache written by an earlier wambatic, before pull requests and issues were kept, is refused once after you upgrade: the cache is derived data, so run `wambatic cache clear` and the next report fetches it again.
+A cache written by an earlier wambatic, before releases and workflow runs were kept, is refused once after you upgrade: the cache is derived data, so run `wambatic cache clear` and the next report fetches it again.
+
+The first sync with `--groups delivery` reads every workflow run of each repository, newest first, about one request for each hundred runs, so a repository with a long Actions history costs many. Later syncs ask for the newest page with a conditional request, which GitHub answers for free when nothing has run since, and read further only when something has. Releases are read again only when a repository's release count or newest release has changed.
 
 When `report` stops with "The cache was written by a different version", either run `wambatic cache clear` and let it fetch again, or pass `--ignore-cache-version` for one run. The override is recorded in the cache and shown as a warning in the report.
 
@@ -190,10 +229,10 @@ A duration is a whole number and one unit, `s`, `m`, `h`, `d` or `w`, such as `"
 | `report.web_host` | `127.0.0.1` | For the web app, which is not built yet |
 | `report.web_port` | `8000` | For the web app, which is not built yet |
 | `stats.bot_logins` | `["dependabot[bot]", "renovate[bot]"]` | Authors left out of contributor counts and the top-contributors table |
-| `stats.deploy_workflow` | none | For the delivery group, which is not built yet |
+| `stats.deploy_workflow` | none | The workflow whose successful runs are the deployments, matched against a run's workflow file name (`deploy.yml`) or its name; unset, releases that are not prereleases are the deployments |
 | `stats.exclude_merge_commits` | `true` | Leave merge commits out of line counts |
-| `stats.failure_window` | `7d` | For the delivery group, which is not built yet |
-| `stats.hotfix_labels` | `["hotfix"]` | For the delivery group, which is not built yet |
+| `stats.failure_window` | `7d` | How long after a deployment a hotfix pull request marks it as failed |
+| `stats.hotfix_labels` | `["hotfix"]` | Pull request labels that mark a failure fix, compared without regard to case |
 | `stats.timezone` | `UTC` | The zone used when `--tz` is absent; an unknown zone is an error |
 
 ## Exit statuses
@@ -214,7 +253,8 @@ Each failure prints one line to stderr that says what to do, such as setting `GI
 - Line counts are not filtered for generated files.
 - A report uses one time zone.
 - GitHub Enterprise Server is not supported.
-- The delivery group and the local web app (`serve`) are not built yet.
+- The DORA figures are proxies built on conventions that GitHub does not enforce (see [DORA proxies](#dora-proxies)).
+- Stars, forks, watchers and languages, and the local web app (`serve`), are not built yet.
 
 ## More
 
