@@ -38,13 +38,14 @@ The first run reads the whole history of the repository and may take a while for
 
 - a title line with the subject, the date range, the period and the time zone;
 - Activity by period: commits, contributors, active days, lines added, deleted and net for each period, with a `Total` row when there is more than one period. A period that the range cuts short ends in `*`, which the caption explains;
-- Trends: a sparkline for each metric that has a value in every period (the activity metrics, the flow counts and the delivery counts), cropped to the width of your terminal;
+- Trends: a sparkline for each metric that has a value in every period (the activity metrics, the flow counts, the delivery counts and the popularity counts), cropped to the width of your terminal;
 - By repository (for a user or organisation) and By author (with `--by-author`);
 - Top contributors, with only the first rows shown (the JSON output has every row);
 - Flow by period: pull requests opened and merged and issues opened and closed for each period, with a `Total` row when there is more than one period;
 - Flow times by period: the median and 90th percentile of review, merge and close times in hours, and the median size of merged pull requests, with `-` where a period has no data (see [Flow](#flow));
 - with `--groups delivery`, Delivery by period (runs, success rate, run durations in minutes, releases and the release interval in days) and DORA proxies by period (see [Delivery](#delivery));
-- Unavailable: metrics that are not built yet, or whose inputs are not in the cache, with the reason;
+- with `--groups popularity`, Popularity by period (stars and forks added and the running totals), Popularity now (stars, forks and watchers of each repository) and Languages (see [Popularity](#popularity));
+- Unavailable: metrics whose inputs are not in the cache, with the reason;
 - where the data came from: when it was computed, when each resource was last fetched, and the wambatic and cache schema versions.
 
 Nothing in the output depends on colour: net lines carry an explicit sign, and partial periods carry a mark.
@@ -55,7 +56,7 @@ Nothing in the output depends on colour: net lines carry an explicit sign, and p
 wambatic report org:github --format html
 ```
 
-This writes one HTML file and prints its path on stdout, so a script can capture it (`open "$(wambatic report org:github --format html)"`). The page has summary tiles, a chart for each measure, the whole-range charts (top contributors, and by repository and by author), a calendar of commits by day, and the same tables as the terminal report. The tables are plain HTML, so they can be read, copied and searched even with script turned off.
+This writes one HTML file and prints its path on stdout, so a script can capture it (`open "$(wambatic report org:github --format html)"`). The page has summary tiles, a chart for each measure, the whole-range charts (top contributors, by repository and by author, and the languages), a calendar of commits by day, and the same tables as the terminal report. The tables are plain HTML, so they can be read, copied and searched even with script turned off.
 
 - **Where the file goes.** `--out PATH` is a file, or an existing directory to write into. Without it the file goes in `report.out_dir`. The file is named `repo-OWNER-NAME.html`, `user-NAME.html` or `org-NAME.html`. Missing directories are created and an existing file is replaced. The write is atomic: a failed write leaves the earlier file as it was and no partial file. `--out` is an error with another format.
 - **Switching period.** The page has a Year, Month, Week and Day switch and does not need the network or wambatic to change it. `--by` picks the period shown when the page opens (default month); `--by total` is an error, because the tiles already show the totals. A repeat report from the same cache makes one sync and writes one file.
@@ -151,6 +152,27 @@ Each event is placed in the period of its own date in the report time zone, as i
 
 Each proxy is shown only when what it needs is in the cache, and otherwise appears under Unavailable with the reason. `deployments` and the lead time need at least one deployment: a release, or a successful run of `stats.deploy_workflow`. The change failure rate also needs a pull request with a hotfix label, and the time to restore needs one. That is deliberate: a repository that never labels its hotfixes would otherwise show a change failure rate of 0%, which reads as good news and means nothing.
 
+## Popularity
+
+The `popularity` group counts the stars and forks of the repositories and shows their current watchers and languages. Ask for it with `--groups popularity` (or `--groups activity,flow,delivery,popularity` for everything); it is not in the default groups because the first sync reads every star and every fork.
+
+```shell
+wambatic report org:octocat --groups popularity
+```
+
+| Metric | What it is |
+|--------|------------|
+| `stars_added` | Stars given in the period, by the date they were given |
+| `stars_total` | The stars that exist now, counted by when they were given, up to the end of the period |
+| `forks_added` | Direct forks made in the period, by the date they were made |
+| `forks_total` | The forks that exist now, counted by when they were made, up to the end of the period |
+
+The totals are cumulative: a period's total is the events before the range plus those up to the end of the period, so they do not add up over periods. They count what exists now, so a star that was later removed is in none of them. Each event is placed in the period of its own date in the report time zone, as in [Flow](#flow). For a user target, every star and fork of the user's own repositories counts.
+
+Two tables go with the series. Popularity now lists GitHub's own star, fork (the whole network) and watcher counts for each repository at the last sync, most starred first, and watchers exist only as this current count: GitHub does not say when anyone started watching. Languages adds up the bytes of the 20 largest languages GitHub reports for each repository, shown as a share of the total; whatever those leave of a repository's code is one `Other` row, last. It is a snapshot of the last sync, not a history.
+
+The first sync with `--groups popularity` reads every star, newest first, about one request for each hundred, and lists every fork the same way, so a popular repository costs many requests. Later syncs compare the listed counts with the cache and read only the newer events; a count that has fallen (a star removed, a fork deleted) makes wambatic read that repository's stars or forks again from the start.
+
 ## Common workflows
 
 ```shell
@@ -165,6 +187,9 @@ wambatic report org:github --format html --by week --out reports/github.html
 
 # How a repository ships: runs, releases and the DORA proxies
 wambatic report repo:OWNER/NAME --groups delivery
+
+# How a project is growing: stars, forks and languages
+wambatic report org:NAME --groups popularity
 
 # Machine-readable output, with logs kept on stderr
 wambatic report org:github --format json | jq '.series[0].points'
@@ -205,7 +230,7 @@ Global options come before the command: `wambatic -v report ...`.
 | `--by year\|month\|week\|day\|total` | `month` | The period to bucket by; weeks are ISO weeks starting on Monday. With `--format html`, the period shown when the page opens, and `total` is an error |
 | `--since YYYY-MM-DD` | the first commit | First day, inclusive, in the report time zone |
 | `--until YYYY-MM-DD` | today | Last day, inclusive, in the report time zone |
-| `--groups NAMES` | `activity,flow` | Comma-separated metric groups: `activity`, `delivery`, `flow`. `delivery` is off by default because it reads every workflow run, which costs requests (see [The cache](#the-cache)) |
+| `--groups NAMES` | `activity,flow` | Comma-separated metric groups: `activity`, `delivery`, `flow`, `popularity`. `delivery` and `popularity` are off by default because they read every workflow run, star and fork, which costs requests (see [The cache](#the-cache)) |
 | `--by-author` | off | Break activity down by author; not for a user target |
 | `--tz ZONE` | `stats.timezone` | An [IANA time zone](https://www.iana.org/time-zones) such as `Europe/Berlin` |
 | `--full-refresh` | off | Read all history again and ignore `--max-age`; cannot be used with `--no-fetch` |
@@ -226,11 +251,11 @@ wambatic cache info
 wambatic cache clear
 ```
 
-`cache info` prints the path, the size, the recorded identity, every key that differs from this wambatic (with both values), the number of repositories, commits, pull requests, issues, releases and workflow runs and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
+`cache info` prints the path, the size, the recorded identity, every key that differs from this wambatic (with both values), the number of repositories, commits, pull requests, issues, releases, workflow runs, star events and forks and when the cache was last synced. It reads the file without changing it, so it works on a cache that `report` refuses. `cache clear` deletes the cache and its `-wal` and `-shm` files without asking; the next report fetches again.
 
-A cache written by an earlier wambatic, before releases and workflow runs were kept, is refused once after you upgrade: the cache is derived data, so run `wambatic cache clear` and the next report fetches it again.
+A cache written by an earlier wambatic, before stars and forks were kept, is refused once after you upgrade: the cache is derived data, so run `wambatic cache clear` and the next report fetches it again.
 
-The first sync with `--groups delivery` reads every workflow run of each repository, newest first, about one request for each hundred runs, so a repository with a long Actions history costs many. Later syncs ask for the newest page with a conditional request, which GitHub answers for free when nothing has run since, and read further only when something has. Releases are read again only when a repository's release count or newest release has changed.
+The first sync with `--groups delivery` reads every workflow run of each repository, newest first, about one request for each hundred runs, so a repository with a long Actions history costs many. Later syncs ask for the newest page with a conditional request, which GitHub answers for free when nothing has run since, and read further only when something has. Releases are read again only when a repository's release count or newest release has changed. The first sync with `--groups popularity` reads every star and every fork in the same way (see [Popularity](#popularity)).
 
 When `report` stops with "The cache was written by a different version", either run `wambatic cache clear` and let it fetch again, or pass `--ignore-cache-version` for one run. The override is recorded in the cache and shown as a warning in the report.
 
@@ -292,7 +317,8 @@ Each failure prints one line to stderr that says what to do, such as setting `GI
 - A report uses one time zone.
 - GitHub Enterprise Server is not supported.
 - The DORA figures are proxies built on conventions that GitHub does not enforce (see [DORA proxies](#dora-proxies)).
-- Stars, forks, watchers and languages are not built yet.
+- Watchers and languages are current snapshots, not histories: GitHub does not date them.
+- The fork series count direct forks only, while the fork count in Popularity now is GitHub's, which includes forks of forks.
 
 ## More
 
