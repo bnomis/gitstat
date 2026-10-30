@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import datetime
 import typing
 import zoneinfo
@@ -9,8 +10,11 @@ import pytest
 
 import tests.fixtures.stats as fixture
 import wambatic.fetch.base
+import wambatic.fetch.cache
+import wambatic.settings
 import wambatic.stats
 import wambatic.stats.base
+import wambatic.stats.delivery
 import wambatic.stats.errors
 import wambatic.stats.flow
 
@@ -76,7 +80,7 @@ def test_resources_for_maps_each_group() -> None:
     resources_for = wambatic.stats.resources_for
     assert resources_for(frozenset({'activity'})) == {'commits'}
     assert resources_for(frozenset({'flow'})) == {'issues', 'pull_requests'}
-    assert resources_for(frozenset({'delivery'})) == {'releases', 'star_events', 'workflow_runs'}
+    assert resources_for(frozenset({'delivery'})) == {'pull_requests', 'releases', 'workflow_runs'}
     assert resources_for(frozenset({'activity', 'flow'})) == {
         'commits',
         'issues',
@@ -222,19 +226,19 @@ def test_the_default_request_returns_flow_beside_activity_with_no_flow_row_unava
     rows = {row['metric']: row['reason'] for row in result.tables['unavailable']}
     assert 'flow' not in rows
     assert {'stars', 'forks', 'watchers', 'languages'} <= rows.keys()
-    assert 'step 8' in rows['stars']
+    assert 'step 10' in rows['stars']
     assert 'delivery' not in rows
 
 
-def test_every_requested_group_is_in_the_series_or_unavailable(
+def test_every_requested_group_is_in_the_series_and_none_is_unavailable(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
     result = compute(stats_fetcher, groups=frozenset({'activity', 'flow', 'delivery'}))
     rows = {row['metric'] for row in result.tables['unavailable']}
-    assert 'delivery' in rows
-    assert 'flow' not in rows
+    assert not {'delivery', 'flow', 'activity'} & rows
     assert pick(result, 'commits')
     assert pick(result, 'prs_opened')
+    assert pick(result, 'workflow_runs')
 
 
 def flow_only(
@@ -348,11 +352,166 @@ def test_a_flow_only_result_has_no_activity_series_or_tables_beyond_unavailable(
     assert set(result.tables) == {'unavailable'}
 
 
-def test_delivery_alone_still_raises_naming_step_8(
+# Delivery
+
+DELIVERY = frozenset({'delivery'})
+DELIVERY_PROXIES = (
+    'deployments',
+    'lead_time_p50',
+    'lead_time_p90',
+    'change_failure_rate',
+    'time_to_restore_p50',
+    'time_to_restore_p90',
+)
+FLOW_NAMES = [name for name, _ in wambatic.stats.flow.FLOW_METRICS]
+DELIVERY_NAMES = [name for name, _ in wambatic.stats.delivery.DELIVERY_METRICS]
+
+
+def delivery_only(
+    fetcher: wambatic.fetch.base.Fetcher,
+    subject: wambatic.fetch.base.Subject = fixture.ORG,
+    **changes: object,
+) -> wambatic.stats.base.StatsResult:
+    return compute(fetcher, subject, groups=DELIVERY, **changes)
+
+
+def test_the_org_delivery_series_equal_the_hand_written_values_in_utc_and_berlin(
     stats_fetcher: wambatic.fetch.base.Fetcher,
 ) -> None:
-    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
-        compute(stats_fetcher, groups=frozenset({'delivery'}))
+    result = delivery_only(stats_fetcher)
+    assert [s.metric for s in result.series] == DELIVERY_NAMES
+    expected = {
+        **fixture.ORG_DELIVERY_BY_MONTH_UTC,
+        **fixture.ORG_DORA_RELEASES_BY_MONTH_UTC,
+    }
+    for metric, months in expected.items():
+        assert pick(result, metric) == pytest.approx(months), metric
+    assert result.tables['unavailable'] == []
+    berlin = delivery_only(stats_fetcher, tz=BERLIN)
+    expected = {
+        **fixture.ORG_DELIVERY_BY_MONTH_BERLIN,
+        **fixture.ORG_DORA_RELEASES_BY_MONTH_BERLIN,
+    }
+    for metric, months in expected.items():
+        assert pick(berlin, metric) == pytest.approx(months), metric
+
+
+def test_a_deploy_workflow_setting_makes_the_runs_the_deployments(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    settings = dataclasses.replace(wambatic.settings.StatsSettings(), deploy_workflow='deploy.yml')
+    result = delivery_only(stats_fetcher, settings=settings)
+    for metric, months in fixture.ORG_DORA_WORKFLOW_BY_MONTH_UTC.items():
+        assert pick(result, metric) == pytest.approx(months), metric
+
+
+def test_a_deploy_workflow_run_before_the_range_still_makes_the_proxies_available(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    window: dict[str, typing.Any] = {
+        'since': datetime.date(2026, 10, 10),
+        'until': datetime.date(2026, 10, 31),
+    }
+    settings = dataclasses.replace(wambatic.settings.StatsSettings(), deploy_workflow='deploy.yml')
+    result = delivery_only(stats_fetcher, settings=settings, **window)
+    assert pick(result, 'deployments') == {'2026-10': 0}  # run 105 is on 10-06
+    assert pick(result, 'lead_time_p50') == {}
+    plain = delivery_only(stats_fetcher, **window)
+    assert pick(plain, 'deployments') == {'2026-10': 2}  # v1.1.0 and b1.0
+
+
+def test_without_a_range_start_it_is_the_earliest_release_or_run_not_pull_request(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = delivery_only(stats_fetcher, since=None)
+    assert result.since == datetime.date(2026, 9, 1)  # v0.9.0 on 09-20; alpha-p9 is from August
+    assert pick(result, 'release_count')['2026-09'] == 1
+    assert pick(result, 'workflow_runs')['2026-09'] == 1  # run 111 on 09-30
+    assert pick(result, 'lead_time_p50')['2026-09'] == pytest.approx(1201.0)  # alpha-p9
+
+
+def test_the_user_subject_delivery_counts_every_item_of_the_users_repos_whoever_made_it(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    kwargs = {'granularity': Granularity.TOTAL}
+    result = delivery_only(stats_fetcher, fixture.USER, **kwargs)
+    for metric, value in fixture.USER_DELIVERY_TOTAL_UTC.items():
+        assert pick(result, metric) == pytest.approx({'total': value}), metric
+    assert result.tables['unavailable'] == fixture.UNAVAILABLE_NO_HOTFIX
+    other = fixture.pull(
+        fixture.GAMMA, 3, 'monalisa', '2026-10-11T09:00', merged='2026-10-12T09:00'
+    )  # lead time 27 h to g1.0 on 10-12T12:00, by someone but the user
+    state = stats_fetcher.cache.sync_state(fixture.GAMMA, 'pull_requests')
+    assert state is not None
+    stats_fetcher.cache.write_pull_requests(fixture.GAMMA, [other], state, replace=False)
+    again = delivery_only(stats_fetcher, fixture.USER, **kwargs)
+    assert pick(again, 'lead_time_p50') == {'total': pytest.approx(39.0)}  # (51 + 27) / 2
+
+
+def test_all_three_groups_are_ordered_activity_flow_delivery_then_the_breakdowns(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = compute(
+        stats_fetcher, groups=frozenset({'activity', 'flow', 'delivery'}), by_author=True
+    )
+    names = [s.metric for s in result.series]
+    totals = [s.metric for s in result.series if s.by is None]
+    assert totals == [*TOTALS, *FLOW_NAMES, *DELIVERY_NAMES]
+    assert names[: len(totals)] == totals
+    assert all(s.by is not None for s in result.series[len(totals) :])
+
+
+def test_a_delivery_only_request_over_a_range_with_no_release_or_run_is_empty(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    quiet: dict[str, typing.Any] = {
+        'since': datetime.date(2025, 1, 1),
+        'until': datetime.date(2025, 2, 1),
+    }
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='delivery'):
+        delivery_only(stats_fetcher, **quiet)
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='delivery'):
+        # gamma's run is on 11-05, but the org has no run or release in November
+        delivery_only(
+            stats_fetcher, since=datetime.date(2026, 11, 1), until=datetime.date(2026, 11, 30)
+        )
+    result = delivery_only(
+        stats_fetcher, since=datetime.date(2026, 11, 1), until=datetime.date(2026, 12, 31)
+    )
+    assert pick(result, 'workflow_runs') == {'2026-11': 0, '2026-12': 1}
+
+
+def test_delivery_pull_requests_alone_are_not_an_event(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    january: dict[str, typing.Any] = {
+        'since': datetime.date(2027, 2, 1),
+        'until': datetime.date(2027, 2, 28),
+    }
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError):
+        delivery_only(stats_fetcher, **january)  # alpha-p3's merge on 02-01 is a flow event only
+
+
+def test_the_provenance_of_a_delivery_request_names_the_three_resources(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = delivery_only(stats_fetcher)
+    assert {
+        'fetched_at:pull_requests',
+        'fetched_at:releases',
+        'fetched_at:workflow_runs',
+    } <= result.provenance.keys()
+    assert 'fetched_at:commits' not in result.provenance
+    assert result.provenance['fetched_at:releases'] == fixture.ALPHA_SYNCED_AT.isoformat()
+
+
+def test_compute_makes_no_request_for_delivery(stats_cache: wambatic.fetch.cache.Cache) -> None:
+    fetcher = wambatic.fetch.base.Fetcher(
+        'test-token', stats_cache, wambatic.settings.FetchSettings()
+    )
+    assert fetcher.client.session is None
+    delivery_only(fetcher)
+    assert fetcher.client.session is None
 
 
 def test_the_provenance_records_the_cache_the_clock_the_zone_and_the_partial_buckets(
@@ -381,8 +540,8 @@ def test_every_error_in_the_validation_order_comes_before_the_cache_is_read() ->
         untouched(fixture.USER, by_author=True, since=fixture.UNTIL, until=fixture.SINCE)
     with pytest.raises(wambatic.stats.errors.InvalidRangeError):
         untouched(since=fixture.UNTIL, until=fixture.SINCE)
-    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match=r'delivery \(step 8\)'):
-        untouched(groups=frozenset({'delivery'}))
+    with pytest.raises(wambatic.stats.errors.EmptySubjectError, match='no requested group'):
+        untouched(groups=frozenset())
 
 
 def test_a_subject_with_no_repositories_is_empty(

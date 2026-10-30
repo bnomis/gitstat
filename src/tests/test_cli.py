@@ -803,21 +803,6 @@ def test_ignore_cache_version_reports_a_refused_cache_with_a_warning(
     assert '--ignore-cache-version' in warning
 
 
-def test_a_group_that_needs_no_built_resource_syncs_nothing_and_finds_nothing_to_report(
-    monkeypatch: pytest.MonkeyPatch,
-    make_client: tests.conftest.MakeClient,
-    stats_cache_path: pathlib.Path,
-) -> None:
-    with pytest.raises(wambatic.stats.EmptySubjectError, match=r'delivery \(step 8\)'):
-        run_report(
-            monkeypatch,
-            make_client,
-            stats_cache_path,
-            ['repo:octo-org/alpha', '--groups', 'delivery', '--no-fetch'],
-            online=False,
-        )
-
-
 def test_the_flow_group_alone_prints_the_flow_tables_from_the_cache_with_no_fetch(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,

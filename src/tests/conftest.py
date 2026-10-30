@@ -138,9 +138,35 @@ def store_flow(
     cache.write_issues(name, issues, state('issues'), replace=True)
 
 
+def store_delivery(
+    cache: wambatic.fetch.cache.Cache, repo: wambatic.fetch.base.Repo, synced_at: datetime.datetime
+) -> None:
+    """Write the repo's fixture releases and workflow runs with a sync state for each."""
+
+    def state(resource: str, probe: str | None) -> wambatic.fetch.base.SyncState:
+        return wambatic.fetch.base.SyncState(
+            repo=repo.name_with_owner,
+            resource=resource,
+            watermark=synced_at if resource == 'workflow_runs' else None,
+            head_oid=None,
+            pushed_at=repo.pushed_at,
+            updated_at=repo.updated_at,
+            synced_at=synced_at,
+            full_synced_at=synced_at,
+            probe=probe,
+        )
+
+    name = repo.name_with_owner
+    releases = [r for r in tests.fixtures.stats.RELEASES if r.repo == name]
+    runs = [r for r in tests.fixtures.stats.WORKFLOW_RUNS if r.repo == name]
+    cache.write_releases(name, releases, state('releases', wambatic.fetch.base.release_probe(repo)))
+    cache.write_workflow_runs(name, runs, state('workflow_runs', None), replace=True)
+
+
 @pytest.fixture
 def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.Cache]:
-    """A cache holding the stats fixture's repositories, commits, pull requests and issues."""
+    """A cache holding the stats fixture's repositories, commits, pull requests, issues, releases
+    and workflow runs."""
     fixture = tests.fixtures.stats
     cache = wambatic.fetch.cache.Cache.open(tmp_path / 'stats' / 'cache.sqlite3')
     alpha, beta, gamma = fixture.REPOS
@@ -152,6 +178,9 @@ def stats_cache(tmp_path: pathlib.Path) -> typing.Iterator[wambatic.fetch.cache.
     store_flow(cache, alpha, fixture.ALPHA_SYNCED_AT)
     store_flow(cache, beta, fixture.BETA_SYNCED_AT)
     store_flow(cache, gamma, fixture.GAMMA_SYNCED_AT)
+    store_delivery(cache, alpha, fixture.ALPHA_SYNCED_AT)
+    store_delivery(cache, beta, fixture.BETA_SYNCED_AT)
+    store_delivery(cache, gamma, fixture.GAMMA_SYNCED_AT)
     yield cache
     cache.close()
 
