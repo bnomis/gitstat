@@ -1,8 +1,8 @@
 # Implementation order
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** proposed
-**Date:** 2026-10-29
+**Date:** 2026-10-30
 
 The order in which wambatic is built, with what each step delivers, what it depends on and how to tell it is done. It sequences the components in the [system spec](system/spec.md) into steps that [taskdev](../../.agents/claude/skills/taskdev/SKILL.md) can break into tasks. Component detail stays in the component specs; this document only sequences them.
 
@@ -65,8 +65,8 @@ Done when: incremental refresh updates a PR that changed and leaves unchanged on
 
 ### 7. Static HTML report
 
-Deliver: `figures.py`, the self-contained HTML renderer with the granularity switch, themes and provenance footer.
-Done when: the file opens offline, shows all four granularities, and passes a headless-browser smoke test using the preinstalled Playwright.
+Deliver: the `plotly` dependency (used only for its bundled plotly.js) and Playwright for Python as a development dependency, the table rows moved from `terminal.py` to `rows.py`, `figures.py` (`Figure`, `build_figures`, `build_range_figures`, `build_calendar`, the palette), `html.py` and its templates (`HtmlReport`, `html_document`, `render_html`, `report_filename`) with the summary tiles, granularity switch, data tables, themes and provenance footer, `--format html` and `--out` with an atomic write, a `browser` CI job, and the README's HTML section. Reports spec 1.4; the choices are in the [reports review 2](reports/review-2.md).
+Done when: the file opens offline with no network request, shows all four granularities, and passes a headless-browser smoke test (Playwright for Python with the preinstalled Chromium here, and Playwright's own Chromium in CI).
 
 ### 8. Delivery data and stats
 
