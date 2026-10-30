@@ -18,10 +18,8 @@ if typing.TYPE_CHECKING:
 RESOURCES = frozenset(
     {'commits', 'issues', 'pull_requests', 'releases', 'star_events', 'workflow_runs'}
 )
-BUILT_RESOURCES = frozenset({'commits'})
+BUILT_RESOURCES = frozenset({'commits', 'issues', 'pull_requests'})
 UNBUILT_RESOURCE_STEPS = {
-    'issues': 6,
-    'pull_requests': 6,
     'releases': 8,
     'star_events': 8,
     'workflow_runs': 8,
@@ -410,17 +408,24 @@ class Fetcher:
             and (self.settings.include_archived or not repo.is_archived)
         ]
 
-    async def unchanged(self, repo: Repo, resources: collections.abc.Iterable[str]) -> bool:
-        """True when every resource was last synced against this listed `pushedAt`/`updatedAt`."""
-        for resource in resources:
-            state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
-            if (
-                state is None
-                or state.pushed_at != repo.pushed_at
-                or state.updated_at != repo.updated_at
-            ):
-                return False
-        return True
+    async def unchanged(self, repo: Repo, resource: str) -> bool:
+        """True when `resource` needs no request for this listed repo.
+
+        `commits` were last synced against this `pushedAt` and `updatedAt`. `issues` and
+        `pull_requests` have a watermark, no full read is due and the listed newest `updatedAt`
+        is absent or before the point at which paging would stop on its first item.
+        """
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, resource)
+        if state is None:
+            return False
+        if resource == 'commits':
+            return state.pushed_at == repo.pushed_at and state.updated_at == repo.updated_at
+        if state.watermark is None or self.full_read_due(state, self.client.clock()):
+            return False
+        newest = (
+            repo.pull_requests_updated_at if resource == 'pull_requests' else repo.issues_updated_at
+        )
+        return newest is None or newest < state.watermark - self.settings.overlap
 
     async def repos(self, subject: Subject) -> list[Repo]:
         """From the cache: repositories owned by a user or org, excluding missing ones and
@@ -722,30 +727,39 @@ class Fetcher:
         await self.db(
             self.cache.upsert_repos, subject.login, listed, complete=subject.kind != 'repo'
         )
-        pending: list[Repo] = []
+        ordered = sorted(resources)
+        pending: list[tuple[Repo, list[str]]] = []
         for repo in listed:
-            if full_refresh or not await self.unchanged(repo, resources):
-                pending.append(repo)
-        rows = 0
+            needed = [
+                resource
+                for resource in ordered
+                if full_refresh or not await self.unchanged(repo, resource)
+            ]
+            if needed:
+                pending.append((repo, needed))
+        rows = dict.fromkeys(ordered, 0)
         refetched: list[str] = []
 
-        async def sync_one(repo: Repo) -> None:
-            nonlocal rows
+        async def sync_one(repo: Repo, needed: list[str]) -> None:
             async with self.semaphore:
-                written, full = await self.sync_commits(repo, full_refresh)
-            rows += written
-            if full:
-                refetched.append(repo.name_with_owner)
+                for resource in needed:
+                    if resource == 'commits':
+                        written, full = await self.sync_commits(repo, full_refresh)
+                        if full:
+                            refetched.append(repo.name_with_owner)
+                    else:
+                        written = await self.sync_updated(repo, resource, full_refresh)
+                    rows[resource] += written
 
         try:
             async with asyncio.TaskGroup() as group:
-                for repo in pending:
-                    group.create_task(sync_one(repo))
+                for repo, needed in pending:
+                    group.create_task(sync_one(repo, needed))
         except ExceptionGroup as errors:
             raise errors.exceptions[0] from errors
         return SyncReport(
             repos_listed=len(listed),
             repos_skipped=len(listed) - len(pending),
-            rows_written={'commits': rows} if 'commits' in resources else {},
+            rows_written=rows,
             full_refetches=tuple(sorted(refetched)),
         )

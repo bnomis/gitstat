@@ -345,7 +345,7 @@ def test_unchanged_compares_the_listed_values_with_the_stored_ones(
 
     async def scenario() -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server, cache=run.cache).unchanged(changed, COMMITS)
+            return await make_fetcher(server, cache=run.cache).unchanged(changed, 'commits')
 
     assert asyncio.run(scenario()) is expected
 
@@ -355,25 +355,22 @@ def test_unchanged_is_false_with_no_state(make_fetcher: tests.conftest.MakeFetch
 
     async def scenario() -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server).unchanged(listed(upstream), COMMITS)
+            return await make_fetcher(server).unchanged(listed(upstream), 'commits')
 
     assert asyncio.run(scenario()) is False
 
 
-def test_unchanged_needs_every_requested_resource_synced(
-    make_fetcher: tests.conftest.MakeFetcher,
-) -> None:
+def test_unchanged_is_decided_per_resource(make_fetcher: tests.conftest.MakeFetcher) -> None:
     upstream = Upstream([hello()])
     run = sync_once(make_fetcher, upstream)
 
-    async def scenario(resources: frozenset[str]) -> bool:
+    async def scenario(resource: str) -> bool:
         async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            return await make_fetcher(server, cache=run.cache).unchanged(
-                listed(upstream), resources
-            )
+            return await make_fetcher(server, cache=run.cache).unchanged(listed(upstream), resource)
 
-    assert asyncio.run(scenario(COMMITS)) is True
-    assert asyncio.run(scenario(frozenset({'commits', 'issues'}))) is False
+    assert asyncio.run(scenario('commits')) is True
+    assert asyncio.run(scenario('issues')) is False
+    assert asyncio.run(scenario('pull_requests')) is False
 
 
 def test_a_repo_subject_that_does_not_exist_raises_not_found(
@@ -1027,8 +1024,6 @@ def test_an_unknown_resource_raises_before_any_request(
 @pytest.mark.parametrize(
     ('resource', 'step'),
     [
-        ('issues', 6),
-        ('pull_requests', 6),
         ('releases', 8),
         ('star_events', 8),
         ('workflow_runs', 8),
@@ -1402,3 +1397,207 @@ def test_the_read_methods_return_the_cached_rows_from_since(
             )
 
     assert asyncio.run(scenario()) == ([2, 3], [2, 3], [1, 2, 3], [1, 2, 3])
+
+
+# Syncing pull requests and issues for a subject
+
+FLOW = frozenset({'commits', 'issues', 'pull_requests'})
+HOUR = datetime.timedelta(hours=1)
+
+
+def two_repo_upstream() -> Upstream:
+    upstream = Upstream(
+        [
+            FakeRepo(
+                HELLO,
+                history('h', 2),
+                pulls=[FakePull(1, at(1)), FakePull(2, at(2))],
+                issues=[FakeIssue(1, at(1))],
+            ),
+            FakeRepo(
+                SPOON,
+                history('s', 2),
+                pulls=[FakePull(1, at(1))],
+                issues=[FakeIssue(1, at(1)), FakeIssue(2, at(2))],
+            ),
+        ]
+    )
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def requests_of(
+    make_fetcher: tests.conftest.MakeFetcher,
+    upstream: Upstream,
+    cache: wambatic.fetch.cache.Cache,
+    **kwargs: object,
+) -> tuple[wambatic.fetch.base.SyncReport, list[tuple[str, str]]]:
+    """Sync `FLOW` once more and return the report and each per-repo request as (kind, repo)."""
+
+    async def scenario() -> tuple[wambatic.fetch.base.SyncReport, list[tuple[str, str]]]:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server, cache=cache)
+            async with fetcher:
+                report = await fetcher.sync(OWNER, FLOW, **kwargs)  # type: ignore[arg-type]
+            kinds = upstream.requests(server)
+            repos = [
+                f'{r.json["variables"]["owner"]}/{r.json["variables"]["name"]}'  # type: ignore[index]
+                if kind != 'listing'
+                else ''
+                for kind, r in zip(kinds, server.received, strict=True)
+            ]
+            return report, [pair for pair in zip(kinds, repos, strict=True) if pair[0] != 'listing']
+
+    return asyncio.run(scenario())
+
+
+def test_syncing_all_three_resources_backfills_each_and_reports_rows_for_each(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    run = sync_once(make_fetcher, two_repo_upstream(), resources=FLOW)
+    assert run.report == wambatic.fetch.base.SyncReport(
+        2, 0, {'commits': 4, 'issues': 3, 'pull_requests': 3}, (HELLO, SPOON)
+    )
+    assert run.kinds.count('pull_requests') == 2
+    assert run.kinds.count('issues') == 2
+
+
+def test_a_second_sync_with_nothing_newer_sends_only_the_listing_query(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    second = sync_once(make_fetcher, upstream, resources=FLOW, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report == wambatic.fetch.base.SyncReport(
+        2, 2, {'commits': 0, 'issues': 0, 'pull_requests': 0}, ()
+    )
+
+
+def test_a_newer_probe_on_one_repo_syncs_only_that_resource_of_that_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    upstream.repos[SPOON].issues.append(FakeIssue(3, SERVER_DATE - datetime.timedelta(minutes=5)))
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == [('issues', SPOON)]
+    assert report.rows_written == {'commits': 0, 'issues': 1, 'pull_requests': 0}
+    assert (report.repos_listed, report.repos_skipped) == (2, 1)
+
+
+def test_a_repo_with_no_pull_requests_and_a_state_is_skipped_for_them(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    upstream.repos[HELLO].pulls.clear()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    assert first.cache.sync_state(HELLO, 'pull_requests') is not None
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == []
+    assert report.repos_skipped == 2
+
+
+def test_full_refresh_reads_every_resource_of_every_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    report, requests = requests_of(make_fetcher, upstream, first.cache, full_refresh=True)
+    assert sorted(requests) == sorted(
+        (kind, name) for name in (HELLO, SPOON) for kind in ('history', 'issues', 'pull_requests')
+    )
+    assert report.repos_skipped == 0
+
+
+def test_a_due_full_read_makes_flow_changed_even_with_an_old_probe(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = two_repo_upstream()
+    first = sync_once(make_fetcher, upstream, resources=FLOW)
+    age_full_sync(first.cache, 'issues', 31)
+    report, requests = requests_of(make_fetcher, upstream, first.cache)
+    assert requests == [('issues', HELLO)]
+    assert report.rows_written['issues'] == 1
+
+
+def test_no_more_than_workers_repos_run_when_each_repo_syncs_three_resources(
+    make_fetcher: tests.conftest.MakeFetcher, fetch_settings: wambatic.settings.FetchSettings
+) -> None:
+    upstream = Upstream(
+        [
+            FakeRepo(f'octocat/r{n}', history(f'r{n}-', 2), pulls=[FakePull(1, at(1))])
+            for n in range(4)
+        ]
+    )
+    upstream.history_delay = 0.05
+    run = sync_once(
+        make_fetcher,
+        upstream,
+        resources=FLOW,
+        settings=settings_with(fetch_settings, workers=2),
+    )
+    assert run.kinds.count('pull_requests') == 4
+    assert run.max_in_flight == 2
+
+
+def unchanged_for(
+    make_fetcher: tests.conftest.MakeFetcher,
+    cache: wambatic.fetch.cache.Cache,
+    repo: wambatic.fetch.base.Repo,
+    resource: str,
+) -> bool:
+    async def scenario() -> bool:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            return await make_fetcher(server, cache=cache).unchanged(repo, resource)
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('resource', ['issues', 'pull_requests'])
+def test_unchanged_for_a_flow_resource_follows_the_probe_the_state_and_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher, resource: str
+) -> None:
+    upstream = two_repo_upstream()
+    run = sync_once(make_fetcher, upstream, resources=FLOW)
+    repo = listed(upstream)
+    probe = f'{resource}_updated_at'
+    cutoff = SERVER_DATE - HOUR
+
+    def check(**changes: datetime.datetime | None) -> bool:
+        changed = dataclasses.replace(repo, **changes)  # type: ignore[arg-type]
+        return unchanged_for(make_fetcher, run.cache, changed, resource)
+
+    assert check() is True
+    assert check(**{probe: None}) is True
+    assert check(**{probe: cutoff - datetime.timedelta(seconds=1)}) is True
+    assert check(**{probe: cutoff}) is False
+    assert check(**{probe: SERVER_DATE}) is False
+    age_full_sync(run.cache, resource, 31)
+    assert check(**{probe: None}) is False
+    assert (
+        unchanged_for(
+            make_fetcher,
+            run.cache,
+            dataclasses.replace(repo, name_with_owner='octocat/none'),
+            resource,
+        )
+        is False
+    )
+    with run.cache.connection:
+        run.cache.connection.execute('UPDATE sync_state SET watermark = NULL')
+    age_full_sync(run.cache, resource, 0)
+    assert check(**{probe: None}) is False
+
+
+@pytest.mark.parametrize('resource', ['releases', 'star_events', 'workflow_runs'])
+def test_the_later_step_resources_still_raise_not_implemented(
+    make_fetcher: tests.conftest.MakeFetcher, resource: str
+) -> None:
+    async def scenario() -> None:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            async with make_fetcher(server) as fetcher:
+                with pytest.raises(NotImplementedError, match='step 8'):
+                    await fetcher.sync(OWNER, frozenset({'issues', resource}))
+
+    asyncio.run(scenario())
