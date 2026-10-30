@@ -404,7 +404,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 9: README: the HTML report
 
-**Status:** todo
+**Status:** done
 **Priority:** medium
 **Complexity:** small
 **Spec Reference:** shared user-guides rule (keep guides in sync with code); Command line (`--format html`, `--out`); Settings (`report.format`, `report.html_theme`, `report.out_dir`); review-2.md choice 16
@@ -436,6 +436,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 - Depends on Task 7
 - Key files: `README.md`
+- Checked 2026-10-30: the README's examples ran against the stats fixture cache with `--no-fetch` (default path `wambatic-reports/org-octo-org.html`; `--out reports/github.html` creates the directory and prints that path; `--by total` is a usage error), and a script found every `Report` flag and every `fetch`, `report` and `stats` setting named in the README. The README has no section on test markers, so the `browser` marker is left to `pyproject.toml`.
 
 ---
 
