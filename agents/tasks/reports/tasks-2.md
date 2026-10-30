@@ -316,7 +316,7 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 
 ## Task 7: `--format html` and `--out` in the CLI
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** medium
 **Spec Reference:** Command line (`--format html`, `--out`, `--by` with html; Running `report` step 6); Error handling (`OSError` writing `--out` exits 1); Settings (`report.format`, `report.out_dir`, `report.html_theme`); review-2.md choices 2, 3 and 4
@@ -350,6 +350,9 @@ The spec's `**Status:**` is not changed by this list: the web app is built by th
 - Depends on Task 6
 - Key files: `src/wambatic/cli.py`, `src/tests/test_cli.py`
 - The five-result build lives in `cli.py` for now; step 9's web app needs the same and will hoist it then (review-2.md, Open for a later step).
+- `build_result` now takes a list of requests and returns the resolved subject with one result each, computed after the one sync; the filename needs the subject a bare NAME resolves to.
+- A write failure becomes `wambatic.reports.errors.OutputError` (message `cannot write PATH: reason`), which `main` logs as one line and turns into status 1; other `OSError`s keep the traceback route. Task 10 exports it.
+- The old `--format html` usage-error tests (a flag and the config file) became tests that html passes the checks; the main-level test for a bad flag combination uses `--format html --by total`.
 
 ---
 
