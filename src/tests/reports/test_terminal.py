@@ -12,6 +12,7 @@ import tests.conftest
 import tests.fixtures.reports
 import tests.fixtures.stats as fixture
 import wambatic.fetch.base
+import wambatic.reports.rows
 import wambatic.reports.terminal
 import wambatic.stats.base
 
@@ -312,23 +313,22 @@ def test_exactly_twenty_top_contributors_have_no_more_line(
     assert ' more' not in output
 
 
-def test_unavailable_lists_the_unbuilt_activity_metrics_and_no_longer_flow(
+def test_the_default_groups_list_nothing_as_unavailable(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
-    output = render(org_result)
-    assert 'Unavailable' in output
-    for metric in ('stars', 'forks', 'watchers', 'languages'):
-        assert re.search(rf'^\s+{metric}\s+\S', output, re.MULTILINE), metric
-    assert not re.search(r'^\s+flow\s+\S', output, re.MULTILINE)
+    assert org_result.tables['unavailable'] == []
+    assert 'Unavailable' not in render(org_result)
 
 
-def test_unavailable_is_absent_when_the_table_is_empty(
+def test_unavailable_lists_each_row_with_its_reason(
     org_result: wambatic.stats.base.StatsResult,
 ) -> None:
+    rows = [{'metric': 'deployments', 'reason': 'no releases in the cache'}]
     output = render(
-        dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': []})
+        dataclasses.replace(org_result, tables={**org_result.tables, 'unavailable': rows})
     )
-    assert 'Unavailable' not in output
+    assert 'Unavailable' in output
+    assert re.search(r'^\s+deployments\s+no releases in the cache', output, re.MULTILINE)
 
 
 # Flow tables
@@ -519,3 +519,125 @@ def test_the_delivery_ratio_has_no_trend_line(
     trend = render(delivery_result).split('Trends')[1].split('\n\n')[0]
     assert 'rate' not in trend
     assert 'p50' not in trend
+
+
+# Popularity tables
+
+
+def popularity_output(fetcher: wambatic.fetch.base.Fetcher, **changes: object) -> str:
+    return render(recompute(fetcher, groups=frozenset({'popularity'}), **changes))
+
+
+def test_the_popularity_tables_print_with_their_captions(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = popularity_output(stats_fetcher)
+    titles = [line.rstrip() for line in output.splitlines()]
+    for title in ('Popularity by period', 'Popularity now', 'Languages', 'Trends'):
+        assert title in titles, title
+    period = table_lines(output, 'Popularity by period')
+    assert period[0].split() == [
+        'Period',
+        'Stars',
+        'added',
+        'Stars',
+        'total',
+        'Forks',
+        'added',
+        'Forks',
+        'total',
+    ]
+    rows = {line.split()[0]: line.split()[1:] for line in period[2:] if line.split()[0][:2] == '20'}
+    assert rows['2026-10'] == ['3', '5', '1', '2']
+    assert rows['2026-11'] == ['0', '5', '1', '3']
+    assert rows['2026-12'] == ['1', '6', '0', '3']
+    assert rows['2027-01'] == ['2', '8', '1', '4']
+    total = [line.split() for line in period if line.split()[:1] == ['Total']]
+    assert total == [['Total', '6', '8', '3', '4']]  # added: 3 + 0 + 1 + 2 and 1 + 1 + 0 + 1
+    assert 'totals: stars and forks that exist now, by when they were made' in output
+
+
+def test_popularity_now_lists_the_repositories_and_a_total_row(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = popularity_output(stats_fetcher)
+    now = [line.split() for line in table_lines(output, 'Popularity now')]
+    assert now[0] == ['Repository', 'Stars', 'Forks', 'Watchers']
+    assert ['octo-org/alpha', '6', '3', '4'] in now
+    assert ['octo-org/beta', '4', '2', '2'] in now
+    assert ['Total', '10', '5', '6'] in now
+    assert 'as of the last sync; forks: whole network' in output
+
+
+def test_the_languages_table_gives_shares_as_percentages_with_one_decimal(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = popularity_output(stats_fetcher)
+    rows = [line.split() for line in table_lines(output, 'Languages')[2:]]
+    # 10000 / 14500, 3000 / 14500, 1000 / 14500 and 500 / 14500
+    assert rows == [
+        ['Python', '10,000', '69.0%'],
+        ['Go', '3,000', '20.7%'],
+        ['Shell', '1,000', '6.9%'],
+        ['Other', '500', '3.4%'],
+    ]
+
+
+def test_languages_beyond_the_limit_are_counted_in_an_and_more_line(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = recompute(stats_fetcher, groups=frozenset({'popularity'}))
+    many = [
+        {'language': f'L{n:02d}', 'bytes': 100 - n, 'share': (100 - n) / 1000} for n in range(14)
+    ]
+    output = render(dataclasses.replace(result, tables={**result.tables, 'languages': many}))
+    shown = table_lines(output, 'Languages')[2:]
+    assert len(shown) == wambatic.reports.rows.TOP_LANGUAGES_SHOWN
+    assert shown[-1].split()[0] == 'L09'
+    assert 'and 4 more' in output
+
+
+def test_an_empty_languages_table_prints_no_languages_section(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    result = recompute(stats_fetcher, groups=frozenset({'popularity'}))
+    output = render(dataclasses.replace(result, tables={**result.tables, 'languages': []}))
+    assert 'Languages' not in output
+    assert 'Popularity now' in output
+
+
+def test_popularity_only_prints_no_other_groups_tables_and_its_four_trend_lines(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = popularity_output(stats_fetcher)
+    for title in (
+        'Activity by period',
+        'Flow by period',
+        'Delivery by period',
+        'DORA proxies by period',
+    ):
+        assert title not in output
+    trend = output.split('Trends')[1].split('\n\n')[0]
+    assert [line.split()[0] for line in trend.strip().splitlines()] == [
+        'stars_added',
+        'stars_total',
+        'forks_added',
+        'forks_total',
+    ]
+
+
+def test_a_popularity_report_with_a_partial_bucket_marks_it(
+    stats_fetcher: wambatic.fetch.base.Fetcher,
+) -> None:
+    output = popularity_output(stats_fetcher, since=datetime.date(2026, 10, 15))
+    period = table_lines(output, 'Popularity by period')
+    assert any(line.split()[:2] == ['2026-10', '*'] for line in period)
+    assert '* partial period; totals: stars and forks' in output
+
+
+def test_the_default_groups_print_no_popularity_tables(
+    org_result: wambatic.stats.base.StatsResult,
+) -> None:
+    output = render(org_result)
+    assert 'Popularity' not in output
+    assert 'Languages' not in output

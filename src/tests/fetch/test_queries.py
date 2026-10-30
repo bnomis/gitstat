@@ -3,7 +3,7 @@ import re
 import wambatic.fetch.cache
 import wambatic.fetch.queries
 
-CONNECTION = re.compile(r'\b(?:history|repositories)\(([^)]*)\)')
+CONNECTION = re.compile(r'\b(?:history|repositories|stargazers)\(([^)]*)\)')
 
 
 def all_queries() -> dict[str, str]:
@@ -96,3 +96,28 @@ def test_the_pull_requests_query_selects_labels_and_the_first_commit() -> None:
 
 def test_the_cache_identity_has_a_hash_for_the_releases_query() -> None:
     assert 'query:RELEASES' in wambatic.fetch.cache.expected_identity()
+
+
+def test_the_stargazers_query_pages_by_star_time_newest_first() -> None:
+    text = wambatic.fetch.queries.STARGAZERS
+    assert (
+        'stargazers(first: 100, after: $cursor, orderBy: {field: STARRED_AT, direction: DESC})'
+    ) in text
+    assert 'pageInfo { hasNextPage endCursor }' in text
+    assert 'edges { starredAt node { id } }' in text
+    assert 'login' not in text
+
+
+def test_the_listing_queries_select_the_counts_and_the_largest_languages() -> None:
+    for text in (
+        wambatic.fetch.queries.OWNER_REPOSITORIES,
+        wambatic.fetch.queries.REPOSITORY,
+    ):
+        assert 'stargazerCount forkCount watchers { totalCount }' in text
+        assert 'languages(first: 20, orderBy: {field: SIZE, direction: DESC})' in text
+        assert 'totalSize' in text
+        assert 'edges { size node { name } }' in text
+
+
+def test_the_cache_identity_has_a_hash_for_the_stargazers_query() -> None:
+    assert 'query:STARGAZERS' in wambatic.fetch.cache.expected_identity()

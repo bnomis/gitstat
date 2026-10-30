@@ -611,3 +611,62 @@ def test_a_page_with_delivery_but_no_proxy_has_no_proxy_table_or_line(
     assert 'DORA proxies by period' not in document
     assert 'class="proxies"' not in document
     assert 'Deployments' not in Page(document).tiles
+
+
+def popularity_section(document: str) -> str:
+    return document.split('id="popularity"')[1].split('</section>')[0]
+
+
+def test_the_popularity_section_and_tiles_appear_only_with_popularity_series(
+    org_report: wambatic.reports.html.HtmlReport,
+    popularity_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    without = wambatic.reports.html.html_document(org_report, 'auto')
+    assert 'id="popularity"' not in without
+    assert 'Top language' not in Page(without).tiles
+    page = Page(wambatic.reports.html.html_document(popularity_report, 'auto'))
+    assert page.by_id('popularity')
+    assert page.tiles['Stars'] == '10'  # alpha 6 and beta 4
+    assert page.tiles['Forks'] == '5'
+    assert page.tiles['Watchers'] == '6'
+    assert page.tiles['Top language'] == 'Python'
+    assert page.tiles['Commits'] == '10'
+
+
+def test_the_popularity_section_holds_its_charts_and_says_what_the_counts_are(
+    popularity_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    document = wambatic.reports.html.html_document(popularity_report, 'auto')
+    page = Page(document)
+    section = popularity_section(document)
+    for key in (
+        'popularity-stars-added',
+        'popularity-stars-total',
+        'popularity-forks-added',
+        'popularity-forks-total',
+        'popularity-languages',
+    ):
+        assert page.by_id(key)['role'] == 'img'
+        assert f'id="{key}"' in section
+    assert 'as of the last sync' in section
+    assert 'exist now' in section
+    assert (
+        'id="popularity-languages"' not in document.split('id="activity"')[1].split('</section>')[0]
+    )
+
+
+def test_the_popularity_tables_hold_the_rows_of_rows_py(
+    popularity_report: wambatic.reports.html.HtmlReport,
+) -> None:
+    section = popularity_section(wambatic.reports.html.html_document(popularity_report, 'auto'))
+    assert section.count('<caption>Popularity by period') == 4
+    assert section.count(' hidden') == 3
+    assert '<td>2026-10</td><td class=num>3</td><td class=num>5</td>' in section
+    assert (
+        '<td>octo-org/alpha</td><td class=num>6</td><td class=num>3</td><td class=num>4</td>'
+        in section
+    )
+    assert '<td>Total</td><td class=num>10</td><td class=num>5</td><td class=num>6</td>' in section
+    assert section.count('<tr><td>') >= 4
+    assert '<td>Other</td><td class=num>500</td><td class=num>3.4%</td>' in section
+    assert 'forks: whole network' in section

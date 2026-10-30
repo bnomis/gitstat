@@ -9,20 +9,14 @@ import wambatic.stats.buckets
 import wambatic.stats.delivery
 import wambatic.stats.errors
 import wambatic.stats.flow
+import wambatic.stats.popularity
 
 RESOURCES_BY_GROUP = {
     'activity': frozenset({'commits'}),
     'flow': frozenset({'issues', 'pull_requests'}),
     'delivery': frozenset({'pull_requests', 'releases', 'workflow_runs'}),
+    'popularity': frozenset({'forks', 'star_events'}),
 }
-BUILT_GROUPS = frozenset({'activity', 'delivery', 'flow'})
-UNBUILT_GROUP_STEPS: dict[str, int] = {}
-UNBUILT_ACTIVITY_METRICS = (
-    ('stars', 'stars come from star_events, which step 10 fetches'),
-    ('forks', 'forks has no fetch resource yet; step 10 specifies and fetches it'),
-    ('watchers', 'watchers has no fetch resource yet; step 10 specifies and fetches it'),
-    ('languages', 'languages has no fetch resource yet; step 10 specifies and fetches it'),
-)
 
 
 def resources_for(groups: frozenset[str]) -> frozenset[str]:
@@ -35,22 +29,6 @@ def resources_for(groups: frozenset[str]) -> frozenset[str]:
 
 def utc_midnight(day: datetime.date) -> datetime.datetime:
     return datetime.datetime.combine(day, datetime.time(), tzinfo=datetime.UTC)
-
-
-def unavailable(groups: frozenset[str]) -> list[dict[str, typing.Any]]:
-    rows: list[dict[str, typing.Any]] = [
-        {
-            'metric': group,
-            'reason': f'the {group} group is built in implementation step {step}',
-        }
-        for group, step in sorted(UNBUILT_GROUP_STEPS.items())
-        if group in groups
-    ]
-    if 'activity' in groups:
-        rows.extend(
-            {'metric': metric, 'reason': reason} for metric, reason in UNBUILT_ACTIVITY_METRICS
-        )
-    return rows
 
 
 async def read_commits(
@@ -142,6 +120,19 @@ async def read_delivery(
     return runs, releases, pulls
 
 
+async def read_popularity(
+    fetcher: wambatic.fetch.base.Fetcher, repos: list[wambatic.fetch.base.Repo]
+) -> tuple[list[wambatic.fetch.base.StarEvent], list[wambatic.fetch.base.Fork]]:
+    """Every cached star and fork of the subject's repositories, since a cumulative count reaches
+    back before any range. No author filter: a star is given to a repository, not to an author."""
+    stars: list[wambatic.fetch.base.StarEvent] = []
+    forks: list[wambatic.fetch.base.Fork] = []
+    for repo in repos:
+        stars.extend([star async for star in fetcher.star_events(repo)])
+        forks.extend([fork async for fork in fetcher.forks(repo)])
+    return stars, forks
+
+
 async def compute(
     subject: wambatic.fetch.base.Subject,
     fetcher: wambatic.fetch.base.Fetcher,
@@ -159,12 +150,11 @@ async def compute(
         raise wambatic.stats.errors.InvalidRangeError(
             f'since {request.since} is after until {request.until}'
         )
-    built = request.groups & BUILT_GROUPS
+    built = request.groups
     if not built:
-        steps = ', '.join(
-            f'{group} (step {UNBUILT_GROUP_STEPS[group]})' for group in sorted(request.groups)
+        raise wambatic.stats.errors.EmptySubjectError(
+            'no requested group: name at least one metric group'
         )
-        raise wambatic.stats.errors.EmptySubjectError(f'no requested group is built yet: {steps}')
     repos = await fetcher.repos(subject)
     if not repos:
         raise wambatic.stats.errors.EmptySubjectError(
@@ -176,38 +166,44 @@ async def compute(
     runs: list[wambatic.fetch.base.WorkflowRun] = []
     releases: list[wambatic.fetch.base.Release] = []
     delivery_pulls: list[wambatic.fetch.base.PullRequest] = []
+    stars: list[wambatic.fetch.base.StarEvent] = []
+    forks: list[wambatic.fetch.base.Fork] = []
     if 'activity' in built:
         commits = await read_commits(subject, fetcher, repos, request)
     if 'flow' in built:
         pulls, issues = await read_flow(subject, fetcher, repos, request)
     if 'delivery' in built:
         runs, releases, delivery_pulls = await read_delivery(fetcher, repos, request)
+    if 'popularity' in built:
+        stars, forks = await read_popularity(fetcher, repos)
     empty = wambatic.stats.errors.EmptySubjectError(
         f'no {" or ".join(sorted(built))} records in the cache for this range'
     )
-    if not (commits or pulls or issues or runs or releases):
+    popularity = 'popularity' in built
+    if not (commits or pulls or issues or runs or releases or popularity):
         raise empty
     now = (clock or (lambda: datetime.datetime.now(datetime.UTC)))()
     tz = request.tz
     granularity = request.granularity
+    until = request.until if request.until is not None else now.astimezone(tz).date()
     since = request.since
     if since is None:
         firsts = [commit.authored_at for commit in commits]
         firsts += [pull.created_at for pull in pulls] + [issue.created_at for issue in issues]
         firsts += [run.created_at for run in runs] + [release.published_at for release in releases]
-        earliest = min(firsts).astimezone(tz).date()
+        firsts += [star.starred_at for star in stars] + [fork.created_at for fork in forks]
+        earliest = min(firsts).astimezone(tz).date() if firsts else until
         since = (
             earliest
             if granularity is wambatic.stats.base.Granularity.TOTAL
             else wambatic.stats.buckets.bucket_start(earliest, granularity)
         )
-    until = request.until if request.until is not None else now.astimezone(tz).date()
     if since > until:
         raise wambatic.stats.errors.InvalidRangeError(f'since {since} is after until {until}')
     commits = [c for c in commits if since <= c.authored_at.astimezone(tz).date() <= until]
     flow_found = wambatic.stats.flow.has_event_in_range(pulls, issues, tz, since, until)
     delivery_found = wambatic.stats.delivery.has_event_in_range(runs, releases, tz, since, until)
-    if not (commits or flow_found or delivery_found):
+    if not (commits or flow_found or delivery_found or popularity):
         raise empty
     buckets = wambatic.stats.buckets.bucket_range(since, until, granularity)
     series: list[wambatic.stats.base.Series] = []
@@ -221,20 +217,26 @@ async def compute(
             by_author=request.by_author,
             by_repo=subject.kind != 'repo',
         )
+    totals = len(wambatic.stats.activity.TOTAL_METRICS) if 'activity' in built else 0
+    gaps: list[dict[str, typing.Any]] = []
     if 'flow' in built:
-        totals = len(wambatic.stats.activity.TOTAL_METRICS) if 'activity' in built else 0
         flow = wambatic.stats.flow.aggregate(pulls, issues, buckets, tz, since, until)
         series = [*series[:totals], *flow, *series[totals:]]
-    gaps: list[dict[str, typing.Any]] = []
+        totals += len(flow)
     if 'delivery' in built:
-        totals = len(wambatic.stats.activity.TOTAL_METRICS) if 'activity' in built else 0
-        totals += len(wambatic.stats.flow.FLOW_METRICS) if 'flow' in built else 0
         delivery, missing = wambatic.stats.delivery.aggregate(
             runs, releases, delivery_pulls, buckets, tz, since, until, request.settings
         )
         series = [*series[:totals], *delivery, *series[totals:]]
+        totals += len(delivery)
         gaps = list(missing)
-    tables['unavailable'] = [*unavailable(request.groups), *gaps]
+    if popularity:
+        liked, popular_tables = wambatic.stats.popularity.aggregate(
+            stars, forks, repos, buckets, tz, since, until
+        )
+        series = [*series[:totals], *liked, *series[totals:]]
+        tables.update(popular_tables)
+    tables['unavailable'] = gaps
     provenance = await fetcher.provenance(subject, resources_for(built))
     provenance['computed_at'] = now.astimezone(datetime.UTC).isoformat()
     provenance['timezone'] = str(tz)

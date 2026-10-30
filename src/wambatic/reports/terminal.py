@@ -265,6 +265,74 @@ def delivery_caption(table: wambatic.reports.rows.PeriodTable, unit: str) -> str
     return f'* partial period; {note}' if table.has_partial else note
 
 
+def popularity_caption(table: wambatic.reports.rows.PeriodTable) -> str:
+    note = 'totals: stars and forks that exist now, by when they were made'
+    return f'* partial period; {note}' if table.has_partial else note
+
+
+def render_popularity(
+    result: wambatic.stats.base.StatsResult, console: rich.console.Console
+) -> None:
+    """Popularity by period, Popularity now and Languages (items 10 to 12 of the layout)."""
+    by_period = wambatic.reports.rows.popularity_table(result)
+    if by_period is None:
+        return
+    console.print()
+    console.print(period_table(by_period, caption=popularity_caption(by_period)))
+    now = wambatic.reports.rows.popularity_now(result)
+    if now is not None:
+        table = make_table(
+            'Popularity now',
+            [
+                (header, header != wambatic.reports.rows.POPULARITY_NOW_HEADERS[0])
+                for header in wambatic.reports.rows.POPULARITY_NOW_HEADERS
+            ],
+        )
+        for row in now.rows:
+            table.add_row(
+                text_cell(row.repo),
+                format_number(row.stars),
+                format_number(row.forks),
+                format_number(row.watchers),
+            )
+        if now.total is not None:
+            table.show_footer = True
+            footers = [
+                now.total.repo,
+                format_number(now.total.stars),
+                format_number(now.total.forks),
+                format_number(now.total.watchers),
+            ]
+            for column, text in zip(table.columns, footers, strict=True):
+                column.footer = text
+        table.caption = 'as of the last sync; forks: whole network'
+        table.caption_justify = 'left'
+        console.print()
+        console.print(table)
+    languages = wambatic.reports.rows.languages_rows(
+        result, wambatic.reports.rows.TOP_LANGUAGES_SHOWN
+    )
+    if languages is None:
+        return
+    table = make_table(
+        'Languages',
+        [
+            (header, header != wambatic.reports.rows.LANGUAGE_HEADERS[0])
+            for header in wambatic.reports.rows.LANGUAGE_HEADERS
+        ],
+    )
+    for language in languages.rows:
+        table.add_row(
+            text_cell(language.language),
+            format_number(language.bytes),
+            f'{language.share * 100:,.1f}%',
+        )
+    console.print()
+    console.print(table)
+    if languages.more:
+        console.print(rich.text.Text(f'and {languages.more} more'))
+
+
 def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.console.Console) -> None:
     series = wambatic.reports.rows.total_series(result)
     activity = wambatic.reports.rows.activity_table(result)
@@ -282,6 +350,7 @@ def render_terminal(result: wambatic.stats.base.StatsResult, console: rich.conso
         render_top_contributors(result, console)
     render_flow(result, console)
     render_delivery(result, console)
+    render_popularity(result, console)
     render_unavailable(result, console)
     heading(console, 'Provenance')
     for line in wambatic.reports.rows.provenance_lines(result):

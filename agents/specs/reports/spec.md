@@ -1,7 +1,7 @@
 # Reports
 
 **Version:** 1.7
-**Status:** proposed
+**Status:** implemented
 **Date:** 2026-10-30
 
 The three ways a user sees a `StatsResult`: a terminal report, a self-contained static HTML report, and a local web app. All three render the same result object, so they never disagree. It also defines the `wambatic` command line.

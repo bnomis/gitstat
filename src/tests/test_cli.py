@@ -492,7 +492,7 @@ def test_full_refresh_syncs_a_fresh_cache_and_reads_the_history_again(
     assert 'Activity by period' in ran.console
 
 
-def test_the_default_groups_sync_commits_issues_and_pull_requests_and_flow_is_not_unavailable(
+def test_the_default_groups_sync_commits_issues_and_pull_requests_and_list_nothing_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: tests.conftest.MakeClient,
     stats_cache_path: pathlib.Path,
@@ -513,8 +513,7 @@ def test_the_default_groups_sync_commits_issues_and_pull_requests_and_flow_is_no
     assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), BUILT, False)]
     assert ran.queries == ['repository', 'issues', 'pull_requests']
     assert wambatic.stats.base.StatsRequest().groups == frozenset({'activity', 'flow'})
-    assert 'Unavailable' in ran.console
-    assert not re.search(r'^\s+flow\s+the flow group', ran.console, re.MULTILINE)
+    assert 'Unavailable' not in ran.console
     assert 'Flow by period' in ran.console
 
 
@@ -748,6 +747,8 @@ def test_cache_info_lists_the_counts_and_no_differences(stats_cache_path: pathli
     assert rows['issues'] == [str(len(tests.fixtures.stats.ISSUES))]
     assert rows['releases'] == [str(len(tests.fixtures.stats.RELEASES))]
     assert rows['workflow'] == ['runs', str(len(tests.fixtures.stats.WORKFLOW_RUNS))]
+    assert rows['star'] == ['events', str(len(tests.fixtures.stats.STAR_EVENTS))]
+    assert rows['forks'] == [str(len(tests.fixtures.stats.FORKS))]
     assert rows['differences'] == ['none']
     assert rows['last'] == ['synced', tests.fixtures.stats.BETA_SYNCED_AT.isoformat()]
     assert rows['schema_version'] == [str(wambatic.fetch.cache.SCHEMA_VERSION)]
@@ -771,6 +772,8 @@ def test_cache_info_of_a_schema_2_file_counts_the_missing_tables_as_zero(
     assert rows['issues'] == ['1']
     assert rows['releases'] == ['0']
     assert rows['workflow'] == ['runs', '0']
+    assert rows['star'] == ['events', '0']
+    assert rows['forks'] == ['0']
     assert 'differs: schema_version' in output
 
 
@@ -1606,3 +1609,100 @@ def test_serve_overrides_are_only_the_flags_given() -> None:
         'report': {'web_host': '::1', 'web_port': 9, 'allow_remote': True},
         'fetch': {'max_age': '1d'},
     }
+
+
+# Popularity end to end
+
+
+POPULARITY_FLAGS = ['--groups', 'popularity', '--since', '2026-10-01', '--until', '2027-01-31']
+POPULARITY_RESOURCES = frozenset({'forks', 'star_events'})
+
+
+def test_a_popularity_report_syncs_stars_and_forks_logs_their_rows_and_prints_the_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    messages: list[str] = []
+    sink = loguru.logger.add(lambda message: messages.append(str(message)), level='INFO')
+    try:
+        ran = run_report(
+            monkeypatch,
+            make_client,
+            tmp_path / 'fresh.sqlite3',
+            ['repo:octo-org/alpha', *POPULARITY_FLAGS],
+        )
+    finally:
+        loguru.logger.remove(sink)
+    assert ran.syncs == [(Subject('repo', 'octo-org', 'alpha'), POPULARITY_RESOURCES, False)]
+    assert ran.queries == ['repository', 'stargazers']
+    assert any('forks 3, star_events 5' in message for message in messages)
+    assert 'Popularity by period' in ran.console
+    assert 'Popularity now' in ran.console
+    assert 'Languages' in ran.console
+    assert 'Activity by period' not in ran.console
+
+
+def test_a_second_popularity_report_of_an_unchanged_repo_makes_the_listing_request_only(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    cache = tmp_path / 'fresh.sqlite3'
+    argv = ['repo:octo-org/alpha', *POPULARITY_FLAGS]
+    run_report(monkeypatch, make_client, cache, argv)
+    second = run_report(monkeypatch, make_client, cache, argv)
+    assert second.queries == ['repository']
+    assert second.paths == ['/graphql']
+    assert 'Popularity by period' in second.console
+
+
+def test_a_popularity_report_with_no_fetch_makes_no_request(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--no-fetch', *POPULARITY_FLAGS],
+        online=False,
+    )
+    assert ran.syncs == []
+    assert ran.paths == []
+    assert 'Popularity by period' in ran.console
+    assert re.search(r'^\s+octo-org/alpha\s+6\s+3\s+4\s*$', ran.console, re.MULTILINE)
+
+
+def test_the_json_format_gives_the_popularity_series_and_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: tests.conftest.MakeClient,
+    stats_cache_path: pathlib.Path,
+) -> None:
+    ran = run_report(
+        monkeypatch,
+        make_client,
+        stats_cache_path,
+        ['repo:octo-org/alpha', '--no-fetch', '--format', 'json', *POPULARITY_FLAGS],
+        online=False,
+    )
+    data = json.loads(ran.stdout)
+    assert [s['metric'] for s in data['series']] == [
+        'stars_added',
+        'stars_total',
+        'forks_added',
+        'forks_total',
+    ]
+    assert data['tables']['popularity'] == [
+        {'repo': 'octo-org/alpha', 'stars': 6, 'forks': 3, 'watchers': 4}
+    ]
+    assert [row['language'] for row in data['tables']['languages']] == ['Python', 'Shell', 'Other']
+
+
+def test_the_report_help_names_every_group(capsys: pytest.CaptureFixture[str]) -> None:
+    assert wambatic.cli.main(['report', '--help']) == 0
+    out = ' '.join(capsys.readouterr().out.split())
+    assert 'activity, flow, delivery, popularity' in out

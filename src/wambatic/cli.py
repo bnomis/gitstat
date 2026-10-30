@@ -65,7 +65,13 @@ class Report:
     ] = None
     groups: typing.Annotated[
         str | None,
-        cappa.Arg(long=True, help='Comma-separated metric groups (default: activity,flow)'),
+        cappa.Arg(
+            long=True,
+            help=(
+                'Comma-separated metric groups: activity, flow, delivery, popularity '
+                '(default: activity,flow)'
+            ),
+        ),
     ] = None
     by_author: typing.Annotated[
         bool, cappa.Arg(long=True, help='Break activity down by author (not for a user)')
@@ -290,6 +296,8 @@ def cache_info_table(info: wambatic.fetch.cache.CacheInfo) -> rich.table.Table:
         ('issues', wambatic.reports.terminal.format_number(info.issues)),
         ('releases', wambatic.reports.terminal.format_number(info.releases)),
         ('workflow runs', wambatic.reports.terminal.format_number(info.workflow_runs)),
+        ('star events', wambatic.reports.terminal.format_number(info.star_events)),
+        ('forks', wambatic.reports.terminal.format_number(info.forks)),
         (
             'last synced',
             'never' if info.last_synced_at is None else info.last_synced_at.isoformat(),

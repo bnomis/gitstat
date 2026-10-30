@@ -135,6 +135,20 @@ def workflow_run(
     return wambatic.fetch.base.WorkflowRun(**fields)  # type: ignore[arg-type]
 
 
+def star_event(
+    user_id: str, hours: int = 0, repo_name: str = HELLO
+) -> wambatic.fetch.base.StarEvent:
+    return wambatic.fetch.base.StarEvent(
+        repo=repo_name, user_id=user_id, starred_at=T0 + datetime.timedelta(hours=hours)
+    )
+
+
+def fork(fork_id: int, hours: int = 0, repo_name: str = HELLO) -> wambatic.fetch.base.Fork:
+    return wambatic.fetch.base.Fork(
+        repo=repo_name, id=fork_id, created_at=T0 + datetime.timedelta(hours=hours)
+    )
+
+
 def state(
     repo_name: str = HELLO,
     head: str | None = 'a' * 40,
@@ -671,7 +685,7 @@ def test_the_repo_probe_fields_round_trip_through_upsert_and_read(
     assert rows[1].issues_updated_at is None
 
 
-@pytest.mark.parametrize('old', ['1', '2'])
+@pytest.mark.parametrize('old', ['1', '2', '3'])
 def test_a_cache_stamped_with_an_earlier_schema_version_is_refused(
     cache_path: pathlib.Path, old: str
 ) -> None:
@@ -886,6 +900,146 @@ def test_a_failure_mid_write_of_runs_leaves_rows_and_state_unchanged(
     assert cache.sync_state(HELLO, 'workflow_runs') == old
 
 
+# Stars and forks
+
+
+def test_a_repo_with_counts_and_languages_round_trips(cache: wambatic.fetch.cache.Cache) -> None:
+    popular = repo(
+        stargazer_count=12,
+        fork_count=3,
+        watcher_count=5,
+        languages=(('Python', 900), ('Ünïcode', 80), ('C++', 20)),
+        languages_size=1500,
+    )
+    bare = repo(SPOON)
+    cache.upsert_repos('octocat', [popular, bare], complete=True)
+    rows = cache.read_repos(wambatic.fetch.base.Subject('user', 'octocat'))
+    assert rows == [popular, bare]
+    assert rows[1].languages == ()
+    assert (rows[1].stargazer_count, rows[1].languages_size) == (0, 0)
+
+
+def test_star_events_round_trip_oldest_first_then_user_id(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    stars = [star_event('U_b', 2), star_event('U_z', 1), star_event('U_a', 1)]
+    cache.write_star_events(HELLO, stars, state(resource='star_events'), replace=False)
+    assert [star.user_id for star in cache.read_star_events(HELLO)] == ['U_a', 'U_z', 'U_b']
+    assert cache.read_star_events(HELLO)[0] == star_event('U_a', 1)
+
+
+def test_forks_round_trip_oldest_first_then_id(cache: wambatic.fetch.cache.Cache) -> None:
+    cache.write_forks(
+        HELLO, [fork(9, 2), fork(8, 1), fork(7, 1)], state(resource='forks'), replace=False
+    )
+    assert cache.read_forks(HELLO) == [fork(7, 1), fork(8, 1), fork(9, 2)]
+
+
+def test_write_star_events_replace_controls_unlisted_rows_and_leaves_other_repos(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_star_events(
+        SPOON,
+        [star_event('U_s', repo_name=SPOON)],
+        state(SPOON, resource='star_events'),
+        replace=False,
+    )
+    old = [star_event('U_1'), star_event('U_2', 1)]
+    cache.write_star_events(HELLO, old, state(resource='star_events'), replace=False)
+    written = cache.write_star_events(
+        HELLO,
+        [star_event('U_3', 2), star_event('U_2', 5)],
+        state(resource='star_events'),
+        replace=False,
+    )
+    assert written == 2
+    assert [(star.user_id, star.starred_at) for star in cache.read_star_events(HELLO)] == [
+        ('U_1', T0),
+        ('U_3', T0 + datetime.timedelta(hours=2)),
+        ('U_2', T0 + datetime.timedelta(hours=5)),
+    ]
+    cache.write_star_events(
+        HELLO, [star_event('U_3', 2)], state(resource='star_events'), replace=True
+    )
+    assert [star.user_id for star in cache.read_star_events(HELLO)] == ['U_3']
+    assert [star.user_id for star in cache.read_star_events(SPOON)] == ['U_s']
+
+
+def test_write_forks_replace_controls_unlisted_rows_and_leaves_other_repos(
+    cache: wambatic.fetch.cache.Cache,
+) -> None:
+    cache.write_forks(
+        SPOON, [fork(1, repo_name=SPOON)], state(SPOON, resource='forks'), replace=False
+    )
+    cache.write_forks(HELLO, [fork(10), fork(11, 1)], state(resource='forks'), replace=False)
+    cache.write_forks(HELLO, [fork(12, 2)], state(resource='forks'), replace=False)
+    assert [item.id for item in cache.read_forks(HELLO)] == [10, 11, 12]
+    cache.write_forks(HELLO, [fork(11, 1)], state(resource='forks'), replace=True)
+    assert [item.id for item in cache.read_forks(HELLO)] == [11]
+    assert [item.id for item in cache.read_forks(SPOON)] == [1]
+
+
+def test_a_star_or_fork_or_state_for_another_repo_raises_and_writes_nothing(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    for replace in (False, True):
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_star_events(
+                HELLO,
+                [star_event('U_1'), star_event('U_2', repo_name=SPOON)],
+                state(resource='star_events'),
+                replace=replace,
+            )
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_star_events(
+                HELLO, [star_event('U_1')], state(SPOON, resource='star_events'), replace=replace
+            )
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_forks(
+                HELLO,
+                [fork(1), fork(2, repo_name=SPOON)],
+                state(resource='forks'),
+                replace=replace,
+            )
+        with pytest.raises(ValueError, match='must belong to'):
+            cache.write_forks(HELLO, [fork(1)], state(SPOON, resource='forks'), replace=replace)
+    assert table_rows(cache_path, 'star_events') == []
+    assert table_rows(cache_path, 'forks') == []
+    for resource in ('star_events', 'forks'):
+        assert cache.sync_state(HELLO, resource) is None
+        assert cache.sync_state(SPOON, resource) is None
+
+
+def test_a_failure_mid_write_of_stars_leaves_rows_and_state_unchanged(
+    cache: wambatic.fetch.cache.Cache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = state(resource='star_events', hours=1, probe='1')
+    cache.write_star_events(HELLO, [star_event('U_1')], old, replace=False)
+
+    def fail(new_state: wambatic.fetch.base.SyncState) -> None:
+        raise sqlite3.OperationalError('disk full')
+
+    monkeypatch.setattr(cache, 'put_state', fail)
+    with pytest.raises(sqlite3.OperationalError):
+        cache.write_star_events(
+            HELLO, [star_event('U_2')], state(resource='star_events', hours=2), replace=True
+        )
+    assert [star.user_id for star in cache.read_star_events(HELLO)] == ['U_1']
+    assert cache.sync_state(HELLO, 'star_events') == old
+
+
+def test_inspect_cache_counts_star_events_and_forks(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    cache.write_star_events(
+        HELLO, [star_event('U_1'), star_event('U_2')], state(resource='star_events'), replace=False
+    )
+    cache.write_forks(HELLO, [fork(1)], state(resource='forks'), replace=False)
+    info = wambatic.fetch.cache.inspect_cache(cache_path)
+    assert info is not None
+    assert (info.star_events, info.forks) == (2, 1)
+
+
 # ETags
 
 
@@ -1012,6 +1166,7 @@ def test_inspect_cache_gives_zero_pull_requests_and_issues_on_a_file_that_lacks_
     assert info is not None
     assert (info.pull_requests, info.issues) == (0, 0)
     assert (info.releases, info.workflow_runs) == (0, 0)
+    assert (info.star_events, info.forks) == (0, 0)
 
 
 def test_inspect_cache_of_an_empty_sqlite_file_has_zero_counts_and_adds_no_tables(

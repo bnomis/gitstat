@@ -40,6 +40,18 @@ def alpha_upstream() -> tests.fixtures.fetch.upstream.Upstream:
             ],
             pushed_at=repo.pushed_at or tests.fixtures.stats.NOW,
             updated_at=repo.updated_at,
+            stars=[
+                tests.fixtures.fetch.upstream.FakeStar(star.user_id, star.starred_at)
+                for star in tests.fixtures.stats.STAR_EVENTS
+                if star.repo == repo.name_with_owner
+            ],
+            forks=[
+                tests.fixtures.fetch.upstream.FakeFork(fork.id, fork.created_at)
+                for fork in tests.fixtures.stats.FORKS
+                if fork.repo == repo.name_with_owner
+            ],
+            watchers=repo.watcher_count,
+            languages=list(repo.languages) or None,
         )
         for repo in (alpha, gamma)
     ]
@@ -140,16 +152,6 @@ Flow times by period
   2027-01         12.5         21.7        24.0        24.0           -           -            15
 
 hours; - no data
-
-Unavailable
-
-  Metric      Reason
- ───────────────────────────────────────────────────────────────────────────────────
-  stars       stars come from star_events, which step 10 fetches
-  forks       forks has no fetch resource yet; step 10 specifies and fetches it
-  watchers    watchers has no fetch resource yet; step 10 specifies and fetches it
-  languages   languages has no fetch resource yet; step 10 specifies and fetches it
-
 
 Provenance
 computed_at: 2027-01-20T12:00:00+00:00

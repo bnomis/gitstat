@@ -18,6 +18,11 @@ were checked against GitHub's published schemas (`@octokit/graphql-schema` 15.26
 `@octokit/openapi` 24.0.0), which describe a run's `path` in two forms (`.github/workflows/ci.yml`
 and `owner/repo/.github/workflows/ci.yml@main`); the recording should confirm which one the API
 gives and that `name`, `status` and `run_started_at` are present on every run.
+
+The step 10 stand-ins to re-record are the counts and languages of the listing nodes,
+STARGAZERS_OK and FORKS_OK. Their shapes were checked against the same published schemas; the
+recording should confirm that `languages` is `null` for a repository with no recognised code and
+that `forkCount` counts the whole network while the REST fork list holds the direct forks only.
 """
 
 import datetime
@@ -54,8 +59,14 @@ def repo_node(
     issues_updated_at: datetime.datetime | None = None,
     releases_count: int = 0,
     releases_updated_at: datetime.datetime | None = None,
+    stargazer_count: int = 0,
+    fork_count: int = 0,
+    watcher_count: int = 0,
+    languages: list[tuple[str, int]] | None = None,
+    languages_size: int | None = None,
 ) -> dict[str, object]:
-    """A repository node as `OWNER_REPOSITORIES` and `REPOSITORY` select it."""
+    """A repository node as `OWNER_REPOSITORIES` and `REPOSITORY` select it. `languages` None is
+    a `null` connection; `languages_size` None is the sum of the listed languages."""
     return {
         'nameWithOwner': name_with_owner,
         'isArchived': is_archived,
@@ -66,6 +77,20 @@ def repo_node(
         'pullRequests': probe_connection(pull_requests_updated_at),
         'issues': probe_connection(issues_updated_at),
         'releases': {**probe_connection(releases_updated_at), 'totalCount': releases_count},
+        'stargazerCount': stargazer_count,
+        'forkCount': fork_count,
+        'watchers': {'totalCount': watcher_count},
+        'languages': None if languages is None else language_connection(languages, languages_size),
+    }
+
+
+# https://docs.github.com/en/graphql/reference/objects#languageconnection
+def language_connection(
+    languages: list[tuple[str, int]], total_size: int | None = None
+) -> dict[str, object]:
+    return {
+        'totalSize': sum(size for _, size in languages) if total_size is None else total_size,
+        'edges': [{'size': size, 'node': {'name': name}} for name, size in languages],
     }
 
 
@@ -263,6 +288,34 @@ def workflow_runs_response(
     return {'total_count': len(runs) if total is None else total, 'workflow_runs': runs}
 
 
+# https://docs.github.com/en/graphql/reference/objects#stargazeredge
+def star_edge(user_id: str, starred_at: datetime.datetime) -> dict[str, object]:
+    return {'starredAt': iso(starred_at), 'node': {'id': user_id}}
+
+
+# https://docs.github.com/en/graphql/reference/objects#stargazerconnection
+def stargazers_page(
+    edges: list[dict[str, object]], has_next: bool, cursor: str
+) -> dict[str, object]:
+    return {
+        'data': {
+            'repository': {
+                'stargazers': {
+                    'pageInfo': {'hasNextPage': has_next, 'endCursor': cursor},
+                    'edges': edges,
+                }
+            },
+            'rateLimit': RATE_LIMIT,
+        }
+    }
+
+
+# https://docs.github.com/en/rest/repos/forks#list-forks
+def fork_object(fork_id: int, created_at: datetime.datetime) -> dict[str, object]:
+    """A fork of the REST list, trimmed to the fields the fetcher reads."""
+    return {'id': fork_id, 'created_at': iso(created_at)}
+
+
 def history_node(
     oid: str,
     authored_at: datetime.datetime,
@@ -351,6 +404,11 @@ HELLO_NODE = repo_node(
     issues_updated_at=HELLO_PULL_REQUESTS_UPDATED_AT,
     releases_count=4,
     releases_updated_at=HELLO_RELEASED_AT,
+    stargazer_count=3,
+    fork_count=2,
+    watcher_count=4,
+    languages=[('Python', 7000), ('Shell', 500), ('Ünïcode', 50)],
+    languages_size=8000,
 )
 SPOON_NODE = repo_node(
     'octocat/Spoon-Knife',
@@ -359,6 +417,21 @@ SPOON_NODE = repo_node(
     updated_at=HELLO_UPDATED_AT,
     branch='main',
 )
+STARGAZERS_OK = stargazers_page(
+    [
+        star_edge('MDQ6VXNlcjM=', HELLO_PUSHED_AT),
+        star_edge('MDQ6VXNlcjI=', HELLO_PUSHED_AT - datetime.timedelta(days=2)),
+    ],
+    True,
+    'Y3Vyc29yOjI=',
+)
+STARGAZERS_LAST = stargazers_page(
+    [star_edge('MDQ6VXNlcjE=', HELLO_PUSHED_AT - datetime.timedelta(days=9))], False, 'Y3Vyc29yOjM='
+)
+FORKS_OK = [
+    fork_object(202, HELLO_PUSHED_AT - datetime.timedelta(days=1)),
+    fork_object(201, HELLO_PUSHED_AT - datetime.timedelta(days=5)),
+]
 OWNER_REPOSITORIES_OK = owner_page([HELLO_NODE, SPOON_NODE], False, 'Y3Vyc29yOjg=')
 REPOSITORY_OK = repository_response(HELLO_NODE)
 COMMIT_HISTORY_OK = history_page(

@@ -18,6 +18,7 @@ import tests.fixtures.fetch.server
 
 COMPARE_PATH = re.compile(r'/repos/(?P<name>[^/]+/[^/]+)/compare/(?P<base>\w+)\.\.\.(?P<head>\w+)')
 RUNS_PATH = re.compile(r'/repos/(?P<name>[^/]+/[^/]+)/actions/runs(?:/(?P<id>\d+))?')
+FORKS_PATH = re.compile(r'/repos/(?P<name>[^/]+/[^/]+)/forks')
 
 
 @dataclasses.dataclass(slots=True)
@@ -82,6 +83,18 @@ class FakeRun:
 
 
 @dataclasses.dataclass(slots=True)
+class FakeStar:
+    user_id: str
+    starred_at: datetime.datetime
+
+
+@dataclasses.dataclass(slots=True)
+class FakeFork:
+    id: int
+    created_at: datetime.datetime
+
+
+@dataclasses.dataclass(slots=True)
 class FakeRepo:
     name: str
     history: list[FakeCommit]
@@ -95,6 +108,12 @@ class FakeRepo:
     releases: list[FakeRelease] = dataclasses.field(default_factory=list)
     runs: list[FakeRun] = dataclasses.field(default_factory=list)
     has_actions: bool = True
+    stars: list[FakeStar] = dataclasses.field(default_factory=list)
+    forks: list[FakeFork] = dataclasses.field(default_factory=list)
+    forks_of_forks: int = 0
+    watchers: int = 0
+    languages: list[tuple[str, int]] | None = None
+    has_forks: bool = True
 
     @property
     def head(self) -> str | None:
@@ -114,6 +133,10 @@ class FakeRepo:
             issues_updated_at=max((i.updated_at for i in self.issues), default=None),
             releases_count=len(self.releases),
             releases_updated_at=None if newest is None else newest.changed_at,
+            stargazer_count=len(self.stars),
+            fork_count=len(self.forks) + self.forks_of_forks,
+            watcher_count=self.watchers,
+            languages=self.languages,
         )
 
     def push(self, *commits: FakeCommit) -> None:
@@ -137,6 +160,9 @@ class Upstream:
         self.release_page_size = 100
         self.failing_release_cursors: set[str] = set()
         self.failing_run_pages: set[int] = set()
+        self.star_page_size = 100
+        self.failing_star_cursors: set[str] = set()
+        self.failing_fork_pages: set[int] = set()
         self.run_etags = True
         self.now = tests.fixtures.fetch.responses.NOW
 
@@ -151,6 +177,9 @@ class Upstream:
         match = RUNS_PATH.fullmatch(received.path)
         if match:
             return self.actions_runs(match, received)
+        match = FORKS_PATH.fullmatch(received.path)
+        if match:
+            return self.fork_list(match, received)
         return tests.fixtures.fetch.server.Canned(404, tests.fixtures.fetch.responses.NOT_FOUND)
 
     def graphql(
@@ -188,6 +217,8 @@ class Upstream:
             )
         if 'query Releases' in query:
             return self.release_page(variables, headers)
+        if 'query Stargazers' in query:
+            return self.star_page(variables, headers)
         if 'query CommitNodes' in query:
             return tests.fixtures.fetch.server.Canned(200, self.nodes(variables['ids']), headers)
         raise AssertionError(f'unexpected query: {query}')
@@ -273,6 +304,52 @@ class Upstream:
             str(end),
         )
         return tests.fixtures.fetch.server.Canned(200, body, headers)
+
+    def star_page(
+        self, variables: dict[str, object], headers: dict[str, str]
+    ) -> tests.fixtures.fetch.server.Canned:
+        cursor = str(variables['cursor'] or 0)
+        if cursor in self.failing_star_cursors:
+            return tests.fixtures.fetch.server.Canned(
+                500, tests.fixtures.fetch.responses.SERVER_ERROR
+            )
+        repo = self.repos[f'{variables["owner"]}/{variables["name"]}']
+        responses = tests.fixtures.fetch.responses
+        ordered = sorted(repo.stars, key=lambda s: (s.starred_at, s.user_id), reverse=True)
+        start = int(cursor)
+        end = start + self.star_page_size
+        body = responses.stargazers_page(
+            [responses.star_edge(s.user_id, s.starred_at) for s in ordered[start:end]],
+            end < len(ordered),
+            str(end),
+        )
+        return tests.fixtures.fetch.server.Canned(200, body, headers)
+
+    def fork_list(
+        self, match: re.Match[str], received: tests.fixtures.fetch.server.Received
+    ) -> tests.fixtures.fetch.server.Canned:
+        """`GET /repos/{name}/forks?sort=newest`, a plain list with no ETag."""
+        repo = self.repos.get(match['name'])
+        if repo is None or not repo.has_forks:
+            return tests.fixtures.fetch.server.Canned(404, tests.fixtures.fetch.responses.NOT_FOUND)
+        page = int(received.query['page'])
+        if page in self.failing_fork_pages:
+            return tests.fixtures.fetch.server.Canned(
+                500, tests.fixtures.fetch.responses.SERVER_ERROR
+            )
+        assert received.query['sort'] == 'newest'
+        ordered = sorted(repo.forks, key=lambda f: (f.created_at, f.id), reverse=True)
+        size = int(received.query['per_page'])
+        shown = ordered[(page - 1) * size : page * size]
+        headers = {
+            **tests.fixtures.fetch.responses.RATE_HEADERS,
+            'Date': email.utils.format_datetime(self.now, usegmt=True),
+        }
+        return tests.fixtures.fetch.server.Canned(
+            200,
+            [tests.fixtures.fetch.responses.fork_object(f.id, f.created_at) for f in shown],
+            headers,
+        )
 
     def run_object(self, run: FakeRun) -> dict[str, object]:
         return tests.fixtures.fetch.responses.workflow_run_object(
@@ -407,10 +484,14 @@ class Upstream:
             'query PullRequests': 'pull_requests',
             'query Issues': 'issues',
             'query Releases': 'releases',
+            'query Stargazers': 'stargazers',
         }
         found: list[str] = []
         for received in server.received:
             if received.path != '/graphql':
+                if FORKS_PATH.fullmatch(received.path):
+                    found.append('forks')
+                    continue
                 match = RUNS_PATH.fullmatch(received.path)
                 found.append('compare' if match is None else 'run' if match['id'] else 'runs')
                 continue

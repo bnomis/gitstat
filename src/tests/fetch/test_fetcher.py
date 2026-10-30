@@ -23,7 +23,9 @@ Canned = tests.fixtures.fetch.server.Canned
 FakeCommit = tests.fixtures.fetch.upstream.FakeCommit
 FakeIssue = tests.fixtures.fetch.upstream.FakeIssue
 FakePull = tests.fixtures.fetch.upstream.FakePull
+FakeFork = tests.fixtures.fetch.upstream.FakeFork
 FakeRepo = tests.fixtures.fetch.upstream.FakeRepo
+FakeStar = tests.fixtures.fetch.upstream.FakeStar
 Upstream = tests.fixtures.fetch.upstream.Upstream
 
 HELLO = 'octocat/Hello-World'
@@ -1073,19 +1075,6 @@ def test_an_unknown_resource_raises_before_any_request(
     assert asyncio.run(scenario()) == 0
 
 
-def test_a_resource_not_built_yet_raises_before_any_request(
-    make_fetcher: tests.conftest.MakeFetcher,
-) -> None:
-    async def scenario() -> int:
-        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
-            async with make_fetcher(server) as fetcher:
-                with pytest.raises(NotImplementedError, match='star_events \\(step 10\\)'):
-                    await fetcher.sync(OWNER, frozenset({'commits', 'star_events'}))
-            return len(server.received)
-
-    assert asyncio.run(scenario()) == 0
-
-
 def test_a_failure_in_one_repo_propagates_as_its_own_exception(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
@@ -2031,3 +2020,375 @@ def test_releases_are_unchanged_only_for_an_equal_probe_inside_the_interval(
     assert unchanged_for(make_fetcher, first.cache, later, 'releases') is False
     age_full_sync(first.cache, 'releases', 31)
     assert unchanged_for(make_fetcher, first.cache, repo, 'releases') is False
+
+
+# Stars
+
+STARS = frozenset({'star_events'})
+DAY = datetime.timedelta(days=1)
+
+
+def popularity_repo(stars: int = 5, forks: int = 0) -> FakeRepo:
+    return FakeRepo(
+        HELLO,
+        history('h', 1),
+        stars=[FakeStar(f'U_{n}', SERVER_DATE - n * DAY) for n in range(1, stars + 1)],
+        forks=[FakeFork(100 + n, SERVER_DATE - n * DAY) for n in range(1, forks + 1)],
+    )
+
+
+def popularity_upstream(**repo_changes: int) -> Upstream:
+    upstream = Upstream([popularity_repo(**repo_changes)])
+    upstream.now = SERVER_DATE
+    return upstream
+
+
+def star_ids(cache: wambatic.fetch.cache.Cache) -> list[str]:
+    return sorted(star.user_id for star in cache.read_star_events(HELLO))
+
+
+def test_a_first_star_sync_reads_every_page_and_stores_every_star(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    run = sync_once(make_fetcher, upstream, resources=STARS)
+    assert run.kinds == ['listing', 'stargazers', 'stargazers', 'stargazers']
+    assert run.report.rows_written == {'star_events': 5}
+    assert star_ids(run.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
+    state = run.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '5'
+    assert (state.watermark, state.head_oid, state.full_synced_at) == (SERVER_DATE, None, CLOCK)
+
+
+def test_an_unchanged_star_count_makes_no_stargazers_request(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report.repos_skipped == 1
+    assert star_ids(second.cache) == star_ids(first.cache)
+
+
+def test_a_higher_star_count_reads_the_first_page_and_stops_at_the_cutoff(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    upstream.repos[HELLO].stars.append(
+        FakeStar('U_new', SERVER_DATE - datetime.timedelta(minutes=10))
+    )
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers']
+    assert second.report.rows_written == {'star_events': 1}
+    assert star_ids(second.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5', 'U_new']
+    state = second.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.probe == '6'
+    assert state.full_synced_at == CLOCK
+
+
+def test_a_lower_star_count_reads_every_page_and_a_removed_star_leaves_the_cache(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    del upstream.repos[HELLO].stars[2]
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers', 'stargazers']
+    assert star_ids(second.cache) == ['U_1', 'U_2', 'U_4', 'U_5']
+
+
+def test_a_removed_and_an_added_star_leave_the_count_alone_until_the_full_read(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    stars = upstream.repos[HELLO].stars
+    del stars[4]
+    stars.append(FakeStar('U_new', SERVER_DATE - 2 * datetime.timedelta(hours=1)))
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing']
+    age_full_sync(first.cache, 'star_events', 31)
+    third = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert third.kinds == ['listing', 'stargazers']
+    assert star_ids(third.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_new']
+
+
+def test_a_passed_full_refresh_interval_reads_every_page_of_stars_with_an_equal_count(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    upstream.star_page_size = 2
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    age_full_sync(first.cache, 'star_events', 31)
+    second = sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert second.kinds == ['listing', 'stargazers', 'stargazers', 'stargazers']
+    state = second.cache.sync_state(HELLO, 'star_events')
+    assert state is not None
+    assert state.full_synced_at == CLOCK
+
+
+def test_full_refresh_reads_every_page_of_stars_of_an_unchanged_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    second = sync_once(
+        make_fetcher, upstream, resources=STARS, cache=first.cache, full_refresh=True
+    )
+    assert second.kinds == ['listing', 'stargazers']
+
+
+def test_an_interrupted_star_read_leaves_the_old_rows_and_state(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    state = first.cache.sync_state(HELLO, 'star_events')
+    del upstream.repos[HELLO].stars[0]
+    upstream.star_page_size = 2
+    upstream.failing_star_cursors = {'2'}
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
+    assert star_ids(first.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
+    assert first.cache.sync_state(HELLO, 'star_events') == state
+
+
+def test_fetcher_star_events_reads_the_cache_oldest_first(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+
+    async def scenario() -> list[str]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=first.cache)
+            return [star.user_id async for star in fetcher.star_events(listed(upstream))]
+
+    assert asyncio.run(scenario()) == ['U_5', 'U_4', 'U_3', 'U_2', 'U_1']
+
+
+def test_a_star_is_stored_without_a_login(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    columns = [row[1] for row in first.cache.connection.execute('PRAGMA table_info(star_events)')]
+    assert columns == ['repo', 'user_id', 'starred_at']
+
+
+def test_star_events_are_unchanged_only_for_an_equal_count_inside_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream()
+    first = sync_once(make_fetcher, upstream, resources=STARS)
+    repo = listed(upstream)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'star_events') is True
+    more = dataclasses.replace(repo, stargazer_count=repo.stargazer_count + 1)
+    assert unchanged_for(make_fetcher, first.cache, more, 'star_events') is False
+    fewer = dataclasses.replace(repo, stargazer_count=repo.stargazer_count - 1)
+    assert unchanged_for(make_fetcher, first.cache, fewer, 'star_events') is False
+    age_full_sync(first.cache, 'star_events', 31)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'star_events') is False
+
+
+# Forks
+
+FORKS = frozenset({'forks'})
+
+
+def fork_ids(cache: wambatic.fetch.cache.Cache) -> list[int]:
+    return sorted(fork.id for fork in cache.read_forks(HELLO))
+
+
+def fork_requests(server: tests.fixtures.fetch.server.ReplayServer) -> list[str]:
+    return [received.path for received in server.received if received.path.endswith('/forks')]
+
+
+def test_a_first_fork_sync_reads_every_page_and_stores_every_fork(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=101)
+    run = sync_once(make_fetcher, upstream, resources=FORKS)
+    assert run.kinds == ['listing', 'forks', 'forks']
+    assert run.report.rows_written == {'forks': 101}
+    assert fork_ids(run.cache) == list(range(101, 202))
+    state = run.cache.sync_state(HELLO, 'forks')
+    assert state is not None
+    assert state.probe == '101'
+    assert (state.watermark, state.head_oid, state.full_synced_at) == (SERVER_DATE, None, CLOCK)
+
+
+def test_the_fork_list_is_requested_newest_first_100_at_a_time_without_an_etag(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=101)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+
+    async def scenario() -> list[tests.fixtures.fetch.server.Received]:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            async with make_fetcher(server, cache=first.cache) as fetcher:
+                await fetcher.sync_forks(listed(upstream), True)
+            return [r for r in server.received if r.path.endswith('/forks')]
+
+    received = asyncio.run(scenario())
+    assert [r.query for r in received] == [
+        {'sort': 'newest', 'per_page': '100', 'page': '1'},
+        {'sort': 'newest', 'per_page': '100', 'page': '2'},
+    ]
+    assert not any('If-None-Match' in r.headers for r in received)
+    assert first.cache.connection.execute('SELECT COUNT(*) FROM etags').fetchone() == (0,)
+
+
+def test_an_unchanged_fork_count_makes_no_fork_request(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    second = sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report.repos_skipped == 1
+
+
+def test_a_higher_fork_count_stops_at_the_cutoff(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    upstream.repos[HELLO].forks.append(FakeFork(999, SERVER_DATE - datetime.timedelta(minutes=10)))
+    second = sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert second.kinds == ['listing', 'forks']
+    assert second.report.rows_written == {'forks': 1}
+    assert fork_ids(second.cache) == [101, 102, 103, 999]
+
+
+def test_a_lower_fork_count_reads_every_page_and_a_deleted_fork_leaves(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    del upstream.repos[HELLO].forks[1]
+    second = sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert second.kinds == ['listing', 'forks']
+    assert fork_ids(second.cache) == [101, 103]
+
+
+def test_a_fork_of_a_fork_changes_the_count_and_costs_one_read_that_finds_nothing(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=2)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    upstream.repos[HELLO].forks_of_forks = 1
+    second = sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert second.kinds == ['listing', 'forks']
+    assert second.report.rows_written == {'forks': 0}
+    assert fork_ids(second.cache) == [101, 102]
+
+
+def test_full_refresh_reads_every_page_of_forks_of_an_unchanged_repo(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    second = sync_once(
+        make_fetcher, upstream, resources=FORKS, cache=first.cache, full_refresh=True
+    )
+    assert second.kinds == ['listing', 'forks']
+
+
+def test_a_missing_fork_list_writes_no_forks_and_does_not_raise(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    upstream.repos[HELLO].has_forks = False
+    run = sync_once(make_fetcher, upstream, resources=FORKS)
+    assert run.report.rows_written == {'forks': 0}
+    state = run.cache.sync_state(HELLO, 'forks')
+    assert state is not None
+    assert (state.watermark, state.probe) == (None, '3')
+
+
+def test_a_missing_fork_list_later_keeps_the_rows_and_the_previous_watermark(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    upstream.repos[HELLO].has_forks = False
+    upstream.repos[HELLO].forks.append(FakeFork(999, SERVER_DATE))
+    second = sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert fork_ids(second.cache) == [101, 102, 103]
+    state = second.cache.sync_state(HELLO, 'forks')
+    assert state is not None
+    assert state.watermark == SERVER_DATE
+
+
+def test_a_fork_list_response_without_a_date_is_malformed(
+    make_fetcher: tests.conftest.MakeFetcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wambatic.fetch.client, 'header_date', lambda response: None)
+    with pytest.raises(wambatic.fetch.errors.GraphQLError, match='Date'):
+        sync_once(make_fetcher, popularity_upstream(forks=3), resources=FORKS)
+
+
+def test_an_interrupted_fork_read_keeps_the_old_rows_and_watermark(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=101)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    state = first.cache.sync_state(HELLO, 'forks')
+    del upstream.repos[HELLO].forks[0]
+    upstream.failing_fork_pages = {2}
+    with pytest.raises(aiohttp.ClientResponseError):
+        sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
+    assert len(fork_ids(first.cache)) == 101
+    assert first.cache.sync_state(HELLO, 'forks') == state
+
+
+def test_fetcher_forks_reads_the_cache_oldest_first(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+
+    async def scenario() -> list[int]:
+        async with tests.fixtures.fetch.server.ReplayServer({}) as server:
+            fetcher = make_fetcher(server, cache=first.cache)
+            return [fork.id async for fork in fetcher.forks(listed(upstream))]
+
+    assert asyncio.run(scenario()) == [103, 102, 101]
+
+
+def test_forks_are_unchanged_only_for_an_equal_count_inside_the_interval(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(forks=3)
+    first = sync_once(make_fetcher, upstream, resources=FORKS)
+    repo = listed(upstream)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'forks') is True
+    more = dataclasses.replace(repo, fork_count=repo.fork_count + 1)
+    assert unchanged_for(make_fetcher, first.cache, more, 'forks') is False
+    age_full_sync(first.cache, 'forks', 31)
+    assert unchanged_for(make_fetcher, first.cache, repo, 'forks') is False
+
+
+def test_stars_and_forks_of_an_unchanged_repo_cost_only_the_listing(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = popularity_upstream(stars=3, forks=3)
+    both = frozenset({'star_events', 'forks'})
+    first = sync_once(make_fetcher, upstream, resources=both)
+    assert first.kinds == ['listing', 'forks', 'stargazers']
+    second = sync_once(make_fetcher, upstream, resources=both, cache=first.cache)
+    assert second.kinds == ['listing']
+    assert second.report.repos_skipped == 1
+    assert second.report.rows_written == {'forks': 0, 'star_events': 0}
+
+
+def test_every_resource_is_built() -> None:
+    assert wambatic.fetch.base.BUILT_RESOURCES == wambatic.fetch.base.RESOURCES

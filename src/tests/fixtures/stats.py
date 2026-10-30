@@ -32,7 +32,16 @@ UNTIL = datetime.date(2027, 1, 31)
 LABELS = ('2026-10', '2026-11', '2026-12', '2027-01')
 
 
-def repo(name: str, hours: int) -> wambatic.fetch.base.Repo:
+def repo(
+    name: str,
+    hours: int,
+    *,
+    stargazer_count: int = 0,
+    fork_count: int = 0,
+    watcher_count: int = 0,
+    languages: tuple[tuple[str, int], ...] = (),
+    languages_size: int = 0,
+) -> wambatic.fetch.base.Repo:
     pushed = datetime.datetime(2027, 1, 16, hours, 0, tzinfo=UTC)
     return wambatic.fetch.base.Repo(
         name_with_owner=name,
@@ -42,10 +51,38 @@ def repo(name: str, hours: int) -> wambatic.fetch.base.Repo:
         is_fork=False,
         pushed_at=pushed,
         updated_at=pushed,
+        stargazer_count=stargazer_count,
+        fork_count=fork_count,
+        watcher_count=watcher_count,
+        languages=languages,
+        languages_size=languages_size,
     )
 
 
-REPOS = [repo(ALPHA, 9), repo(BETA, 10), repo(GAMMA, 11)]
+# The listed counts and languages. alpha lists 6 stars but 5 are cached (one star since the last
+# sync), beta lists 2 forks but 1 is cached (a fork of a fork), alpha's listed languages leave
+# 9500 - (8000 + 1000) = 500 bytes as Other, beta shares Python with alpha, gamma has no language.
+REPOS = [
+    repo(
+        ALPHA,
+        9,
+        stargazer_count=6,
+        fork_count=3,
+        watcher_count=4,
+        languages=(('Python', 8000), ('Shell', 1000)),
+        languages_size=9500,
+    ),
+    repo(
+        BETA,
+        10,
+        stargazer_count=4,
+        fork_count=2,
+        watcher_count=2,
+        languages=(('Python', 2000), ('Go', 3000)),
+        languages_size=5000,
+    ),
+    repo(GAMMA, 11, stargazer_count=2, fork_count=1),
+]
 
 
 def commit(
@@ -707,4 +744,131 @@ UNAVAILABLE_NO_HOTFIX: list[dict[str, str]] = [
         'reason': 'no pull request in the cache has a label in stats.hotfix_labels',
     }
     for metric in ('change_failure_rate', 'time_to_restore_p50', 'time_to_restore_p90')
+]
+
+
+def star(repo_name: str, user_id: str, when: str) -> wambatic.fetch.base.StarEvent:
+    return wambatic.fetch.base.StarEvent(
+        repo=repo_name,
+        user_id=user_id,
+        starred_at=datetime.datetime.fromisoformat(when).replace(tzinfo=UTC),
+    )
+
+
+def fork(repo_name: str, fork_id: int, when: str) -> wambatic.fetch.base.Fork:
+    return wambatic.fetch.base.Fork(
+        repo=repo_name,
+        id=fork_id,
+        created_at=datetime.datetime.fromisoformat(when).replace(tzinfo=UTC),
+    )
+
+
+STAR_EVENTS = [
+    # alpha
+    star(ALPHA, 'U_a1', '2026-09-15T10:00'),  # before SINCE
+    star(ALPHA, 'U_a2', '2026-10-03T10:00'),
+    star(ALPHA, 'U_a3', '2026-10-20T09:00'),
+    star(ALPHA, 'U_a4', '2026-12-31T23:30'),  # December in UTC, January in Berlin
+    star(ALPHA, 'U_a5', '2027-01-10T12:00'),
+    # beta
+    star(BETA, 'U_b1', '2026-08-01T09:00'),  # before SINCE
+    star(BETA, 'U_b2', '2026-10-05T08:00'),
+    star(BETA, 'U_b3', '2027-01-12T12:00'),
+    star(BETA, 'U_b4', '2027-02-10T12:00'),  # after UNTIL
+    # gamma, owned by the user octocat; both stars are other people's
+    star(GAMMA, 'U_g1', '2026-10-10T10:00'),
+    star(GAMMA, 'U_g2', '2026-11-02T10:00'),
+]
+
+FORKS = [
+    fork(ALPHA, 1001, '2026-07-01T10:00'),  # before SINCE
+    fork(ALPHA, 1002, '2026-10-12T10:00'),
+    fork(ALPHA, 1003, '2026-11-15T10:00'),
+    fork(BETA, 2001, '2027-01-20T10:00'),
+    fork(GAMMA, 3001, '2026-11-30T10:00'),
+]
+
+# The org (alpha and beta) by month in UTC. Added counts are the events in the month, totals those
+# on or before its last day, so they start from what was made before SINCE. November has no star
+# and December no fork. Stars after UNTIL (b4) are in no bucket.
+ORG_POPULARITY_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    '2026-10': {
+        'stars_added': 3,  # a2 a3 b2
+        'stars_total': 5,  # a1 and b1 before + 3
+        'forks_added': 1,  # 1002
+        'forks_total': 2,  # 1001 before + 1
+    },
+    '2026-11': {
+        'stars_added': 0,
+        'stars_total': 5,  # 5 + 0
+        'forks_added': 1,  # 1003
+        'forks_total': 3,  # 2 + 1
+    },
+    '2026-12': {
+        'stars_added': 1,  # a4 at 23:30 on 12-31
+        'stars_total': 6,  # 5 + 1
+        'forks_added': 0,
+        'forks_total': 3,  # 3 + 0
+    },
+    '2027-01': {
+        'stars_added': 2,  # a5 b3
+        'stars_total': 8,  # 6 + 2; b4 is after UNTIL
+        'forks_added': 1,  # 2001
+        'forks_total': 4,  # 3 + 1
+    },
+}
+
+# In Europe/Berlin (UTC+1 in winter) a4 is on 2027-01-01 at 00:30, so December has no star.
+ORG_POPULARITY_BY_MONTH_BERLIN: dict[str, dict[str, float]] = {
+    '2026-10': ORG_POPULARITY_BY_MONTH_UTC['2026-10'],
+    '2026-11': ORG_POPULARITY_BY_MONTH_UTC['2026-11'],
+    '2026-12': {
+        'stars_added': 0,  # a4 has moved to January
+        'stars_total': 5,
+        'forks_added': 0,
+        'forks_total': 3,
+    },
+    '2027-01': {
+        'stars_added': 3,  # a4 a5 b3
+        'stars_total': 8,  # 5 + 3
+        'forks_added': 1,
+        'forks_total': 4,
+    },
+}
+
+# The whole range as one bucket: the events in the range, and the totals at UNTIL.
+ORG_POPULARITY_TOTAL: dict[str, float] = {
+    'stars_added': 6,  # a2 a3 a4 a5 b2 b3
+    'stars_total': 8,  # a1 b1 before + 6
+    'forks_added': 3,  # 1002 1003 2001
+    'forks_total': 4,  # 1001 before + 3
+}
+
+# The user octocat's gamma, which counts every star and fork whoever gave it: g1 in October, g2
+# and fork 3001 in November, nothing before SINCE.
+USER_POPULARITY_BY_MONTH_UTC: dict[str, dict[str, float]] = {
+    '2026-10': {'stars_added': 1, 'stars_total': 1, 'forks_added': 0, 'forks_total': 0},
+    '2026-11': {'stars_added': 1, 'stars_total': 2, 'forks_added': 1, 'forks_total': 1},
+    '2026-12': {'stars_added': 0, 'stars_total': 2, 'forks_added': 0, 'forks_total': 1},
+    '2027-01': {'stars_added': 0, 'stars_total': 2, 'forks_added': 0, 'forks_total': 1},
+}
+
+# GitHub's own counts at the last listing, by stars descending (6 > 4). The cached stars of alpha
+# (5) and forks of beta (1) are fewer than these.
+ORG_POPULARITY_TABLE: list[dict[str, typing.Any]] = [
+    {'repo': ALPHA, 'stars': 6, 'forks': 3, 'watchers': 4},
+    {'repo': BETA, 'stars': 4, 'forks': 2, 'watchers': 2},
+]
+USER_POPULARITY_TABLE: list[dict[str, typing.Any]] = [
+    {'repo': GAMMA, 'stars': 2, 'forks': 1, 'watchers': 0},
+]
+
+# Bytes by language over alpha and beta: Python 8000 + 2000, Go 3000, Shell 1000, and Other 500
+# (alpha's 9500 less 8000 + 1000; beta's 5000 less 2000 + 3000 leaves none). The sum is
+# 10000 + 3000 + 1000 + 500 = 14500; Other is last whatever its size.
+ORG_LANGUAGES_TABLE: list[dict[str, typing.Any]] = [
+    {'language': 'Python', 'bytes': 10000, 'share': 10000 / 14500},
+    {'language': 'Go', 'bytes': 3000, 'share': 3000 / 14500},
+    {'language': 'Shell', 'bytes': 1000, 'share': 1000 / 14500},
+    {'language': 'Other', 'bytes': 500, 'share': 500 / 14500},
 ]

@@ -18,6 +18,7 @@ import wambatic.reports.figures
 import wambatic.reports.rows
 import wambatic.reports.terminal
 import wambatic.stats.base
+import wambatic.stats.popularity
 
 Granularity = wambatic.stats.base.Granularity
 Theme = typing.Literal['auto', 'dark', 'light']
@@ -25,6 +26,8 @@ PERIODS = (Granularity.YEAR, Granularity.MONTH, Granularity.WEEK, Granularity.DA
 SAFE_FILENAME = re.compile(r'[^A-Za-z0-9._-]')
 FILE_MODE = 0o644
 PROXIES_LINE = 'The DORA figures are proxies; how each is measured is described in the README.'
+OTHER_LANGUAGE = wambatic.stats.popularity.OTHER
+POPULARITY_LINE = 'Counts are as of the last sync; totals count the stars and forks that exist now.'
 JSON_ESCAPES = {'<': '\\u003c', '>': '\\u003e', '&': '\\u0026'}
 
 
@@ -251,6 +254,47 @@ def dora_note(table: wambatic.reports.rows.PeriodTable) -> str:
     return wambatic.reports.terminal.delivery_caption(table, 'proxies: see the README; hours')
 
 
+def popularity_now_html(result: wambatic.stats.base.StatsResult) -> str:
+    now = wambatic.reports.rows.popularity_now(result)
+    if now is None:
+        return ''
+    format_number = wambatic.reports.terminal.format_number
+
+    def texts(row: wambatic.reports.rows.PopularityRow) -> list[str]:
+        return [
+            row.repo,
+            format_number(row.stars),
+            format_number(row.forks),
+            format_number(row.watchers),
+        ]
+
+    return table_html(
+        'Popularity now',
+        wambatic.reports.rows.POPULARITY_NOW_HEADERS,
+        [texts(row) for row in now.rows],
+        footer=None if now.total is None else texts(now.total),
+        note='as of the last sync; forks: whole network',
+    )
+
+
+def languages_html(result: wambatic.stats.base.StatsResult) -> str:
+    languages = wambatic.reports.rows.languages_rows(result)
+    if languages is None:
+        return ''
+    return table_html(
+        'Languages',
+        wambatic.reports.rows.LANGUAGE_HEADERS,
+        [
+            [
+                row.language,
+                wambatic.reports.terminal.format_number(row.bytes),
+                f'{row.share * 100:,.1f}%',
+            ]
+            for row in languages.rows
+        ],
+    )
+
+
 def breakdown_html(result: wambatic.stats.base.StatsResult) -> str:
     pieces = []
     for kind, title in wambatic.reports.rows.BREAKDOWN_TITLES:
@@ -381,7 +425,31 @@ def tiles_html(total: wambatic.stats.base.StatsResult) -> str:
                     'Median lead time (hours)', format_cell('lead_time_p50', value('lead_time_p50'))
                 )
             )
+    pieces += popularity_tiles(total)
     return f'<dl class="tiles">{"".join(pieces)}</dl>' if pieces else ''
+
+
+def popularity_tiles(total: wambatic.stats.base.StatsResult) -> list[str]:
+    now = wambatic.reports.rows.popularity_now(total)
+    if now is None:
+        return []
+    format_number = wambatic.reports.terminal.format_number
+    sums = now.total or (
+        now.rows[0] if now.rows else wambatic.reports.rows.PopularityRow('', 0, 0, 0)
+    )
+    languages = wambatic.reports.rows.languages_rows(total)
+    named = (
+        [row.language for row in languages.rows if row.language != OTHER_LANGUAGE]
+        if languages
+        else []
+    )
+    top = named[0] if named else '-'
+    return [
+        tile('Stars', format_number(sums.stars)),
+        tile('Forks', format_number(sums.forks)),
+        tile('Watchers', format_number(sums.watchers)),
+        tile('Top language', top),
+    ]
 
 
 def header_html(report: HtmlReport) -> str:
@@ -431,7 +499,7 @@ def sections_html(report: HtmlReport) -> str:
             '<div class="charts">',
             *(figure_html(f) for f in charts),
             *(figure_html(f, True) for f in wide),
-            *(figure_html(f) for f in range_figures),
+            *(figure_html(f) for f in range_figures if f.group == 'activity'),
             '</div>',
             period_tables_html(report, wambatic.reports.rows.activity_table, partial_note),
             breakdown_html(total),
@@ -464,6 +532,24 @@ def sections_html(report: HtmlReport) -> str:
             '</div>',
             period_tables_html(report, wambatic.reports.rows.delivery_table, delivery_note),
             period_tables_html(report, wambatic.reports.rows.dora_table, dora_note),
+            '</section>',
+        ]
+        sections.append(''.join(pieces))
+    if wambatic.reports.rows.popularity_table(total) is not None:
+        pieces = [
+            '<section id="popularity"><h2>Popularity</h2>',
+            f'<p class="popularity-note">{escape(POPULARITY_LINE)}</p>',
+            '<div class="charts">',
+            *(figure_html(f) for f in figures if f.group == 'popularity'),
+            *(figure_html(f) for f in range_figures if f.group == 'popularity'),
+            '</div>',
+            period_tables_html(
+                report,
+                wambatic.reports.rows.popularity_table,
+                wambatic.reports.terminal.popularity_caption,
+            ),
+            popularity_now_html(total),
+            languages_html(total),
             '</section>',
         ]
         sections.append(''.join(pieces))
