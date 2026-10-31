@@ -337,19 +337,6 @@ def log_level(root: Wambatic) -> str:
     return 'INFO'
 
 
-def redact_exception(error: BaseException | None) -> None:
-    """Remove the environment's token from the messages of `error` and what it was raised from,
-    so the traceback that is logged cannot carry it."""
-    seen: set[int] = set()
-    while error is not None and id(error) not in seen:
-        seen.add(id(error))
-        error.args = tuple(
-            wambatic.reports.service.redact_environment_token(arg) if isinstance(arg, str) else arg
-            for arg in error.args
-        )
-        error = error.__cause__ or error.__context__
-
-
 def execute(root: Wambatic) -> None:
     check_verbosity(root)
     command = root.command
@@ -400,10 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 1
     except Exception as e:
-        redact_exception(e)
-        loguru.logger.exception(
-            f'Unexpected error: {wambatic.reports.service.redact_environment_token(str(e))}'
-        )
+        loguru.logger.exception(f'Unexpected error: {wambatic.reports.service.redact_error(e)}')
         return 1
     return 0
 

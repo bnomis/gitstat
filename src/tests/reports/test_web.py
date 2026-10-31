@@ -389,6 +389,34 @@ def test_an_unexpected_error_answers_500_without_a_traceback_or_the_message(
     assert 'Traceback' not in text
 
 
+def test_an_unexpected_error_logs_its_message_and_traceback_without_the_token(
+    monkeypatch: pytest.MonkeyPatch, stats_cache: wambatic.fetch.cache.Cache
+) -> None:
+    token = 'ghp_fake_token_for_tests'
+    monkeypatch.setenv('GITHUB_TOKEN', token)
+
+    def boom(result: object) -> dict[str, object]:
+        raise RuntimeError(f'request failed with {token}')
+
+    monkeypatch.setattr(wambatic.reports.base, 'result_to_dict', boom)
+    messages: list[str] = []
+    sink = loguru.logger.add(messages.append, level='ERROR', diagnose=False)
+
+    async def scenario() -> int:
+        async with serving(web_settings(), stats_cache) as client:
+            return (await client.get(f'/api/stats?{FRESH_PARAMS}')).status_code
+
+    try:
+        status = asyncio.run(scenario())
+    finally:
+        loguru.logger.remove(sink)
+    log = ''.join(messages)
+    assert status == 500
+    assert 'Unexpected error: request failed with ***' in log
+    assert 'Traceback' in log
+    assert token not in log
+
+
 def test_the_progress_of_an_unknown_job_is_404(stats_cache: wambatic.fetch.cache.Cache) -> None:
     async def scenario() -> list[tuple[int, object]]:
         async with serving(web_settings(), stats_cache) as client:

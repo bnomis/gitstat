@@ -73,7 +73,7 @@ def error_response(error: BaseException) -> tuple[int, str]:
     only a pointer to the log, where its traceback is."""
     status = error_status(error)
     if status == 500:
-        loguru.logger.exception(f'Unexpected error: {error}')
+        loguru.logger.exception(f'Unexpected error: {wambatic.reports.service.redact_error(error)}')
         return status, INTERNAL_ERROR
     return status, wambatic.reports.service.redact_environment_token(str(error))
 

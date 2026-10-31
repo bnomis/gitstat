@@ -84,7 +84,7 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 ## Task 2: Redact the web server's error log
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Source Reference:** F1 (Sec5, S4)
@@ -93,20 +93,20 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 **Subtasks:**
 
-- [ ] Move the CLI's redaction (`redact_exception` and `redact_environment_token`, `cli.py:403-405`) into one helper in `reports/service.py` that returns the redacted message and strips the token from the exception's args
-- [ ] Use it in `reports/web.py` `error_response` before `loguru.logger.exception`, and in `cli.main`
-- [ ] Add a regression test in `src/tests/reports/test_web.py` that makes a route raise an exception whose message holds a fake token set as `GITHUB_TOKEN`, and asserts the captured log has the message without the token
+- [x] Move the CLI's redaction (`redact_exception` and `redact_environment_token`, `cli.py:403-405`) into one helper in `reports/service.py` that returns the redacted message and strips the token from the exception's args
+- [x] Use it in `reports/web.py` `error_response` before `loguru.logger.exception`, and in `cli.main`
+- [x] Add a regression test in `src/tests/reports/test_web.py` that makes a route raise an exception whose message holds a fake token set as `GITHUB_TOKEN`, and asserts the captured log has the message without the token
 
 **Acceptance Criteria:**
 
-- [ ] The new test fails on the current `error_response` and passes after the change (checked both ways)
-- [ ] The CLI's existing redaction tests still pass unchanged
+- [x] The new test fails on the current `error_response` and passes after the change (checked both ways)
+- [x] The CLI's existing redaction tests still pass unchanged
 
 **Definition of Done:**
 
-- [ ] `source bin/activate.sh` succeeds
-- [ ] The task's commit passes its pre-commit hooks (never `--no-verify`)
-- [ ] `pytest src/tests/reports/test_web.py src/tests/reports/test_service.py src/tests/test_cli.py` passes
+- [x] `source bin/activate.sh` succeeds
+- [x] The task's commit passes its pre-commit hooks (never `--no-verify`)
+- [x] `pytest src/tests/reports/test_web.py src/tests/reports/test_service.py src/tests/test_cli.py` passes
 
 **Notes:**
 

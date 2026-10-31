@@ -250,3 +250,17 @@ async def build_results(
 
 def redact_environment_token(text: str) -> str:
     return wambatic.fetch.auth.redact(text, os.environ.get('GITHUB_TOKEN', '').strip())
+
+
+def redact_error(error: BaseException) -> str:
+    """The message of `error` without the environment's token, which is also removed from the
+    args of `error` and of what it was raised from, so a logged traceback cannot carry it."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        current.args = tuple(
+            redact_environment_token(arg) if isinstance(arg, str) else arg for arg in current.args
+        )
+        current = current.__cause__ or current.__context__
+    return redact_environment_token(str(error))
