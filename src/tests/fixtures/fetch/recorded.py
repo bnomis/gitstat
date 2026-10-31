@@ -1,4 +1,4 @@
-"""Successful GitHub responses recorded from the live API on 2026-10-30.
+"""Successful GitHub responses recorded from the live API on 2026-10-31.
 
 Written by bin/record-fixtures.sh; do not edit by hand, re-run it. The subjects are
 octocat (the listing), octocat/Hello-World (repository, history,
@@ -11,7 +11,7 @@ are trimmed to the fields the fetcher reads.
 
 # ruff: noqa: E501
 
-RECORDED_AT = '2026-10-30T20:52:23Z'
+RECORDED_AT = '2026-10-31T08:48:12Z'
 WAMBATIC_VERSION = '0.1.0'
 # sha256 of each wambatic.fetch.queries text the recording was made with
 QUERY_SHA256 = {
@@ -39,17 +39,17 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': False,
                         'pushedAt': '2024-08-21T15:25:42Z',
-                        'updatedAt': '2026-10-30T09:15:25Z',
+                        'updatedAt': '2026-10-31T04:01:27Z',
                         'defaultBranchRef': {
                             'name': 'main',
                             'target': {'oid': 'd0dd1f61b33d64e29d8bc1372a94ef6a2fee76a9'},
                         },
-                        'pullRequests': {'nodes': [{'updatedAt': '2026-10-30T19:52:03Z'}]},
+                        'pullRequests': {'nodes': [{'updatedAt': '2026-10-31T08:30:40Z'}]},
                         'issues': {'nodes': [{'updatedAt': '2026-10-30T03:20:20Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 14147,
-                        'forkCount': 160721,
-                        'watchers': {'totalCount': 909},
+                        'stargazerCount': 14148,
+                        'forkCount': 160746,
+                        'watchers': {'totalCount': 910},
                         'languages': {
                             'totalSize': 611,
                             'edges': [
@@ -63,16 +63,16 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': False,
                         'pushedAt': '2024-08-20T23:54:42Z',
-                        'updatedAt': '2026-10-30T20:27:18Z',
+                        'updatedAt': '2026-10-31T07:48:54Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'},
                         },
-                        'pullRequests': {'nodes': [{'updatedAt': '2026-10-30T11:33:46Z'}]},
+                        'pullRequests': {'nodes': [{'updatedAt': '2026-10-31T08:27:15Z'}]},
                         'issues': {'nodes': [{'updatedAt': '2026-10-30T20:11:28Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 3875,
-                        'forkCount': 7293,
+                        'stargazerCount': 3879,
+                        'forkCount': 7311,
                         'watchers': {'totalCount': 1735},
                         'languages': {'totalSize': 0, 'edges': []},
                     },
@@ -81,7 +81,7 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': True,
                         'pushedAt': '2024-08-14T07:35:16Z',
-                        'updatedAt': '2026-10-28T08:23:47Z',
+                        'updatedAt': '2026-10-30T21:37:09Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': '64a44011ca0ee0693b1c1767c96d1fba25d5be7d'},
@@ -89,7 +89,7 @@ OWNER_REPOSITORIES_OK = {
                         'pullRequests': {'nodes': [{'updatedAt': '2026-10-26T05:58:44Z'}]},
                         'issues': {'nodes': []},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 773,
+                        'stargazerCount': 774,
                         'forkCount': 288,
                         'watchers': {'totalCount': 68},
                         'languages': {
@@ -105,7 +105,7 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': False,
                         'pushedAt': '2024-08-11T11:57:01Z',
-                        'updatedAt': '2026-10-27T15:24:46Z',
+                        'updatedAt': '2026-10-30T21:37:08Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': '3a9796cf19902af0f7e677391b340f1ae4128433'},
@@ -113,8 +113,8 @@ OWNER_REPOSITORIES_OK = {
                         'pullRequests': {'nodes': [{'updatedAt': '2026-10-30T12:48:46Z'}]},
                         'issues': {'nodes': [{'updatedAt': '2026-10-27T06:01:24Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 1191,
-                        'forkCount': 596,
+                        'stargazerCount': 1192,
+                        'forkCount': 597,
                         'watchers': {'totalCount': 118},
                         'languages': {
                             'totalSize': 18725,
@@ -130,7 +130,7 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': False,
                         'pushedAt': '2024-07-12T15:04:33Z',
-                        'updatedAt': '2026-10-29T19:59:11Z',
+                        'updatedAt': '2026-10-30T21:34:54Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': 'b33a9c7c02ad93f621fa38f0e9fc9e867e12fa0e'},
@@ -138,7 +138,7 @@ OWNER_REPOSITORIES_OK = {
                         'pullRequests': {'nodes': [{'updatedAt': '2026-10-25T08:51:25Z'}]},
                         'issues': {'nodes': [{'updatedAt': '2026-10-09T12:37:49Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 620,
+                        'stargazerCount': 621,
                         'forkCount': 201,
                         'watchers': {'totalCount': 42},
                         'languages': {'totalSize': 0, 'edges': []},
@@ -148,7 +148,7 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': True,
                         'pushedAt': '2024-05-26T07:02:05Z',
-                        'updatedAt': '2026-10-26T09:27:59Z',
+                        'updatedAt': '2026-10-30T21:37:10Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': 'd09e445076bbcd163fc9abfbe6d2fce09a611281'},
@@ -156,7 +156,7 @@ OWNER_REPOSITORIES_OK = {
                         'pullRequests': {'nodes': [{'updatedAt': '2026-09-28T17:33:11Z'}]},
                         'issues': {'nodes': []},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 485,
+                        'stargazerCount': 486,
                         'forkCount': 28,
                         'watchers': {'totalCount': 18},
                         'languages': {'totalSize': 0, 'edges': []},
@@ -166,7 +166,7 @@ OWNER_REPOSITORIES_OK = {
                         'isArchived': False,
                         'isFork': False,
                         'pushedAt': '2024-05-06T10:29:56Z',
-                        'updatedAt': '2026-10-22T21:36:19Z',
+                        'updatedAt': '2026-10-30T21:50:31Z',
                         'defaultBranchRef': {
                             'name': 'master',
                             'target': {'oid': '7e068727fdb347b685b658d2981f8c85f7bf0585'},
@@ -174,9 +174,9 @@ OWNER_REPOSITORIES_OK = {
                         'pullRequests': {'nodes': [{'updatedAt': '2026-10-11T16:38:14Z'}]},
                         'issues': {'nodes': [{'updatedAt': '2026-09-26T06:13:37Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
-                        'stargazerCount': 826,
+                        'stargazerCount': 827,
                         'forkCount': 308,
-                        'watchers': {'totalCount': 82},
+                        'watchers': {'totalCount': 83},
                         'languages': {'totalSize': 0, 'edges': []},
                     },
                     {
@@ -203,7 +203,7 @@ OWNER_REPOSITORIES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 4, 'remaining': 4930, 'resetAt': '2026-10-30T21:44:19Z'},
+        'rateLimit': {'cost': 4, 'remaining': 4760, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -214,20 +214,20 @@ REPOSITORY_OK = {
             'isArchived': False,
             'isFork': False,
             'pushedAt': '2024-08-20T23:54:42Z',
-            'updatedAt': '2026-10-30T20:27:18Z',
+            'updatedAt': '2026-10-31T07:48:54Z',
             'defaultBranchRef': {
                 'name': 'master',
                 'target': {'oid': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'},
             },
-            'pullRequests': {'nodes': [{'updatedAt': '2026-10-30T11:33:46Z'}]},
+            'pullRequests': {'nodes': [{'updatedAt': '2026-10-31T08:27:15Z'}]},
             'issues': {'nodes': [{'updatedAt': '2026-10-30T20:11:28Z'}]},
             'releases': {'totalCount': 0, 'nodes': []},
-            'stargazerCount': 3875,
-            'forkCount': 7293,
+            'stargazerCount': 3879,
+            'forkCount': 7311,
             'watchers': {'totalCount': 1735},
             'languages': {'totalSize': 0, 'edges': []},
         },
-        'rateLimit': {'cost': 1, 'remaining': 4929, 'resetAt': '2026-10-30T21:44:19Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4930, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -271,7 +271,7 @@ COMMIT_HISTORY_OK = {
                 }
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4934, 'resetAt': '2026-10-30T21:44:19Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4931, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -307,7 +307,7 @@ COMMIT_NODES_OK = {
             {'oid': '762941318ee16e59dabbacb1b4049eec22f0d303', 'additions': 1, 'deletions': 1},
             {'oid': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d', 'additions': 1, 'deletions': 1},
         ],
-        'rateLimit': {'cost': 1, 'remaining': 4898, 'resetAt': '2026-10-30T21:03:37Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4759, 'resetAt': '2026-10-31T09:13:32Z'},
     },
     'extensions': {
         'warnings': [
@@ -341,7 +341,7 @@ COMMIT_NODES_OK = {
 
 REPO = {'id': 1296269, 'full_name': 'octocat/Hello-World', 'default_branch': 'master'}
 
-REPO_ETAG = '"8ca086620b793890f0e9e9a2e06c5c80e82c165b556e4a0054d3bd33eb0cbd35"'
+REPO_ETAG = '"81d27e64fd51178f939244d9a69538c9abfe45761826af80bf5e7f8808c8c5f0"'
 
 USER_OK = {'login': 'octocat', 'type': 'User'}
 
@@ -756,7 +756,7 @@ PULL_REQUESTS_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 3, 'remaining': 4895, 'resetAt': '2026-10-30T21:03:37Z'},
+        'rateLimit': {'cost': 3, 'remaining': 4756, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1052,7 +1052,7 @@ ISSUES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4894, 'resetAt': '2026-10-30T21:03:37Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4755, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1145,12 +1145,12 @@ RELEASES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4928, 'resetAt': '2026-10-30T21:44:19Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4929, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
 WORKFLOW_RUNS_OK = {
-    'total_count': 215,
+    'total_count': 214,
     'workflow_runs': [
         {
             'id': 39453803857,
@@ -1296,7 +1296,7 @@ STARGAZERS_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4893, 'resetAt': '2026-10-30T21:03:37Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4754, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1320,11 +1320,15 @@ BOT_REVIEWS_OK = {
                                 '__typename': 'Bot',
                                 'login': 'copilot-pull-request-reviewer',
                             },
-                        }
+                        },
+                        {
+                            'submittedAt': '2026-10-31T04:36:53Z',
+                            'author': {'__typename': 'User', 'login': 'jruales'},
+                        },
                     ]
                 }
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4892, 'resetAt': '2026-10-30T21:03:37Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4753, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
