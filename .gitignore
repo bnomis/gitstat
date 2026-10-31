@@ -1,9 +1,10 @@
 __pycache__/
-.venv/
 .env
 .envrc
-*.pyc
+.hypothesis/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-.hypothesis/
+.venv/
+*.pyc
+ralpher-logs/
