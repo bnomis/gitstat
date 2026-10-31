@@ -539,6 +539,7 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 - [ ] F11: add a Layout section (`src/wambatic/{fetch,stats,reports}`, `src/tests`, `bin`, `agents/specs`, `agents/tasks`, `agents/audit-reviews`) and a Tools section (runtime: aiohttp, cappa, fastapi, loguru, plotly, rich, uvicorn; dev: hypothesis, httpx, mypy, playwright, pre-commit, pytest, ruff; uv) to `AGENTS.md`; say in AGENTS.md that `git submodule update --init` must run before the hooks work; `pyproject.toml` `readme = 'README.md'`; `README.md:325` points contributors at AGENTS.md for the layout and at `.agents` for the shared rules
 - [ ] F18: no change (dev tools are declared so `uv sync` installs them)
 - [ ] F19: add a Type column to `system/spec.md:100-103`; in `implementation-order.md` link step 1's task list, link the specs of steps 6, 8 and 10, and put step 9's detail before step 10's
+- [ ] Add every public function the earlier tasks added or renamed to the API sections of the specs (at least `service.redact_error`, from Task 2, and the Task 8 renames)
 - [ ] Bump the minor version of each spec changed, citing review-1
 
 **Acceptance Criteria:**
