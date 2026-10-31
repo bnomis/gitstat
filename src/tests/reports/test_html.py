@@ -15,6 +15,7 @@ import pytest
 import tests.conftest
 import tests.fixtures.stats as fixture
 import wambatic.fetch.base
+import wambatic.reports.errors
 import wambatic.reports.figures
 import wambatic.reports.html
 import wambatic.stats.base
@@ -495,13 +496,13 @@ def test_a_failed_move_leaves_the_file_as_it_was_and_no_temporary_file(
 
     with monkeypatch.context() as patch:
         patch.setattr(os, 'replace', refuse)
-        with pytest.raises(OSError, match='no space left'):
+        with pytest.raises(wambatic.reports.errors.OutputError, match='no space left'):
             wambatic.reports.html.render_html(org_report, out, 'auto')
     assert list(directory.iterdir()) == []
     out.write_text('earlier')
     with monkeypatch.context() as patch:
         patch.setattr(os, 'replace', refuse)
-        with pytest.raises(OSError, match='no space left'):
+        with pytest.raises(wambatic.reports.errors.OutputError, match='no space left'):
             wambatic.reports.html.render_html(org_report, out, 'auto')
     assert out.read_text() == 'earlier'
     assert [path.name for path in directory.iterdir()] == ['report.html']
@@ -669,3 +670,41 @@ def test_the_popularity_tables_hold_the_rows_of_rows_py(
     assert section.count('<tr><td>') >= 4
     assert '<td>Other</td><td class=num>500</td><td class=num>3.4%</td>' in section
     assert 'forks: whole network' in section
+
+
+def test_a_directory_that_cannot_be_made_is_an_output_error(
+    org_report: wambatic.reports.html.HtmlReport, tmp_path: pathlib.Path
+) -> None:
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('a file, not a directory')
+    out = blocker / 'report.html'
+    with pytest.raises(wambatic.reports.errors.OutputError, match=f'cannot write {out}') as info:
+        wambatic.reports.html.render_html(org_report, out, 'auto')
+    assert isinstance(info.value.__cause__, OSError)
+
+
+@pytest.mark.parametrize(
+    'error',
+    [OSError('gone'), UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid start byte')],
+    ids=['os', 'decode'],
+)
+def test_a_template_that_cannot_be_read_is_an_output_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def read_text(self: object, encoding: str | None = None) -> str:
+        raise error
+
+    monkeypatch.setattr(pathlib.Path, 'read_text', read_text)
+    with pytest.raises(wambatic.reports.errors.OutputError, match='report template report.css'):
+        wambatic.reports.html.read_template('report.css')
+
+
+def test_a_plotlyjs_that_cannot_be_read_is_an_output_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get_plotlyjs() -> str:
+        raise OSError('gone')
+
+    monkeypatch.setattr(plotly.offline, 'get_plotlyjs', get_plotlyjs)
+    with pytest.raises(wambatic.reports.errors.OutputError, match='plotly.js'):
+        wambatic.reports.html.read_plotlyjs()

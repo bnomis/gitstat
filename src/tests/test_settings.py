@@ -113,6 +113,18 @@ def test_malformed_json_raises(tmp_path: pathlib.Path) -> None:
         wambatic.settings.load_settings(path, {})
 
 
+def test_a_config_file_that_is_not_utf8_raises(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / 'latin1.json'
+    path.write_bytes('{"report": {"out_dir": "caf\u00e9"}}'.encode('latin-1'))
+    with pytest.raises(wambatic.settings.SettingsError, match='is not UTF-8 text'):
+        wambatic.settings.load_settings(path, {})
+
+
+def test_a_config_file_that_cannot_be_read_raises(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(wambatic.settings.SettingsError, match='cannot be read'):
+        wambatic.settings.load_settings(tmp_path, {})
+
+
 @pytest.mark.parametrize('text', ['[]', '{"fetch": []}'])
 def test_wrong_shape_raises(tmp_path: pathlib.Path, text: str) -> None:
     path = tmp_path / 'bad.json'
@@ -264,3 +276,18 @@ def test_no_field_names_a_token() -> None:
         return out
 
     assert not [name for name in names(wambatic.settings.Settings) if 'token' in name]
+
+
+def test_a_duration_too_long_for_a_timedelta_raises() -> None:
+    with pytest.raises(wambatic.settings.SettingsError, match='99999999999d is too long'):
+        wambatic.settings.parse_duration('99999999999d')
+
+
+@hypothesis.settings(max_examples=20, deadline=10000)
+@hypothesis.given(
+    n=hypothesis.strategies.integers(min_value=10**18, max_value=10**40),
+    unit=hypothesis.strategies.sampled_from('smhdw'),
+)
+def test_parse_duration_of_a_huge_count_raises_settings_error(n: int, unit: str) -> None:
+    with pytest.raises(wambatic.settings.SettingsError, match='too long'):
+        wambatic.settings.parse_duration(f'{n}{unit}')

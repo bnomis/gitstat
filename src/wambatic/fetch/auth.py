@@ -17,7 +17,7 @@ def resolve_token() -> str:
             timeout=10,
             check=False,
         )
-    except FileNotFoundError, subprocess.TimeoutExpired:
+    except OSError, UnicodeDecodeError, subprocess.TimeoutExpired:
         raise wambatic.fetch.errors.AuthError(wambatic.fetch.errors.NO_TOKEN_MESSAGE) from None
     token = result.stdout.strip()
     if result.returncode == 0 and token:

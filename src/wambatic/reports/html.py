@@ -14,6 +14,7 @@ import typing
 
 import plotly.offline
 
+import wambatic.reports.errors
 import wambatic.reports.figures
 import wambatic.reports.rows
 import wambatic.reports.terminal
@@ -121,8 +122,32 @@ def check_report(report: HtmlReport) -> None:
 
 
 def read_template(name: str) -> str:
+    """The packaged template `name`.
+
+    Raises:
+        OutputError: when the template cannot be read or is not UTF-8.
+    """
     resource = importlib.resources.files('wambatic.reports') / 'templates' / name
-    return resource.read_text(encoding='utf-8')
+    try:
+        return resource.read_text(encoding='utf-8')
+    except OSError, UnicodeDecodeError:
+        raise wambatic.reports.errors.OutputError(
+            f'cannot read the report template {name}; reinstall wambatic'
+        ) from None
+
+
+def read_plotlyjs() -> str:
+    """The plotly.js bundled with plotly.
+
+    Raises:
+        OutputError: when the file cannot be read or is not UTF-8.
+    """
+    try:
+        return str(plotly.offline.get_plotlyjs())
+    except OSError, UnicodeDecodeError:
+        raise wambatic.reports.errors.OutputError(
+            'cannot read the plotly.js bundled with plotly; reinstall wambatic'
+        ) from None
 
 
 def escape(text: object) -> str:
@@ -594,7 +619,7 @@ def html_document(report: HtmlReport, theme: Theme) -> str:
         sections=sections_html(report),
         footer=footer_html(report.total),
         data=json_for_script(page_data(report, theme)),
-        plotlyjs=str(plotly.offline.get_plotlyjs()),
+        plotlyjs=read_plotlyjs(),
         script=read_template('report.js'),
     )
 
@@ -602,19 +627,24 @@ def html_document(report: HtmlReport, theme: Theme) -> str:
 def render_html(report: HtmlReport, out: pathlib.Path, theme: Theme) -> pathlib.Path:
     """Write `html_document(report, theme)` to `out` and return it. The file is written to a
     temporary file beside `out` and moved into place, so a failed write leaves `out` as it was
-    and no temporary file behind. Missing parent directories are created."""
+    and no temporary file behind. Missing parent directories are created. Raises OutputError
+    when the file cannot be written."""
     document = html_document(report, theme)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        'w', encoding='utf-8', dir=out.parent, suffix='.tmp', delete=False
-    ) as handle:
-        temporary = pathlib.Path(handle.name)
-        try:
-            handle.write(document)
-            handle.flush()
-            temporary.chmod(FILE_MODE)
-            os.replace(temporary, out)
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            'w', encoding='utf-8', dir=out.parent, suffix='.tmp', delete=False
+        ) as handle:
+            temporary = pathlib.Path(handle.name)
+            try:
+                handle.write(document)
+                handle.flush()
+                temporary.chmod(FILE_MODE)
+                os.replace(temporary, out)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+    except OSError as e:
+        # auditme: accept[except-interpolation] the OS reason says what to fix
+        raise wambatic.reports.errors.OutputError(f'cannot write {out}: {e.strerror or e}') from e
     return out

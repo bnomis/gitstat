@@ -71,7 +71,10 @@ def parse_duration(text: str) -> datetime.timedelta:
     digits, unit = text[:-1], text[-1:]
     if not (digits.isascii() and digits.isdigit() and unit in DURATION_UNITS):
         raise SettingsError('a duration is a non-negative integer and one unit of s, m, h, d or w')
-    return int(digits) * DURATION_UNITS[unit]
+    try:
+        return int(digits) * DURATION_UNITS[unit]
+    except OverflowError:
+        raise SettingsError(f'the duration {text} is too long') from None
 
 
 def convert(key: str, annotation: object, value: object) -> object:
@@ -144,11 +147,16 @@ def read_config(config_path: pathlib.Path | None) -> object:
         named = pathlib.Path(os.environ['WAMBATIC_CONFIG'])
     path = (named or DEFAULT_CONFIG_PATH).expanduser()
     try:
-        text = path.read_text()
+        text = path.read_text(encoding='utf-8')
     except FileNotFoundError:
         if named is not None:
             raise SettingsError(f'config file {path} does not exist') from None
         return {}
+    except OSError as e:
+        # auditme: accept[except-interpolation] the OS reason says what to fix
+        raise SettingsError(f'config file {path} cannot be read ({e.strerror or e})') from None
+    except UnicodeDecodeError:
+        raise SettingsError(f'config file {path} is not UTF-8 text') from None
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:

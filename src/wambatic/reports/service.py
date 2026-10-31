@@ -81,7 +81,7 @@ def check_by_author(subject: wambatic.fetch.base.Subject) -> None:
 def resolve_tz(settings: wambatic.settings.Settings) -> zoneinfo.ZoneInfo:
     try:
         return zoneinfo.ZoneInfo(settings.stats.timezone)
-    except zoneinfo.ZoneInfoNotFoundError, ValueError:
+    except zoneinfo.ZoneInfoNotFoundError, ValueError, OSError:
         raise wambatic.settings.SettingsError('stats.timezone is not a known time zone') from None
 
 

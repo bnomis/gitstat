@@ -116,7 +116,7 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 ## Task 3: Translate failures at each boundary into domain errors
 
-**Status:** todo
+**Status:** in-progress
 **Priority:** high
 **Complexity:** large
 **Source Reference:** F2 (A1, A2), F3 and F4 (Sec2)
@@ -125,29 +125,29 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 **Subtasks:**
 
-- [ ] `fetch/client.py`: after the retries run out, raise `FetchError` (with the cause chained) for aiohttp `ClientError` and `TimeoutError` at `:211` and `:290`, and replace the `aiohttp.ClientResponseError` of `status_error` (`:327`, `:333`) with a `FetchError` naming the status; wrap `session.close()` (`:133`)
-- [ ] `fetch/errors.py`: add `CacheError(FetchError)`; `fetch/cache.py`: translate `sqlite3.Error` and `OSError` into `CacheError` through one context manager used by every `Cache` method and by `inspect_cache`/`clear_cache` (each A1 row from `cache.py:372` to `:962`), with the path in the message
-- [ ] Widen the narrow handlers: `settings.py:146` to `OSError` and `UnicodeDecodeError`, `fetch/auth.py:12` to `OSError` and `UnicodeDecodeError`, `fetch/cache.py:961` to `OSError`, `reports/service.py:82` to add `OSError`, `cli.py:231` to add `UnicodeDecodeError`; `reports/html.py:125` (`read_template`) and `:597` (`get_plotlyjs`) raise `OutputError` on `OSError`/`UnicodeDecodeError`
-- [ ] `version.py:3`: fall back to `'0+unknown'` on `importlib.metadata.PackageNotFoundError`, with a test
-- [ ] `reports/web.py:573`: translate `OSError` from `uvicorn.Server.run` into `ServeError`
-- [ ] `cli.py:400`: guard `os.open`/`os.dup2` in the `BrokenPipeError` handler with `OSError`
-- [ ] `bin/record-fixtures.py:108`, `:109`, `:235`, `:236`: translate into one `RecordingError` defined in the script, caught in `main` with a one-line message and exit 1
-- [ ] F3: `settings.parse_duration` raises `SettingsError` on `OverflowError`; test with `99999999999d`
+- [x] `fetch/client.py`: after the retries run out, raise `FetchError` (with the cause chained) for aiohttp `ClientError` and `TimeoutError` at `:211` and `:290`, and replace the `aiohttp.ClientResponseError` of `status_error` (`:327`, `:333`) with a `FetchError` naming the status; wrap `session.close()` (`:133`)
+- [x] `fetch/errors.py`: add `CacheError(FetchError)`; `fetch/cache.py`: translate `sqlite3.Error` and `OSError` into `CacheError` through one context manager used by every `Cache` method and by `inspect_cache`/`clear_cache` (each A1 row from `cache.py:372` to `:962`), with the path in the message
+- [x] Widen the narrow handlers: `settings.py:146` to `OSError` and `UnicodeDecodeError`, `fetch/auth.py:12` to `OSError` and `UnicodeDecodeError`, `fetch/cache.py:961` to `OSError`, `reports/service.py:82` to add `OSError`, `cli.py:231` to add `UnicodeDecodeError`; `reports/html.py:125` (`read_template`) and `:597` (`get_plotlyjs`) raise `OutputError` on `OSError`/`UnicodeDecodeError`
+- [x] `version.py:3`: fall back to `'0+unknown'` on `importlib.metadata.PackageNotFoundError`, with a test
+- [x] `reports/web.py:573`: translate `OSError` from `uvicorn.Server.run` into `ServeError`
+- [x] `cli.py:400`: guard `os.open`/`os.dup2` in the `BrokenPipeError` handler with `OSError`
+- [x] `bin/record-fixtures.py:108`, `:109`, `:235`, `:236`: translate into one `RecordingError` defined in the script, caught in `main` with a one-line message and exit 1
+- [x] F3: `settings.parse_duration` raises `SettingsError` on `OverflowError`; test with `99999999999d`
 - [ ] F4: `service.make_request` rejects `since` before 2008-01-01 or `until` after tomorrow in `tz` with `UsageError` naming the bound; tests through the CLI (exit 2) and `/report` (400)
-- [ ] One test per translated error: a fake aiohttp failure after retries, a locked SQLite file, a non-UTF-8 config file, a `gh` that cannot be executed, an unwritable cache file
+- [x] One test per translated error: a fake aiohttp failure after retries, a locked SQLite file, a non-UTF-8 config file, a `gh` that cannot be executed, an unwritable cache file
 
 **Acceptance Criteria:**
 
-- [ ] With the network unreachable, `wambatic report <target>` prints one error line naming the failure and exits 1 with no traceback (test with the fake upstream closed)
-- [ ] `--max-age 99999999999d` exits 2 with a settings message
+- [x] With the network unreachable, `wambatic report <target>` prints one error line naming the failure and exits 1 with no traceback (test with the fake upstream closed)
+- [x] `--max-age 99999999999d` exits 2 with a settings message
 - [ ] `/report?since=0001-01-01` answers 400
-- [ ] `bin/audit-check.sh --rule filesystem-op-without-envelope` exits 0
+- [x] `bin/audit-check.sh --rule filesystem-op-without-envelope` exits 0
 
 **Definition of Done:**
 
-- [ ] `source bin/activate.sh` succeeds
-- [ ] The task's commit passes its pre-commit hooks (never `--no-verify`)
-- [ ] `pytest src/tests/fetch/test_client.py src/tests/fetch/test_cache.py src/tests/fetch/test_auth.py src/tests/test_settings.py src/tests/test_cli.py src/tests/reports/test_service.py src/tests/reports/test_web.py src/tests/reports/test_html.py src/tests/test_package.py` passes
+- [x] `source bin/activate.sh` succeeds
+- [x] The task's commit passes its pre-commit hooks (never `--no-verify`)
+- [x] `pytest src/tests/fetch/test_client.py src/tests/fetch/test_cache.py src/tests/fetch/test_auth.py src/tests/test_settings.py src/tests/test_cli.py src/tests/reports/test_service.py src/tests/reports/test_web.py src/tests/reports/test_html.py src/tests/test_package.py` passes
 
 **Notes:**
 

@@ -1,4 +1,5 @@
 import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import hashlib
@@ -353,6 +354,21 @@ def fork_from_row(repo: str, row: tuple[object, ...]) -> wambatic.fetch.base.For
     )
 
 
+@contextlib.contextmanager
+def translate_errors(path: pathlib.Path) -> collections.abc.Iterator[None]:
+    """Turn an `sqlite3.Error` or `OSError` raised inside the block into a `CacheError` naming
+    `path`, with the original chained.
+
+    Raises:
+        CacheError: for an `sqlite3.Error` or `OSError` raised inside the block.
+    """
+    try:
+        yield
+    except (sqlite3.Error, OSError) as error:
+        # auditme: accept[except-interpolation] the SQLite or OS reason is the payload
+        raise wambatic.fetch.errors.CacheError(f'cache {path}: {error}') from error
+
+
 class Cache:
     """The SQLite cache. One connection, serialised by one lock taken by every public method.
 
@@ -360,35 +376,49 @@ class Cache:
     take the lock again.
     """
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, path: pathlib.Path) -> None:
         self.connection = connection
+        self.path = path
         self.lock = threading.Lock()
 
     @classmethod
     def open(cls, path: pathlib.Path, *, ignore_version: bool = False) -> Cache:
         """Create the parent directory and file if absent, set WAL mode, create the schema,
         then check or write the identity; raises CacheVersionError on a mismatch unless
-        `ignore_version`, which is recorded in `meta` as `version_override_at`."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(path, check_same_thread=False)
-        try:
-            connection.execute('PRAGMA journal_mode=WAL')
-            connection.execute('PRAGMA foreign_keys=ON')
-            connection.executescript(SCHEMA)
-            cache = cls(connection)
-            cache.check_identity(ignore_version)
-        except BaseException:
-            connection.close()
-            raise
+        `ignore_version`, which is recorded in `meta` as `version_override_at`. Raises
+        CacheError when the file cannot be created, opened or written."""
+        with translate_errors(path):
+            # auditme: accept[filesystem-op-without-envelope] translate_errors is its envelope
+            path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(path, check_same_thread=False)
+            try:
+                connection.execute('PRAGMA journal_mode=WAL')
+                connection.execute('PRAGMA foreign_keys=ON')
+                connection.executescript(SCHEMA)
+                cache = cls(connection, path)
+                cache.check_identity(ignore_version)
+            except BaseException:
+                connection.close()
+                raise
         return cache
 
+    @contextlib.contextmanager
+    def locked(self) -> collections.abc.Iterator[None]:
+        """Hold the lock, with `translate_errors` around the block.
+
+        Raises:
+            CacheError: when the file cannot be read or written.
+        """
+        with self.lock, translate_errors(self.path):
+            yield
+
     def close(self) -> None:
-        with self.lock:
+        with self.locked():
             self.connection.close()
 
     def check_identity(self, ignore_version: bool) -> None:
         expected = expected_identity()
-        with self.lock, self.connection:
+        with self.locked(), self.connection:
             recorded = self.recorded_identity()
             if not recorded:
                 self.connection.executemany(
@@ -410,12 +440,12 @@ class Cache:
         return {key: value for key, value in rows if key != OVERRIDE_KEY}
 
     def identity(self) -> dict[str, str]:
-        with self.lock:
+        with self.locked():
             return self.recorded_identity()
 
     def version_override_at(self) -> str | None:
         """When the cache was opened with `ignore_version` over a difference, if it was."""
-        with self.lock:
+        with self.locked():
             row = self.connection.execute(
                 'SELECT value FROM meta WHERE key = ?', (OVERRIDE_KEY,)
             ).fetchone()
@@ -425,7 +455,7 @@ class Cache:
         self, owner: str, repos: list[wambatic.fetch.base.Repo], *, complete: bool
     ) -> None:
         """Insert or replace each repo; with `complete`, mark the owner's other repos missing."""
-        with self.lock, self.connection:
+        with self.locked(), self.connection:
             if complete:
                 self.connection.execute(
                     'UPDATE repos SET missing = 1 WHERE owner = ? COLLATE NOCASE', (owner,)
@@ -462,7 +492,7 @@ class Cache:
 
     def read_repos(self, subject: wambatic.fetch.base.Subject) -> list[wambatic.fetch.base.Repo]:
         columns = REPO_COLUMNS
-        with self.lock:
+        with self.locked():
             if subject.kind == 'repo':
                 rows = self.connection.execute(
                     f'SELECT {columns} FROM repos WHERE name_with_owner = ? COLLATE NOCASE',
@@ -477,7 +507,7 @@ class Cache:
         return [repo_from_row(row) for row in rows]
 
     def sync_state(self, repo: str, resource: str) -> wambatic.fetch.base.SyncState | None:
-        with self.lock:
+        with self.locked():
             row = self.connection.execute(
                 'SELECT watermark, head_oid, pushed_at, updated_at, synced_at, full_synced_at, '
                 'probe FROM sync_state WHERE repo = ? AND resource = ?',
@@ -518,7 +548,7 @@ class Cache:
 
     def write_state(self, state: wambatic.fetch.base.SyncState) -> None:
         """Write a `sync_state` row alone, in its own transaction."""
-        with self.lock, self.connection:
+        with self.locked(), self.connection:
             self.put_state(state)
 
     def write_rows[T: Record](
@@ -545,7 +575,7 @@ class Cache:
             f'VALUES ({", ".join("?" * len(columns))}) '
             f'ON CONFLICT ({", ".join(key)}) DO UPDATE SET {updates}'
         )
-        with self.lock, self.connection:
+        with self.locked(), self.connection:
             if replace:
                 self.connection.execute(f'DELETE FROM {table} WHERE repo = ?', (repo,))
             self.connection.executemany(sql, [values(record) for record in records])
@@ -576,7 +606,7 @@ class Cache:
         if until is not None:
             query += f' AND {time_column} < ?'
             params.append(to_text(until))
-        with self.lock:
+        with self.locked():
             return self.connection.execute(f'{query} ORDER BY {order}', params).fetchall()
 
     def write_commits(
@@ -861,7 +891,7 @@ class Cache:
 
     def unfinished_runs(self, repo: str) -> list[int]:
         """Ids of the repo's runs whose status is not `completed`, ascending."""
-        with self.lock:
+        with self.locked():
             rows = self.connection.execute(
                 "SELECT id FROM workflow_runs WHERE repo = ? AND status != 'completed' ORDER BY id",
                 (repo,),
@@ -870,14 +900,14 @@ class Cache:
 
     def etag(self, url: str) -> tuple[str, object] | None:
         """The stored ETag and parsed body for a REST URL."""
-        with self.lock:
+        with self.locked():
             row = self.connection.execute(
                 'SELECT etag, body FROM etags WHERE url = ?', (url,)
             ).fetchone()
         return None if row is None else (row[0], json.loads(row[1]))
 
     def store_etag(self, url: str, etag: str, body: object) -> None:
-        with self.lock, self.connection:
+        with self.locked(), self.connection:
             self.connection.execute(
                 'INSERT OR REPLACE INTO etags (url, etag, body) VALUES (?, ?, ?)',
                 (url, etag, json.dumps(body)),
@@ -906,6 +936,11 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
     """What `path` holds, read with plain SELECTs on its own connection, or None when it does
     not exist. It creates, migrates and stamps nothing, so a cache `Cache.open` refuses can still
     be inspected; a table absent from the file counts as 0 rows."""
+    with translate_errors(path):
+        return read_cache_info(path)
+
+
+def read_cache_info(path: pathlib.Path) -> CacheInfo | None:
     if not path.exists():
         return None
     connection = sqlite3.connect(path)
@@ -955,12 +990,19 @@ def inspect_cache(path: pathlib.Path) -> CacheInfo | None:
 
 
 def clear_cache(path: pathlib.Path) -> list[pathlib.Path]:
-    """Delete `path` and its `-wal` and `-shm` files where present; return those deleted."""
+    """Delete `path` and its `-wal` and `-shm` files where present; return those deleted.
+
+    Raises:
+        CacheError: when a file that exists cannot be deleted.
+    """
     deleted: list[pathlib.Path] = []
     for candidate in (path, path.with_name(path.name + '-wal'), path.with_name(path.name + '-shm')):
         try:
             candidate.unlink()
         except FileNotFoundError:
             continue
+        except OSError as error:
+            # auditme: accept[except-interpolation] the SQLite or OS reason is the payload
+            raise wambatic.fetch.errors.CacheError(f'cannot delete {candidate}: {error}') from error
         deleted.append(candidate)
     return deleted

@@ -7,7 +7,6 @@ import sqlite3
 import threading
 import typing
 
-import aiohttp
 import loguru
 import pytest
 
@@ -626,7 +625,7 @@ def test_an_error_on_page_two_leaves_no_rows_and_no_state(
             async with fetcher:
                 await fetcher.sync(OWNER, COMMITS)
 
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         asyncio.run(scenario())
     assert stored(cache_holder[0]) == []
     assert cache_holder[0].sync_state(HELLO, 'commits') is None
@@ -1012,7 +1011,7 @@ def test_an_interrupted_run_resumes_with_only_the_repo_that_failed(
             async with fetcher:
                 await fetcher.sync(OWNER, COMMITS)
 
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         asyncio.run(failing())
     cache = caches[0]
     assert stored(cache) == ['h1', 'h2', 'h3']
@@ -1113,7 +1112,7 @@ def test_a_failure_in_one_repo_propagates_as_its_own_exception(
 ) -> None:
     upstream = Upstream([hello(), spoon()])
     upstream.failing_history = {HELLO, SPOON}
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_once(make_fetcher, upstream)
 
 
@@ -1360,7 +1359,7 @@ def test_a_failing_second_page_leaves_the_old_rows_and_state(
     upstream.flow_page_size = 2
     upstream.failing_flow_cursors = {'2'}
     upstream.now = SERVER_DATE + datetime.timedelta(hours=3)
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_flow(make_fetcher, upstream, 'pull_requests', full_refresh=True, cache=first.cache)
     assert first.cache.read_pull_requests(HELLO, None) == before
     assert first.cache.sync_state(HELLO, 'pull_requests') == state
@@ -1804,7 +1803,7 @@ def test_an_interrupted_release_read_leaves_the_old_rows_and_state(
     upstream.repos[HELLO].releases.append(FakeRelease('v4', at(4), published_at=at(4)))
     upstream.release_page_size = 2
     upstream.failing_release_cursors = {'2'}
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_delivery(make_fetcher, upstream, 'sync_releases', cache=first.cache)
     assert tags(first.cache) == ['v1', 'v2', 'v3']
     assert first.cache.sync_state(HELLO, 'releases') == state
@@ -1998,7 +1997,7 @@ def test_an_interrupted_run_read_keeps_the_old_rows_and_watermark(
     upstream.repos[HELLO].runs.append(FakeRun(900, at(30)))
     upstream.failing_run_pages = {2}
     upstream.now = SERVER_DATE + datetime.timedelta(hours=3)
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_delivery(
             make_fetcher, upstream, 'sync_workflow_runs', full_refresh=True, cache=first.cache
         )
@@ -2232,7 +2231,7 @@ def test_an_interrupted_star_read_leaves_the_old_rows_and_state(
     del upstream.repos[HELLO].stars[0]
     upstream.star_page_size = 2
     upstream.failing_star_cursors = {'2'}
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_once(make_fetcher, upstream, resources=STARS, cache=first.cache)
     assert star_ids(first.cache) == ['U_1', 'U_2', 'U_3', 'U_4', 'U_5']
     assert first.cache.sync_state(HELLO, 'star_events') == state
@@ -2422,7 +2421,7 @@ def test_an_interrupted_fork_read_keeps_the_old_rows_and_watermark(
     state = first.cache.sync_state(HELLO, 'forks')
     del upstream.repos[HELLO].forks[0]
     upstream.failing_fork_pages = {2}
-    with pytest.raises(aiohttp.ClientResponseError):
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 5'):
         sync_once(make_fetcher, upstream, resources=FORKS, cache=first.cache)
     assert len(fork_ids(first.cache)) == 101
     assert first.cache.sync_state(HELLO, 'forks') == state

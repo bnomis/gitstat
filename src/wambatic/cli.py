@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import os
@@ -228,10 +229,7 @@ def render_html_report(
     the path."""
     page = wambatic.reports.html.html_report(results, wambatic.stats.base.Granularity(report.by))
     path = output_path(report.out, settings, subject)
-    try:
-        wambatic.reports.html.render_html(page, path, settings.report.html_theme)
-    except OSError as e:
-        raise wambatic.reports.errors.OutputError(f'cannot write {path}: {e.strerror or e}') from e
+    wambatic.reports.html.render_html(page, path, settings.report.html_theme)
     stdout.write(f'{path}\n')
 
 
@@ -384,7 +382,8 @@ def main(argv: list[str] | None = None) -> int:
     except BrokenPipeError:
         # The reader of stdout went away (`wambatic report ... | head`). Rich ends the same way
         # for the terminal format; point stdout at the null device so exit does not flush again.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        with contextlib.suppress(OSError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 1
     except Exception as e:
         loguru.logger.exception(f'Unexpected error: {wambatic.reports.service.redact_error(e)}')

@@ -878,6 +878,57 @@ def test_each_typed_error_is_one_logged_line_and_its_exit_status(
     assert captured.out == ''
 
 
+def test_a_max_age_too_long_for_a_timedelta_exits_2_with_a_settings_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    argv = ['report', 'repo:octo-org/alpha', '--max-age', '99999999999d']
+    assert wambatic.cli.main(argv) == 2
+    err = capsys.readouterr().err
+    assert [line for line in err.splitlines() if line.startswith('ERROR:')] == [
+        'ERROR: fetch.max_age: the duration 99999999999d is too long'
+    ]
+    assert 'Traceback' not in err
+
+
+def closed_url() -> str:
+    """The URL of a loopback port that nothing listens on: bound once, then closed."""
+    with socket.create_server(('127.0.0.1', 0)) as listener:
+        port = listener.getsockname()[1]
+    return f'http://127.0.0.1:{port}'
+
+
+def test_an_unreachable_github_is_one_error_line_and_exit_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    config_for(tmp_path, monkeypatch, tmp_path / 'cache' / 'cache.sqlite3')
+    monkeypatch.setenv('GITHUB_TOKEN', 'test-token')
+    url = closed_url()
+
+    async def no_sleep(seconds: float) -> None:
+        return None
+
+    def factory(
+        token: str,
+        cache: wambatic.fetch.cache.Cache,
+        fetch_settings: wambatic.settings.FetchSettings,
+    ) -> wambatic.fetch.base.Fetcher:
+        client = wambatic.fetch.client.GitHubClient(
+            token, fetch_settings, api_url=url, sleep=no_sleep
+        )
+        return wambatic.fetch.base.Fetcher(token, cache, fetch_settings, client=client)
+
+    monkeypatch.setattr(wambatic.reports.service, 'make_fetcher', factory)
+    assert wambatic.cli.main(['report', 'repo:octo-org/alpha', '--by', 'year']) == 1
+    captured = capsys.readouterr()
+    errors = [line for line in captured.err.splitlines() if line.startswith('ERROR:')]
+    assert len(errors) == 1
+    assert errors[0].startswith('ERROR: GitHub request ')
+    assert 'ClientConnectorError' in errors[0]
+    assert 'Traceback' not in captured.err
+    assert 'test-token' not in captured.err
+    assert captured.out == ''
+
+
 def test_any_other_exception_logs_its_traceback_and_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1568,6 +1619,21 @@ def test_serve_with_a_busy_port_returns_1_with_the_reason(
     assert any(
         'cannot listen on 127.0.0.1:8123: Address already in use' in line for line in served.logs
     )
+
+
+def test_serve_whose_server_fails_returns_1_with_the_reason(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    def fail(server: uvicorn.Server) -> None:
+        raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+
+    served = serve_main(monkeypatch, capsys, tmp_path, [], run=fail)
+    assert served.status == 1
+    assert served.sockets[0].fileno() == -1
+    assert any(
+        f'the web server stopped: {os.strerror(errno.EMFILE)}' in line for line in served.logs
+    )
+    assert not any('Traceback' in line for line in served.logs)
 
 
 def test_serve_ctrl_c_returns_130_and_closes_the_socket_and_the_cache(

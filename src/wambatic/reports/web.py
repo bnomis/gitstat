@@ -570,7 +570,13 @@ def serve(
             access_log=False,
             log_level='warning',
         )
-        uvicorn.Server(config).run(sockets=[sock])
+        try:
+            uvicorn.Server(config).run(sockets=[sock])
+        except OSError as e:
+            raise wambatic.reports.errors.ServeError(
+                # auditme: accept[except-interpolation] the OS reason says what to fix
+                f'the web server stopped: {e.strerror or e}'
+            ) from e
     finally:
         if sock is not None:
             sock.close()

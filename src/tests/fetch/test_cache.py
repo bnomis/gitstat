@@ -464,7 +464,7 @@ def test_a_failure_mid_write_leaves_rows_and_state_unchanged(
 
     monkeypatch.setattr(cache, 'put_state', fail)
     for replace in (False, True):
-        with pytest.raises(sqlite3.OperationalError):
+        with pytest.raises(wambatic.fetch.errors.CacheError, match='disk full'):
             cache.write_commits(HELLO, [commit('c2', 2)], state(head='b' * 40), replace=replace)
         assert [c.oid for c in cache.read_commits(HELLO, None, None)] == ['c1']
         assert cache.sync_state(HELLO, 'commits') == old
@@ -888,7 +888,7 @@ def test_a_failure_mid_write_of_runs_leaves_rows_and_state_unchanged(
         raise sqlite3.OperationalError('disk full')
 
     monkeypatch.setattr(cache, 'put_state', fail)
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(wambatic.fetch.errors.CacheError, match='disk full'):
         cache.write_workflow_runs(
             HELLO,
             [workflow_run(2, 2)],
@@ -1020,7 +1020,7 @@ def test_a_failure_mid_write_of_stars_leaves_rows_and_state_unchanged(
         raise sqlite3.OperationalError('disk full')
 
     monkeypatch.setattr(cache, 'put_state', fail)
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(wambatic.fetch.errors.CacheError, match='disk full'):
         cache.write_star_events(
             HELLO, [star_event('U_2')], state(resource='star_events', hours=2), replace=True
         )
@@ -1198,3 +1198,71 @@ def test_clear_cache_removes_the_file_and_its_wal_and_shm_files(cache_path: path
     assert not any(path.exists() for path in removed)
     assert wambatic.fetch.cache.clear_cache(cache_path) == []
     cache.close()
+
+
+# Failures of the file itself
+
+
+def test_a_locked_file_is_a_cache_error_naming_the_path(
+    cache: wambatic.fetch.cache.Cache, cache_path: pathlib.Path
+) -> None:
+    cache.connection.execute('PRAGMA busy_timeout = 0')
+    holder = sqlite3.connect(cache_path)
+    try:
+        holder.execute('BEGIN EXCLUSIVE')
+        with pytest.raises(wambatic.fetch.errors.CacheError, match='locked') as info:
+            cache.write_state(state())
+    finally:
+        holder.close()
+    assert str(cache_path) in str(info.value)
+    assert isinstance(info.value.__cause__, sqlite3.OperationalError)
+    assert isinstance(info.value, wambatic.fetch.errors.FetchError)
+
+
+def test_an_unwritable_cache_file_is_a_cache_error(cache_path: pathlib.Path) -> None:
+    wambatic.fetch.cache.Cache.open(cache_path).close()
+    for path in cache_path.parent.iterdir():
+        path.chmod(0o444)
+    try:
+        cache = wambatic.fetch.cache.Cache.open(cache_path)
+        try:
+            with pytest.raises(wambatic.fetch.errors.CacheError, match='readonly'):
+                cache.write_state(state())
+        finally:
+            cache.close()
+    finally:
+        for path in cache_path.parent.iterdir():
+            path.chmod(0o644)
+
+
+def test_a_cache_directory_that_cannot_be_made_is_a_cache_error(tmp_path: pathlib.Path) -> None:
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('a file, not a directory')
+    path = blocker / 'cache.sqlite3'
+    with pytest.raises(wambatic.fetch.errors.CacheError, match=str(path)) as info:
+        wambatic.fetch.cache.Cache.open(path)
+    assert isinstance(info.value.__cause__, OSError)
+
+
+def test_a_file_that_is_not_a_database_is_a_cache_error_for_open_and_inspect(
+    cache_path: pathlib.Path,
+) -> None:
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b'not a database, just some bytes that are long enough' * 4)
+    with pytest.raises(wambatic.fetch.errors.CacheError, match='not a database'):
+        wambatic.fetch.cache.Cache.open(cache_path)
+    with pytest.raises(wambatic.fetch.errors.CacheError, match='not a database'):
+        wambatic.fetch.cache.inspect_cache(cache_path)
+
+
+def test_clear_cache_of_a_file_that_cannot_be_deleted_is_a_cache_error(
+    cache_path: pathlib.Path,
+) -> None:
+    wambatic.fetch.cache.Cache.open(cache_path).close()
+    cache_path.parent.chmod(0o555)
+    try:
+        with pytest.raises(wambatic.fetch.errors.CacheError, match='cannot delete'):
+            wambatic.fetch.cache.clear_cache(cache_path)
+    finally:
+        cache_path.parent.chmod(0o755)
+    assert cache_path.exists()

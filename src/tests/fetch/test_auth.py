@@ -1,3 +1,4 @@
+import pathlib
 import subprocess
 
 import hypothesis
@@ -54,6 +55,27 @@ def test_gh_failure_or_empty_raises(
 def test_gh_missing_or_timeout_raises(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     def run(*args: object, **kwargs: object) -> None:
         raise exc
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    with pytest.raises(wambatic.fetch.errors.AuthError):
+        wambatic.fetch.auth.resolve_token()
+
+
+def test_a_gh_that_cannot_be_executed_raises_auth_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    gh = tmp_path / 'gh'
+    gh.write_text('#!/bin/sh\necho token\n')
+    gh.chmod(0o644)
+    monkeypatch.setenv('PATH', str(tmp_path))
+    with pytest.raises(wambatic.fetch.errors.AuthError) as info:
+        wambatic.fetch.auth.resolve_token()
+    assert str(info.value) == wambatic.fetch.errors.NO_TOKEN_MESSAGE
+
+
+def test_gh_output_that_is_not_text_raises_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(*args: object, **kwargs: object) -> None:
+        raise UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid start byte')
 
     monkeypatch.setattr(subprocess, 'run', run)
     with pytest.raises(wambatic.fetch.errors.AuthError):

@@ -74,6 +74,12 @@ def header_date(response: Response) -> datetime.datetime | None:
     return parsed.astimezone(datetime.UTC)
 
 
+def describe(error: BaseException) -> str:
+    """The error's class and message, for a one-line report; a `TimeoutError` has no message."""
+    text = str(error)
+    return f'{type(error).__name__}: {text}' if text else type(error).__name__
+
+
 def require_date(date: datetime.datetime | None) -> datetime.datetime:
     """`date`, or `GraphQLError` (`MALFORMED`) when the response had no parseable `Date`."""
     if date is None:
@@ -130,7 +136,13 @@ class GitHubClient:
 
     async def __aexit__(self, *exc_info: object) -> None:
         if self.session is not None:
-            await self.session.close()
+            try:
+                await self.session.close()
+            except (aiohttp.ClientError, OSError) as error:
+                raise wambatic.fetch.errors.FetchError(
+                    # auditme: accept[except-interpolation] the aiohttp reason is the payload
+                    f'cannot close the connection to GitHub: {describe(error)}'
+                ) from error
 
     @property
     def graphql_limit(self) -> wambatic.fetch.ratelimit.RateLimitState:
@@ -285,12 +297,20 @@ class GitHubClient:
                 await self.wait_for_reset(endpoint, state.reset_at)
             try:
                 response = await self.send(method, path, json=json, params=params, headers=headers)
-            except aiohttp.ClientConnectionError, TimeoutError:
+            except (aiohttp.ClientConnectionError, TimeoutError) as error:
                 if retries >= max_retries:
-                    raise
+                    raise wambatic.fetch.errors.FetchError(
+                        # auditme: accept[except-interpolation] the aiohttp reason is the payload
+                        f'GitHub request {method} {path} failed: {describe(error)}'
+                    ) from error
                 await self.sleep(wambatic.fetch.ratelimit.backoff_delay(retries, self.rng))
                 retries += 1
                 continue
+            except aiohttp.ClientError as error:
+                raise wambatic.fetch.errors.FetchError(
+                    # auditme: accept[except-interpolation] the aiohttp reason is the payload
+                    f'GitHub request {method} {path} failed: {describe(error)}'
+                ) from error
             self.update_limits(endpoint, response)
             status = response.status
             if status == 401:
@@ -332,7 +352,8 @@ class GitHubClient:
                 return response
             raise self.status_error(response)
 
-    def status_error(self, response: Response) -> aiohttp.ClientResponseError:
-        return aiohttp.ClientResponseError(
-            response.request_info, (), status=response.status, headers=None
+    def status_error(self, response: Response) -> wambatic.fetch.errors.FetchError:
+        info = response.request_info
+        return wambatic.fetch.errors.FetchError(
+            f'GitHub answered HTTP {response.status} to {info.method} {info.url.path}'
         )

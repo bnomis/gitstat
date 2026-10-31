@@ -152,6 +152,17 @@ def test_an_unknown_time_zone_is_a_settings_error_naming_the_setting_not_the_val
     assert 'Mars' not in str(caught.value)
 
 
+def test_a_time_zone_file_that_cannot_be_read_is_a_settings_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unreadable(key: str) -> zoneinfo.ZoneInfo:
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setattr(zoneinfo, 'ZoneInfo', unreadable)
+    with pytest.raises(SettingsError, match='stats.timezone'):
+        wambatic.reports.service.resolve_tz(settings_for(tz='Europe/London'))
+
+
 @pytest.mark.parametrize('zone', ['', '../etc/passwd', 'UTC/..'])
 def test_a_malformed_time_zone_key_is_also_a_settings_error(zone: str) -> None:
     settings = settings_for(tz=zone)

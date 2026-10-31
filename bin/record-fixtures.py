@@ -20,6 +20,7 @@ import json
 import pathlib
 import pprint
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 
@@ -82,6 +83,10 @@ RUN_FIELDS = (
 )
 
 
+class RecordingError(Exception):
+    """A request, the fixture file or its formatting failed; reported in one line by `main`."""
+
+
 def query_sha256(query: str) -> str:
     return hashlib.sha256(query.encode()).hexdigest()
 
@@ -105,8 +110,12 @@ class Recorder:
                 'X-GitHub-Api-Version': '2022-11-28',
             },
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.load(response), dict(response.headers)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.load(response), dict(response.headers)
+        except (OSError, ValueError) as error:
+            # auditme: accept[except-interpolation] the HTTP or decoding reason is the payload
+            raise RecordingError(f'{method} {url} failed: {error}') from error
 
     def graphql(self, query: str, **variables: object) -> dict[str, object]:
         body, _ = self.send('POST', '/graphql', body={'query': query, 'variables': variables})
@@ -229,13 +238,36 @@ def module_text(recorded_at: str, responses: dict[str, object]) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def main() -> None:
+def write_fixtures(text: str) -> None:
+    """Write `text` to OUT and format it with ruff.
+
+    Raises:
+        RecordingError: when the file cannot be written or ruff cannot format it.
+    """
+    try:
+        OUT.write_text(text, encoding='utf-8')
+    except OSError as error:
+        # auditme: accept[except-interpolation] the OS reason says what to fix
+        raise RecordingError(f'cannot write {OUT}: {error.strerror or error}') from error
+    try:
+        subprocess.run(['ruff', 'format', '--quiet', str(OUT)], check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        # auditme: accept[except-interpolation] the reason ruff could not run is the payload
+        raise RecordingError(f'cannot format {OUT} with ruff: {error}') from error
+
+
+def main() -> int:
     recorder = Recorder(wambatic.fetch.auth.resolve_token())
     recorded_at = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-    OUT.write_text(module_text(recorded_at, record(recorder)), encoding='utf-8')
-    subprocess.run(['ruff', 'format', '--quiet', str(OUT)], check=True)
+    try:
+        write_fixtures(module_text(recorded_at, record(recorder)))
+    except RecordingError as error:
+        # auditme: accept[except-interpolation] the one line is the failure's own message
+        print(f'record-fixtures: {error}', file=sys.stderr)
+        return 1
     print(OUT)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

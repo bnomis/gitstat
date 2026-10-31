@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import dataclasses
 import datetime
 import random
@@ -170,9 +171,10 @@ def test_transient_status_exhausts_retries(
     fetch_settings: wambatic.settings.FetchSettings,
 ) -> None:
     canned = [Canned(502, responses.SERVER_ERROR)] * (fetch_settings.max_retries + 1)
-    with pytest.raises(aiohttp.ClientResponseError) as info:
+    with pytest.raises(
+        wambatic.fetch.errors.FetchError, match='HTTP 502 to GET /repos/octocat/Hello-World'
+    ):
         run_rest({REPO: canned}, make_client)
-    assert info.value.status == 502
     assert len(sleeps) == fetch_settings.max_retries
     for attempt, wait in enumerate(sleeps):
         assert 0 <= wait <= 2**attempt
@@ -201,12 +203,79 @@ def test_connection_error_then_success(
     assert len(sleeps) == 1
 
 
+def failing_send(
+    error: BaseException,
+) -> collections.abc.Callable[..., collections.abc.Awaitable[wambatic.fetch.client.Response]]:
+    async def send(*args: object, **kwargs: object) -> wambatic.fetch.client.Response:
+        raise error
+
+    return send
+
+
+def run_failing(
+    make_client: tests.conftest.MakeClient, error: BaseException
+) -> wambatic.fetch.client.RestResponse:
+    async def scenario() -> wambatic.fetch.client.RestResponse:
+        async with server_module.ReplayServer({}) as server:
+            async with make_client(server) as client:
+                client.send = failing_send(error)  # type: ignore[method-assign, assignment]
+                return await client.rest_get(REPO[1])
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    'error', [aiohttp.ClientConnectionError('reset'), TimeoutError()], ids=['reset', 'timeout']
+)
+def test_a_network_failure_after_the_retries_is_a_fetch_error(
+    make_client: tests.conftest.MakeClient,
+    sleeps: tests.conftest.Sleeps,
+    fetch_settings: wambatic.settings.FetchSettings,
+    error: BaseException,
+) -> None:
+    with pytest.raises(
+        wambatic.fetch.errors.FetchError,
+        match=f'GitHub request GET {REPO[1]} failed: {type(error).__name__}',
+    ) as info:
+        run_failing(make_client, error)
+    assert info.value.__cause__ is error
+    assert len(sleeps) == fetch_settings.max_retries
+
+
+def test_another_client_error_is_a_fetch_error_without_retry(
+    make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps
+) -> None:
+    error = aiohttp.ClientPayloadError('truncated body')
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='truncated body') as info:
+        run_failing(make_client, error)
+    assert info.value.__cause__ is error
+    assert sleeps == []
+
+
+def test_a_failed_close_is_a_fetch_error(make_client: tests.conftest.MakeClient) -> None:
+    async def scenario() -> None:
+        async with server_module.ReplayServer({}) as server:
+            client = make_client(server)
+            async with client:
+                session = client.session
+                assert session is not None
+                real = session.close
+
+                async def close() -> None:
+                    await real()
+                    raise aiohttp.ClientConnectionError('closing')
+
+                session.close = close  # type: ignore[method-assign]
+
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='cannot close'):
+        asyncio.run(scenario())
+
+
 def test_other_status_raises_without_retry(
     make_client: tests.conftest.MakeClient, sleeps: tests.conftest.Sleeps
 ) -> None:
-    with pytest.raises(aiohttp.ClientResponseError) as info:
+    with pytest.raises(wambatic.fetch.errors.FetchError, match='HTTP 422'):
         run_rest({REPO: [Canned(422, responses.UNPROCESSABLE)]}, make_client)
-    assert info.value.status == 422
     assert sleeps == []
 
 

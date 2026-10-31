@@ -32,6 +32,11 @@ class StatsPendingError(FetchError):
     pass
 
 
+class CacheError(FetchError):
+    """The cache file cannot be opened, read or written (a locked or corrupt file, a full
+    disc, a directory that cannot be created)."""
+
+
 class CacheVersionError(FetchError):
     """The cache was written under a different schema, wambatic or query version.
 
