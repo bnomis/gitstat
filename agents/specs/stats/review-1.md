@@ -36,4 +36,4 @@ For each choice: approve it or flag it. A flagged choice changes the spec paragr
 
 ## Answers
 
-(empty: your verdict on each choice, with the date)
+- 2026-10-31, Choices 1 to 11: each **approved**, with no comments, by Simon on the review page for the unapproved choices of steps 3 to 8 (https://claude.ai/artifact/WUq1DQtuKGZoNnfgwAraXH, answers saved between 10:25:13 and 10:25:34 UTC); see [review-unapproved-choices.md](../review-unapproved-choices.md). Nothing changes.

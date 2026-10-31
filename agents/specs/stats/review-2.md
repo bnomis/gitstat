@@ -51,4 +51,4 @@ Writing the task list for step 6 of the implementation order (flow data and stat
 
 ## Answers
 
-(empty: your option for the decision and your verdict on each choice, with the date)
+- 2026-10-31, Decision 1: **option A, probe in the repo listing**. Choices 2 to 18: each **approved**, with no comments, by Simon on the review page for the unapproved choices of steps 3 to 8 (https://claude.ai/artifact/WUq1DQtuKGZoNnfgwAraXH, answers saved between 10:25:13 and 10:25:34 UTC); see [review-unapproved-choices.md](../review-unapproved-choices.md). Nothing changes.
