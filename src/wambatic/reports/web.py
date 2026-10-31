@@ -143,7 +143,7 @@ class Jobs:
                 job.phase = 'running'
                 await run(job)
             job.phase = 'done'
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - logged by error_response()
             job.status, job.error = error_response(e)
             job.phase = 'failed'
 
@@ -399,7 +399,7 @@ def make_app(
     ) -> fastapi.Response:
         try:
             return await call_next(request)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - logged by error_response()
             return error_reply(request, *error_response(e))
 
     @app.middleware('http')

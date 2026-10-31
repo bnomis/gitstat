@@ -9,6 +9,7 @@ import stat
 import string
 import typing
 
+import plotly.offline
 import pytest
 
 import tests.conftest
@@ -194,8 +195,6 @@ def test_the_period_tables_hold_the_terminals_rows(
 def test_the_document_holds_one_copy_of_plotly_js(
     org_report: wambatic.reports.html.HtmlReport,
 ) -> None:
-    import plotly.offline
-
     document = wambatic.reports.html.html_document(org_report, 'auto')
     marker = f'plotly.js v{plotly.offline.get_plotlyjs_version()}'
     assert document.count(marker) == 1

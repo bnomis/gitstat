@@ -1,12 +1,15 @@
 import asyncio
 import dataclasses
 import datetime
+import importlib.util
 import pathlib
 import random
+import types
 import typing
 
 import pytest
 
+import tests.fixtures.audit_check
 import tests.fixtures.fetch.responses
 import tests.fixtures.fetch.server
 import tests.fixtures.settings
@@ -21,6 +24,24 @@ import wambatic.stats.base
 
 MakeClient = typing.Callable[..., wambatic.fetch.client.GitHubClient]
 MakeFetcher = typing.Callable[..., wambatic.fetch.base.Fetcher]
+
+BIN = pathlib.Path(__file__).resolve().parent.parent.parent / 'bin'
+
+
+@pytest.fixture(scope='session')
+def audit_check() -> types.ModuleType:
+    """bin/audit-check.py, loaded as a module (its name has a dash, so it cannot be imported)."""
+    spec = importlib.util.spec_from_file_location('audit_check', BIN / 'audit-check.py')
+    if spec is None or spec.loader is None:
+        raise ImportError(f'cannot load {BIN / "audit-check.py"}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def audit_jsonl() -> str:
+    return tests.fixtures.audit_check.JSONL
 
 
 @pytest.fixture

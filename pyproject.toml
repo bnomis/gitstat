@@ -65,11 +65,20 @@ src = ['src']
 quote-style = 'single'
 
 [tool.ruff.lint]
-select = ['ANN', 'B', 'E', 'F', 'I', 'UP']
+logger-objects = ['loguru.logger']
+select = ['ANN', 'B', 'BLE001', 'E', 'F', 'I', 'PLC0415', 'RUF022', 'T20', 'TID252', 'UP']
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = 'all'
 
 [tool.ruff.lint.isort]
 force-single-line = false
 known-first-party = ['wambatic']
+
+[tool.ruff.lint.per-file-ignores]
+'**/__init__.py' = ['TID252']
+'bin/record-fixtures.py' = ['T20']
+'src/wambatic/cli.py' = ['T20']
 
 [tool.mypy]
 strict = true

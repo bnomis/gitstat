@@ -47,7 +47,7 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 ## Task 1: Gate the coding standards on every commit and add the audit check script
 
-**Status:** todo
+**Status:** done
 **Priority:** high
 **Complexity:** small
 **Source Reference:** user request of 2026-10-31 (gates); review-1 Automatic checks
@@ -56,23 +56,23 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 
 **Subtasks:**
 
-- [ ] Add `PLC0415`, `T20`, `BLE001`, `RUF022` and `TID252` to `[tool.ruff.lint] select` in `pyproject.toml` (keep the list alphabetical); set `[tool.ruff.lint.flake8-tidy-imports] ban-relative-imports = 'all'` with a per-file ignore of `TID252` for `**/__init__.py`, and a per-file ignore of `T20` for `src/wambatic/cli.py` and `bin/record-fixtures.py` (the CLI entry points the coding standard lets print)
-- [ ] Fix every hit the new rules report (`ruff check --select PLC0415,T20,BLE001,RUF022,TID252 src bin` showed 1, 2, 3, 0 and 0 on 2026-10-31); where `BLE001` fires on a handler review-1 says stays (`reports/web.py:146`, `:402`), add `# noqa: BLE001` with the reason, the same reason as its audit marker in Task 9
-- [ ] Write `bin/audit-check.py` and its wrapper `bin/audit-check.sh` (utilities rule: dashes, wrapper sources `bin/activate.sh`): it runs `python3 .agents/claude/skills/auditme/checks/audit.py <repo root>`, prints each `accepted: false` hit as `path:line rule variant`, and exits 1 when there is one; `--rule NAME` (repeatable) and `--path PREFIX` (repeatable) restrict which hits count; it exits 2 with a message naming `git submodule update --init` when `.agents` is empty
-- [ ] Use argparse with the one-argument-per-line trailing-comma layout (argparse rule)
-- [ ] Add tests in `src/tests/test_audit_check.py` that run the script's filter and exit-status logic on a fixed JSONL sample (no checker run), including the empty-submodule message
+- [x] Add `PLC0415`, `T20`, `BLE001`, `RUF022` and `TID252` to `[tool.ruff.lint] select` in `pyproject.toml` (keep the list alphabetical); set `[tool.ruff.lint.flake8-tidy-imports] ban-relative-imports = 'all'` with a per-file ignore of `TID252` for `**/__init__.py`, and a per-file ignore of `T20` for `src/wambatic/cli.py` and `bin/record-fixtures.py` (the CLI entry points the coding standard lets print)
+- [x] Fix every hit the new rules report (`ruff check --select PLC0415,T20,BLE001,RUF022,TID252 src bin` showed 1, 2, 3, 0 and 0 on 2026-10-31); where `BLE001` fires on a handler review-1 says stays (`reports/web.py:146`, `:402`), add `# noqa: BLE001` with the reason, the same reason as its audit marker in Task 9
+- [x] Write `bin/audit-check.py` and its wrapper `bin/audit-check.sh` (utilities rule: dashes, wrapper sources `bin/activate.sh`): it runs `python3 .agents/claude/skills/auditme/checks/audit.py <repo root>`, prints each `accepted: false` hit as `path:line rule variant`, and exits 1 when there is one; `--rule NAME` (repeatable) and `--path PREFIX` (repeatable) restrict which hits count; it exits 2 with a message naming `git submodule update --init` when `.agents` is empty
+- [x] Use argparse with the one-argument-per-line trailing-comma layout (argparse rule)
+- [x] Add tests in `src/tests/test_audit_check.py` that run the script's filter and exit-status logic on a fixed JSONL sample (no checker run), including the empty-submodule message
 
 **Acceptance Criteria:**
 
-- [ ] `ruff check` passes with the new rules selected
-- [ ] `bin/audit-check.sh --rule typing-deprecated-alias --path src/wambatic` lists the six `typing-deprecated-alias` hits in `src/wambatic` and exits 1 (they are fixed in Task 9)
-- [ ] `bin/audit-check.sh` with `.agents` empty exits 2 and names the command that fills it
+- [x] `ruff check` passes with the new rules selected
+- [x] `bin/audit-check.sh --rule typing-deprecated-alias --path src/wambatic` lists the six `typing-deprecated-alias` hits in `src/wambatic` and exits 1 (they are fixed in Task 9)
+- [x] `bin/audit-check.sh` with `.agents` empty exits 2 and names the command that fills it
 
 **Definition of Done:**
 
-- [ ] `source bin/activate.sh` succeeds
-- [ ] The task's commit passes its pre-commit hooks (`ruff-check`, `ruff-format`, `mypy`, end-of-file and whitespace; never `--no-verify`)
-- [ ] `pytest src/tests/test_audit_check.py src/tests/reports/test_web.py src/tests/test_cli.py` passes
+- [x] `source bin/activate.sh` succeeds
+- [x] The task's commit passes its pre-commit hooks (`ruff-check`, `ruff-format`, `mypy`, end-of-file and whitespace; never `--no-verify`)
+- [x] `pytest src/tests/test_audit_check.py src/tests/reports/test_web.py src/tests/test_cli.py` passes
 
 **Notes:**
 
