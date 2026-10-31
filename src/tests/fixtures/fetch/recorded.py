@@ -2,7 +2,7 @@
 
 Written by bin/record-fixtures.sh; do not edit by hand, re-run it. The subjects are
 octocat (the listing), octocat/Hello-World (repository, history,
-compare, commit nodes, REST repo), miguelangellv/ha-gas-station-spain (pull requests, issues,
+compare, commit counts, REST repo), miguelangellv/ha-gas-station-spain (pull requests, issues,
 releases, workflow runs), bnomis/ab2cb (stargazers, forks), the users
 octocat and github, and one review page of
 microsoft/vscode#345267 (BOT_REVIEWS_OK). REST bodies
@@ -11,12 +11,12 @@ are trimmed to the fields the fetcher reads.
 
 # ruff: noqa: E501
 
-RECORDED_AT = '2026-10-31T08:48:12Z'
+RECORDED_AT = '2026-10-31T08:58:34Z'
 WAMBATIC_VERSION = '0.1.0'
 # sha256 of each wambatic.fetch.queries text the recording was made with
 QUERY_SHA256 = {
+    'COMMIT_COUNTS': 'f0ff534684ce491b40712fe59760a95418a97b5713042ce9cb86317c717c80e2',
     'COMMIT_HISTORY': 'e390724dbc61a80de490efc8274d16854c3abef5819a7986b68d56ab1f120343',
-    'COMMIT_NODES': 'd76d136f6271d0589251490b8770f0ecf8a165ba80afc0614967bfa7e02b331b',
     'ISSUES': '87fb57221f946898f3c0af75d81b9f185cf21bed79b29bb7de6aae89030e3ac6',
     'OWNER_REPOSITORIES': '22b8714cf7d24254eddebf0abdf4fc0149ffeca75e182b7447c4a8b046f406bd',
     'PULL_REQUESTS': '62deaf3e0eb3a441fb6045ac15ec73c73ef3c0963a10f0b396a70e8f33b4fe40',
@@ -48,7 +48,7 @@ OWNER_REPOSITORIES_OK = {
                         'issues': {'nodes': [{'updatedAt': '2026-10-30T03:20:20Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
                         'stargazerCount': 14148,
-                        'forkCount': 160746,
+                        'forkCount': 160747,
                         'watchers': {'totalCount': 910},
                         'languages': {
                             'totalSize': 611,
@@ -72,7 +72,7 @@ OWNER_REPOSITORIES_OK = {
                         'issues': {'nodes': [{'updatedAt': '2026-10-30T20:11:28Z'}]},
                         'releases': {'totalCount': 0, 'nodes': []},
                         'stargazerCount': 3879,
-                        'forkCount': 7311,
+                        'forkCount': 7312,
                         'watchers': {'totalCount': 1735},
                         'languages': {'totalSize': 0, 'edges': []},
                     },
@@ -203,7 +203,7 @@ OWNER_REPOSITORIES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 4, 'remaining': 4760, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 4, 'remaining': 4673, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -223,11 +223,11 @@ REPOSITORY_OK = {
             'issues': {'nodes': [{'updatedAt': '2026-10-30T20:11:28Z'}]},
             'releases': {'totalCount': 0, 'nodes': []},
             'stargazerCount': 3879,
-            'forkCount': 7311,
+            'forkCount': 7312,
             'watchers': {'totalCount': 1735},
             'languages': {'totalSize': 0, 'edges': []},
         },
-        'rateLimit': {'cost': 1, 'remaining': 4930, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4897, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -271,7 +271,7 @@ COMMIT_HISTORY_OK = {
                 }
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4931, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4898, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -283,14 +283,12 @@ COMPARE_AHEAD = {
     'commits': [
         {
             'sha': '762941318ee16e59dabbacb1b4049eec22f0d303',
-            'node_id': 'MDY6Q29tbWl0MTI5NjI2OTo3NjI5NDEzMThlZTE2ZTU5ZGFiYmFjYjFiNDA0OWVlYzIyZjBkMzAz',
             'commit': {'author': {'date': '2011-09-14T04:42:41Z'}},
             'author': {'login': 'Spaceghost'},
             'parents': [{'sha': '553c2077f0edc3d5dc5d17262f6aa498e69d6f8e'}],
         },
         {
             'sha': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d',
-            'node_id': 'MDY6Q29tbWl0MTI5NjI2OTo3ZmQxYTYwYjAxZjkxYjMxNGY1OTk1NWE0ZTRkNGU4MGQ4ZWRmMTFk',
             'commit': {'author': {'date': '2012-03-06T23:06:50Z'}},
             'author': {'login': 'octocat'},
             'parents': [
@@ -301,47 +299,27 @@ COMPARE_AHEAD = {
     ],
 }
 
-COMMIT_NODES_OK = {
+COMMIT_COUNTS_OK = {
     'data': {
-        'nodes': [
-            {'oid': '762941318ee16e59dabbacb1b4049eec22f0d303', 'additions': 1, 'deletions': 1},
-            {'oid': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d', 'additions': 1, 'deletions': 1},
-        ],
-        'rateLimit': {'cost': 1, 'remaining': 4759, 'resetAt': '2026-10-31T09:13:32Z'},
-    },
-    'extensions': {
-        'warnings': [
-            {
-                'type': 'DEPRECATION',
-                'message': 'The id '
-                'MDY6Q29tbWl0MTI5NjI2OTo3NjI5NDEzMThlZTE2ZTU5ZGFiYmFjYjFiNDA0OWVlYzIyZjBkMzAz '
-                'is deprecated. Update your cache to use the '
-                'next_global_id from the data payload.',
-                'data': {
-                    'legacy_global_id': 'MDY6Q29tbWl0MTI5NjI2OTo3NjI5NDEzMThlZTE2ZTU5ZGFiYmFjYjFiNDA0OWVlYzIyZjBkMzAz',
-                    'next_global_id': 'C_kwDOABPHjdoAKDc2Mjk0MTMxOGVlMTZlNTlkYWJiYWNiMWI0MDQ5ZWVjMjJmMGQzMDM',
-                },
-                'link': 'https://docs.github.com',
+        'repository': {
+            'c0': {
+                'oid': '762941318ee16e59dabbacb1b4049eec22f0d303',
+                'additions': 1,
+                'deletions': 1,
             },
-            {
-                'type': 'DEPRECATION',
-                'message': 'The id '
-                'MDY6Q29tbWl0MTI5NjI2OTo3ZmQxYTYwYjAxZjkxYjMxNGY1OTk1NWE0ZTRkNGU4MGQ4ZWRmMTFk '
-                'is deprecated. Update your cache to use the '
-                'next_global_id from the data payload.',
-                'data': {
-                    'legacy_global_id': 'MDY6Q29tbWl0MTI5NjI2OTo3ZmQxYTYwYjAxZjkxYjMxNGY1OTk1NWE0ZTRkNGU4MGQ4ZWRmMTFk',
-                    'next_global_id': 'C_kwDOABPHjdoAKDdmZDFhNjBiMDFmOTFiMzE0ZjU5OTU1YTRlNGQ0ZTgwZDhlZGYxMWQ',
-                },
-                'link': 'https://docs.github.com',
+            'c1': {
+                'oid': '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d',
+                'additions': 1,
+                'deletions': 1,
             },
-        ]
-    },
+        },
+        'rateLimit': {'cost': 1, 'remaining': 4672, 'resetAt': '2026-10-31T09:13:32Z'},
+    }
 }
 
 REPO = {'id': 1296269, 'full_name': 'octocat/Hello-World', 'default_branch': 'master'}
 
-REPO_ETAG = '"81d27e64fd51178f939244d9a69538c9abfe45761826af80bf5e7f8808c8c5f0"'
+REPO_ETAG = '"b4d674196560038478c52cdc712602f39bcbbc43008896aac8959cd171de8ef1"'
 
 USER_OK = {'login': 'octocat', 'type': 'User'}
 
@@ -756,7 +734,7 @@ PULL_REQUESTS_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 3, 'remaining': 4756, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 3, 'remaining': 4669, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1052,7 +1030,7 @@ ISSUES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4755, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4896, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1145,7 +1123,7 @@ RELEASES_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4929, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4668, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1296,7 +1274,7 @@ STARGAZERS_OK = {
                 ],
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4754, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4895, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }
 
@@ -1329,6 +1307,6 @@ BOT_REVIEWS_OK = {
                 }
             }
         },
-        'rateLimit': {'cost': 1, 'remaining': 4753, 'resetAt': '2026-10-31T09:13:32Z'},
+        'rateLimit': {'cost': 1, 'remaining': 4667, 'resetAt': '2026-10-31T09:13:32Z'},
     }
 }

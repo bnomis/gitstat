@@ -298,10 +298,12 @@ def test_the_recorded_pull_request_and_issue_pages_parse() -> None:
 
 def test_an_automatic_reviewer_is_a_bot_without_the_suffix_and_not_a_first_review() -> None:
     reviews = responses.BOT_REVIEWS_OK['data']['repository']['pullRequest']['reviews']  # type: ignore[index]
-    assert [node['author'] for node in reviews['nodes']] == [
+    # The recording is of a live pull request, so people may review it after the bot does.
+    bots = [node for node in reviews['nodes'] if node['author']['__typename'] == 'Bot']
+    assert [node['author'] for node in bots] == [
         {'__typename': 'Bot', 'login': 'copilot-pull-request-reviewer'}
     ]
-    assert wambatic.fetch.base.first_review_at(reviews, 'someone') is None
+    assert wambatic.fetch.base.first_review_at({'nodes': bots}, 'someone') is None
 
 
 # Labels, first commits, releases, workflow runs and the release probe
