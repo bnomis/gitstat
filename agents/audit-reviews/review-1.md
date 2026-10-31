@@ -1489,3 +1489,4 @@ Answered on the review page (https://claude.ai/artifact/Eb7chtX2Vkvnmj7YEdFbTG) 
 - F10, Languages: always keep one `Other` row after the top languages, in the terminal table and the HTML chart, and mention the cap in README.
 - Decision 3 (option B): settle the design in the reports spec through `/specdev` before the task list is written.
 - Gates (asked after the answers, at the user's request on 2026-10-31 that "checks [be put] in place (git hooks?) to make sure these audit failures don't happen again"): the audit sweep runs as a **pre-push** hook that fails on any unaccepted hit, and in **CI** through a read-only deploy key for the private `bnomis/agents` repository, which the user adds; ruff rules that match the coding standards and mypy run on every commit.
+- F4, date bound: today's date comes from the caller's clock (the one passed to `build_results`), so tests set it; asked when Task 3 met the existing fixture dates, 2026-10-31.

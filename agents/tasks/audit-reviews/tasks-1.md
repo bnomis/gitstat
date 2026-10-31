@@ -134,6 +134,7 @@ There is no `TODO.md` in this repository, so no item moves to `DONE.md`.
 - [x] `bin/record-fixtures.py:108`, `:109`, `:235`, `:236`: translate into one `RecordingError` defined in the script, caught in `main` with a one-line message and exit 1
 - [x] F3: `settings.parse_duration` raises `SettingsError` on `OverflowError`; test with `99999999999d`
 - [ ] F4: `service.make_request` rejects `since` before 2008-01-01 or `until` after tomorrow in `tz` with `UsageError` naming the bound; tests through the CLI (exit 2) and `/report` (400)
+  - Today's date comes from the caller's clock, not the system clock (user's choice, 2026-10-31): `make_request` takes `today` from the `clock` the CLI and the web app already pass to `build_results`, and the tests set that clock to a date after their fixtures, so no fixture or expected output changes
 - [x] One test per translated error: a fake aiohttp failure after retries, a locked SQLite file, a non-UTF-8 config file, a `gh` that cannot be executed, an unwritable cache file
 
 **Acceptance Criteria:**
