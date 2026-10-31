@@ -156,7 +156,7 @@ class Upstream:
         self.failing_history: set[str] = set()
         self.history_delay = 0.0
         self.unknown_base = 'not found'
-        self.dropped_nodes: set[str] = set()
+        self.dropped_counts: set[str] = set()
         self.flow_page_size = 100
         self.failing_flow_cursors: set[str] = set()
         self.release_page_size = 100
@@ -221,8 +221,8 @@ class Upstream:
             return self.release_page(variables, headers)
         if 'query Stargazers' in query:
             return self.star_page(variables, headers)
-        if 'query CommitNodes' in query:
-            return tests.fixtures.fetch.server.Canned(200, self.nodes(variables['ids']), headers)
+        if 'query CommitCounts' in query:
+            return tests.fixtures.fetch.server.Canned(200, self.commit_counts(variables), headers)
         raise AssertionError(f'unexpected query: {query}')
 
     def flow_page(
@@ -432,19 +432,24 @@ class Upstream:
             str(end),
         )
 
-    def nodes(self, ids: object) -> dict[str, object]:
-        assert isinstance(ids, list)
-        by_node_id = {f'C_{c.oid}': c for repo in self.repos.values() for c in repo.history}
-        return tests.fixtures.fetch.responses.nodes_response(
+    def commit_counts(self, variables: dict[str, object]) -> dict[str, object]:
+        by_oid = {
+            c.oid: c
+            for name, repo in self.repos.items()
+            if name == f'{variables["owner"]}/{variables["name"]}'
+            for c in repo.history
+        }
+        oids = [variables[f'o{i}'] for i in range(len(variables) - 2)]
+        return tests.fixtures.fetch.responses.commit_counts_response(
             [
                 {
-                    'oid': by_node_id[i].oid,
-                    'additions': by_node_id[i].additions,
-                    'deletions': by_node_id[i].deletions,
+                    'oid': by_oid[oid].oid,
+                    'additions': by_oid[oid].additions,
+                    'deletions': by_oid[oid].deletions,
                 }
-                if i in by_node_id and i not in self.dropped_nodes
+                if oid in by_oid and oid not in self.dropped_counts
                 else None
-                for i in ids
+                for oid in oids
             ]
         )
 
@@ -487,7 +492,7 @@ class Upstream:
             'query OwnerRepositories': 'listing',
             'query Repository(': 'repository',
             'query CommitHistory': 'history',
-            'query CommitNodes': 'nodes',
+            'query CommitCounts': 'nodes',
             'query PullRequests': 'pull_requests',
             'query Issues': 'issues',
             'query Releases': 'releases',

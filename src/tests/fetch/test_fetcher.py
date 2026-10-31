@@ -827,6 +827,38 @@ def test_a_missing_head_asks_for_a_refetch_without_a_request(
     assert asyncio.run(scenario()) == (None, 0)
 
 
+def test_line_counts_are_asked_for_by_oid_and_never_by_the_legacy_node_id(
+    make_fetcher: tests.conftest.MakeFetcher,
+) -> None:
+    upstream = Upstream([hello()])
+
+    async def scenario() -> list[wambatic.fetch.base.Commit]:
+        async with tests.fixtures.fetch.server.ReplayServer({}, default=upstream.respond) as server:
+            fetcher = make_fetcher(server)
+            async with fetcher:
+                repo = next(
+                    r for r in await fetcher.list_repos(OWNER) if r.name_with_owner == HELLO
+                )
+                new = [
+                    wambatic.fetch.base.NewCommit('h1', at(1), 'mona', False),
+                    wambatic.fetch.base.NewCommit('h2', at(2), 'mona', False),
+                ]
+                commits = await fetcher.line_counts(repo, new)
+            (sent,) = [
+                r.json
+                for r in server.received
+                if r.path == '/graphql' and 'CommitCounts' in str(r.json)
+            ]
+            assert isinstance(sent, dict)
+            variables = sent['variables']
+            assert isinstance(variables, dict)
+            assert variables == {'owner': 'octocat', 'name': 'Hello-World', 'o0': 'h1', 'o1': 'h2'}
+            assert 'nodes(ids' not in str(sent['query'])
+            return commits
+
+    assert [c.oid for c in asyncio.run(scenario())] == ['h1', 'h2']
+
+
 def test_a_commit_with_no_line_counts_stores_nothing_and_names_its_oid(
     make_fetcher: tests.conftest.MakeFetcher,
 ) -> None:
@@ -834,7 +866,7 @@ def test_a_commit_with_no_line_counts_stores_nothing_and_names_its_oid(
     first = sync_once(make_fetcher, upstream)
     before = first.cache.sync_state(HELLO, 'commits')
     upstream.repos[HELLO].push(*history('n', 2, 10))
-    upstream.dropped_nodes = {'C_n11'}
+    upstream.dropped_counts = {'n11'}
     with pytest.raises(wambatic.fetch.errors.GraphQLError, match='n11'):
         sync_once(make_fetcher, upstream, cache=first.cache)
     assert stored(first.cache) == ['h1', 'h2', 'h3']

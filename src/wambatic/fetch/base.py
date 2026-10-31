@@ -185,7 +185,6 @@ class NewCommit:
     """A commit found by a compare, before its line counts are known."""
 
     oid: str
-    node_id: str
     authored_at: datetime.datetime
     author_login: str | None
     is_merge: bool
@@ -489,7 +488,6 @@ def parse_compare_commit(node: object) -> NewCommit:
     login = mapping(account, 'author').get('login') if account is not None else None
     return NewCommit(
         oid=text(fields.get('sha'), 'sha'),
-        node_id=text(fields.get('node_id'), 'node_id'),
         authored_at=timestamp(author.get('date'), 'commit.author.date'),
         author_login=None if login is None else text(login, 'author.login'),
         is_merge=len(sequence(fields.get('parents'), 'parents')) > 1,
@@ -771,15 +769,28 @@ class Fetcher:
             page += 1
 
     async def line_counts(self, repo: Repo, new: list[NewCommit]) -> list[Commit]:
-        """Add `additions` and `deletions` to compare commits, 100 per GraphQL query."""
+        """Add `additions` and `deletions` to compare commits, 100 per GraphQL query.
+
+        Commits are looked up by object id, not by the compare's `node_id`, which is in the
+        deprecated legacy global ID format for repositories created before late 2021 (see
+        `wambatic.fetch.queries.commit_counts`).
+        """
         counts: dict[str, tuple[int, int]] = {}
+        owner, name = split_name(repo.name_with_owner)
         for start in range(0, len(new), PAGE_SIZE):
-            ids = [commit.node_id for commit in new[start : start + PAGE_SIZE]]
-            data = await self.client.graphql(wambatic.fetch.queries.COMMIT_NODES, {'ids': ids})
-            for node in sequence(data.get('nodes'), 'nodes'):
-                if node is None:
+            oids = [commit.oid for commit in new[start : start + PAGE_SIZE]]
+            variables: dict[str, object] = {
+                'owner': owner,
+                'name': name,
+                **{f'o{i}': oid for i, oid in enumerate(oids)},
+            }
+            query = wambatic.fetch.queries.commit_counts(len(oids))
+            data = await self.client.graphql(query, variables)
+            found = mapping(data.get('repository'), 'repository')
+            for node in found.values():
+                fields = {} if node is None else mapping(node, 'commit object')
+                if 'oid' not in fields:  # no such object, or not a commit
                     continue
-                fields = mapping(node, 'commit node')
                 counts[text(fields.get('oid'), 'oid')] = (
                     integer(fields.get('additions'), 'additions'),
                     integer(fields.get('deletions'), 'deletions'),

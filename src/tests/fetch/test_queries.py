@@ -38,8 +38,12 @@ def test_owner_repositories_are_ordered_by_latest_push() -> None:
     )
 
 
-def test_commit_nodes_takes_ids() -> None:
-    assert 'nodes(ids: $ids)' in wambatic.fetch.queries.COMMIT_NODES
+def test_commit_counts_looks_each_commit_up_by_oid_and_sends_no_node_id() -> None:
+    query = wambatic.fetch.queries.commit_counts(2)
+    assert '$o0: GitObjectID!, $o1: GitObjectID!' in query
+    assert 'c1: object(oid: $o1)' in query
+    assert 'nodes(ids' not in query
+    assert wambatic.fetch.queries.COMMIT_COUNTS == wambatic.fetch.queries.commit_counts(100)
 
 
 def test_the_listing_queries_probe_the_newest_pull_request_and_issue() -> None:
