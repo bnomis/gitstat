@@ -21,6 +21,7 @@ RESOURCES = frozenset(
 )
 BUILT_RESOURCES = RESOURCES
 PAGE_SIZE = 100
+STARS_HIDDEN = 'hidden'
 BOT_SUFFIX = '[bot]'
 
 
@@ -184,7 +185,6 @@ class NewCommit:
     """A commit found by a compare, before its line counts are known."""
 
     oid: str
-    node_id: str
     authored_at: datetime.datetime
     author_login: str | None
     is_merge: bool
@@ -250,6 +250,11 @@ def release_probe(repo: Repo) -> str:
 def star_probe(repo: Repo) -> str:
     """The text a repo's stars are compared by: its listed star count."""
     return str(repo.stargazer_count)
+
+
+def count_of_probe(probe: str | None) -> int | None:
+    """The count a count-valued probe holds; None for no probe or `STARS_HIDDEN`."""
+    return int(probe) if probe is not None and probe.isdecimal() else None
 
 
 def fork_probe(repo: Repo) -> str:
@@ -483,7 +488,6 @@ def parse_compare_commit(node: object) -> NewCommit:
     login = mapping(account, 'author').get('login') if account is not None else None
     return NewCommit(
         oid=text(fields.get('sha'), 'sha'),
-        node_id=text(fields.get('node_id'), 'node_id'),
         authored_at=timestamp(author.get('date'), 'commit.author.date'),
         author_login=None if login is None else text(login, 'author.login'),
         is_merge=len(sequence(fields.get('parents'), 'parents')) > 1,
@@ -765,15 +769,28 @@ class Fetcher:
             page += 1
 
     async def line_counts(self, repo: Repo, new: list[NewCommit]) -> list[Commit]:
-        """Add `additions` and `deletions` to compare commits, 100 per GraphQL query."""
+        """Add `additions` and `deletions` to compare commits, 100 per GraphQL query.
+
+        Commits are looked up by object id, not by the compare's `node_id`, which is in the
+        deprecated legacy global ID format for repositories created before late 2021 (see
+        `wambatic.fetch.queries.commit_counts`).
+        """
         counts: dict[str, tuple[int, int]] = {}
+        owner, name = split_name(repo.name_with_owner)
         for start in range(0, len(new), PAGE_SIZE):
-            ids = [commit.node_id for commit in new[start : start + PAGE_SIZE]]
-            data = await self.client.graphql(wambatic.fetch.queries.COMMIT_NODES, {'ids': ids})
-            for node in sequence(data.get('nodes'), 'nodes'):
-                if node is None:
+            oids = [commit.oid for commit in new[start : start + PAGE_SIZE]]
+            variables: dict[str, object] = {
+                'owner': owner,
+                'name': name,
+                **{f'o{i}': oid for i, oid in enumerate(oids)},
+            }
+            query = wambatic.fetch.queries.commit_counts(len(oids))
+            data = await self.client.graphql(query, variables)
+            found = mapping(data.get('repository'), 'repository')
+            for node in found.values():
+                fields = {} if node is None else mapping(node, 'commit object')
+                if 'oid' not in fields:  # no such object, or not a commit
                     continue
-                fields = mapping(node, 'commit node')
                 counts[text(fields.get('oid'), 'oid')] = (
                     integer(fields.get('additions'), 'additions'),
                     integer(fields.get('deletions'), 'deletions'),
@@ -849,7 +866,8 @@ class Fetcher:
             return 'full refresh requested'
         if self.full_read_due(state, self.client.clock()):
             return 'full refresh interval passed'
-        if listed is not None and state.probe is not None and listed < int(state.probe):
+        stored = count_of_probe(state.probe)
+        if listed is not None and stored is not None and listed < stored:
             return 'count fell'
         return ''
 
@@ -1009,12 +1027,32 @@ class Fetcher:
         read (a first sync, `--full-refresh`, a passed `fetch.full_refresh_after`, or a listed star
         count below the stored one), else the stars given since the watermark less
         `fetch.overlap`. Rows and state, with the listed count as its probe, go in one
-        transaction."""
+        transaction.
+
+        A read of everything that lists no star for a repo with a listed star count, or that
+        GitHub refuses as `FORBIDDEN`, means the token cannot see the stargazers: no rows are
+        written, and the state's probe is `STARS_HIDDEN`, so the next sync reads again."""
         state = await self.db(self.cache.sync_state, repo.name_with_owner, 'star_events')
         full, full_synced_at = self.plan_full_read(
             repo, 'star_events', state, full_refresh, repo.stargazer_count
         )
-        stars, watermark = await self.read_stars(repo, self.read_cutoff(state, full))
+        cutoff = self.read_cutoff(state, full)
+        try:
+            stars, watermark = await self.read_stars(repo, cutoff)
+        except wambatic.fetch.errors.GraphQLError as error:
+            if not any(kind == 'FORBIDDEN' for kind, _ in error.errors):
+                raise
+            stars, watermark = [], None
+        if watermark is None or (cutoff is None and not stars and repo.stargazer_count > 0):
+            loguru.logger.warning(
+                f'GitHub did not list the stargazers of {repo.name_with_owner} to this token: '
+                'its star history is not available'
+            )
+            await self.db(
+                self.cache.write_state,
+                self.flow_state(repo, 'star_events', None, full_synced_at, STARS_HIDDEN),
+            )
+            return 0
         return await self.db(
             self.cache.write_star_events,
             repo.name_with_owner,
@@ -1153,6 +1191,12 @@ class Fetcher:
         reaches back before any range."""
         for star in await self.db(self.cache.read_star_events, repo.name_with_owner):
             yield star
+
+    async def stars_hidden(self, repo: Repo) -> bool:
+        """From the cache: whether the last star sync of the repo found its stargazers not visible
+        to the token (`STARS_HIDDEN`), so it has no star history."""
+        state = await self.db(self.cache.sync_state, repo.name_with_owner, 'star_events')
+        return state is not None and state.probe == STARS_HIDDEN
 
     async def forks(self, repo: Repo) -> collections.abc.AsyncIterator[Fork]:
         """From the cache: every direct fork of the repo, oldest first."""

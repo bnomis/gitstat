@@ -73,12 +73,30 @@ query CommitHistory($owner: String!, $name: String!, $cursor: String) {
 }
 """
 
-COMMIT_NODES = """
-query CommitNodes($ids: [ID!]!) {
-  nodes(ids: $ids) { ... on Commit { oid additions deletions } }
-  rateLimit { cost remaining resetAt }
-}
-"""
+COMMIT_COUNT_PAGE = 100
+
+
+def commit_counts(count: int) -> str:
+    """The query for the line counts of `count` commits, looked up by object id.
+
+    Each commit is one aliased `object(oid:)` field with its own `$oN` variable, so no GraphQL
+    global node id is sent: `nodes(ids:)` with a REST `node_id` draws a deprecation warning for
+    every commit of a repository old enough to have legacy ids.
+    """
+    variables = ', '.join(f'$o{i}: GitObjectID!' for i in range(count))
+    fields = '\n'.join(
+        f'    c{i}: object(oid: $o{i}) {{ ... on Commit {{ oid additions deletions }} }}'
+        for i in range(count)
+    )
+    return (
+        f'\nquery CommitCounts($owner: String!, $name: String!, {variables}) {{\n'
+        f'  repository(owner: $owner, name: $name) {{\n{fields}\n  }}\n'
+        '  rateLimit { cost remaining resetAt }\n}\n'
+    )
+
+
+# The full-page form; its hash stands for the builder in the cache identity.
+COMMIT_COUNTS = commit_counts(COMMIT_COUNT_PAGE)
 
 PULL_REQUESTS = """
 query PullRequests($owner: String!, $name: String!, $cursor: String) {

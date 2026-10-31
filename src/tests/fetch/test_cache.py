@@ -202,7 +202,7 @@ def test_identity_has_versions_and_a_hash_per_query(cache: wambatic.fetch.cache.
     assert identity['schema_version'] == str(wambatic.fetch.cache.SCHEMA_VERSION)
     assert identity['wambatic_version'] == wambatic.version.VERSION
     assert {'query:OWNER_REPOSITORIES', 'query:COMMIT_HISTORY'} <= identity.keys()
-    assert len(identity['query:COMMIT_NODES']) == 64
+    assert len(identity['query:COMMIT_COUNTS']) == 64
 
 
 def test_reopening_succeeds(cache_path: pathlib.Path) -> None:
@@ -243,12 +243,12 @@ def test_changed_query_text_raises_naming_the_query(
     cache_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wambatic.fetch.cache.Cache.open(cache_path).close()
-    recorded = wambatic.fetch.cache.expected_identity()['query:COMMIT_NODES']
-    monkeypatch.setattr(wambatic.fetch.queries, 'COMMIT_NODES', 'query { changed }')
+    recorded = wambatic.fetch.cache.expected_identity()['query:COMMIT_COUNTS']
+    monkeypatch.setattr(wambatic.fetch.queries, 'COMMIT_COUNTS', 'query { changed }')
     with pytest.raises(wambatic.fetch.errors.CacheVersionError) as caught:
         wambatic.fetch.cache.Cache.open(cache_path)
     (key, (old, new)), *rest = caught.value.differences.items()
-    assert (key, old, rest) == ('query:COMMIT_NODES', recorded, [])
+    assert (key, old, rest) == ('query:COMMIT_COUNTS', recorded, [])
     assert new != recorded
 
 

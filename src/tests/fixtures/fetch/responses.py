@@ -339,9 +339,15 @@ def history_page(
     }
 
 
-# https://docs.github.com/en/graphql/reference/queries#nodes
-def nodes_response(commits: list[dict[str, object] | None]) -> dict[str, object]:
-    return {'data': {'nodes': commits, 'rateLimit': RATE_LIMIT}}
+# https://docs.github.com/en/graphql/reference/objects#repository (`object`): one aliased
+# field per commit; null when the object does not exist.
+def commit_counts_response(commits: list[dict[str, object] | None]) -> dict[str, object]:
+    return {
+        'data': {
+            'repository': {f'c{i}': commit for i, commit in enumerate(commits)},
+            'rateLimit': RATE_LIMIT,
+        }
+    }
 
 
 def compare_commit(
@@ -350,7 +356,6 @@ def compare_commit(
     """A commit of a compare response, as the fetcher reads it."""
     return {
         'sha': sha,
-        'node_id': f'C_{sha}',
         'commit': {'author': {'name': 'Mona', 'date': iso(authored_at)}},
         'author': None if login is None else {'login': login},
         'parents': [{'sha': f'{sha[:-1]}0'}] * parents,
@@ -379,7 +384,7 @@ OWNER_REPOSITORIES_OK = Recorded.OWNER_REPOSITORIES_OK
 REPOSITORY_OK = Recorded.REPOSITORY_OK
 COMMIT_HISTORY_OK = Recorded.COMMIT_HISTORY_OK
 COMPARE_AHEAD = Recorded.COMPARE_AHEAD
-COMMIT_NODES_OK = Recorded.COMMIT_NODES_OK
+COMMIT_COUNTS_OK = Recorded.COMMIT_COUNTS_OK
 PULL_REQUESTS_OK = Recorded.PULL_REQUESTS_OK
 ISSUES_OK = Recorded.ISSUES_OK
 RELEASES_OK = Recorded.RELEASES_OK
@@ -408,6 +413,16 @@ GRAPHQL_REPOSITORY_NOT_FOUND = {
             'type': 'NOT_FOUND',
             'path': ['repository'],
             'message': "Could not resolve to a Repository with the name 'octocat/nope'.",
+        }
+    ],
+}
+GRAPHQL_FORBIDDEN = {
+    'data': {'repository': None, 'rateLimit': RATE_LIMIT},
+    'errors': [
+        {
+            'type': 'FORBIDDEN',
+            'path': ['repository', 'stargazers'],
+            'message': 'Resource not accessible by personal access token',
         }
     ],
 }

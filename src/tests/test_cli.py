@@ -720,7 +720,8 @@ def test_an_empty_cache_without_no_fetch_gives_no_such_hint(
 def run_cache(
     action: typing.Literal['clear', 'info'], cache_path: pathlib.Path
 ) -> tuple[str, list[str]]:
-    """The console output and the info-level log lines of `wambatic cache <action>`."""
+    """The console output and the info-level log lines of `wambatic cache <action>`. The console is
+    wider than any temporary path, so a long one (macOS's) is never folded across lines."""
     messages: list[str] = []
     sink = loguru.logger.add(
         lambda message: messages.append(message.record['message']), level='INFO'
@@ -730,7 +731,7 @@ def run_cache(
         wambatic.cli.run_cache(
             wambatic.cli.CacheCommand(action),
             cli_settings(report(), cache_path),
-            rich.console.Console(file=out, width=120, color_system=None, legacy_windows=False),
+            rich.console.Console(file=out, width=2000, color_system=None, legacy_windows=False),
         )
     finally:
         loguru.logger.remove(sink)

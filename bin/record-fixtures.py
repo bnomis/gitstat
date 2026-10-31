@@ -58,8 +58,8 @@ query PullRequestReviews($owner: String!, $name: String!, $number: Int!) {
 """
 
 RECORDED_QUERIES = (
+    'COMMIT_COUNTS',
     'COMMIT_HISTORY',
-    'COMMIT_NODES',
     'ISSUES',
     'OWNER_REPOSITORIES',
     'PULL_REQUESTS',
@@ -133,7 +133,6 @@ def compare_commit(node: dict[str, object]) -> dict[str, object]:
         raise RuntimeError(f'Unexpected compare commit: {node!r}')
     return {
         'sha': node['sha'],
-        'node_id': node['node_id'],
         'commit': {'author': pick(commit['author'], ('date',))},
         'author': None if account is None else pick(account, ('login',)),
         'parents': [pick(parent, ('sha',)) for parent in parents],
@@ -156,7 +155,8 @@ def record(recorder: Recorder) -> dict[str, object]:
     )
     compared = pick(compare, ('status', 'ahead_by', 'behind_by', 'total_commits'))
     compared['commits'] = [compare_commit(node) for node in compare['commits']]  # type: ignore[index]
-    node_ids = [node['node_id'] for node in compared['commits']]  # type: ignore[attr-defined]
+    oids = [node['sha'] for node in compared['commits']]  # type: ignore[attr-defined]
+    counts_variables = {**hello, **{f'o{i}': oid for i, oid in enumerate(oids)}}
 
     repo, repo_headers = recorder.send('GET', hello_path)
     runs = recorder.rest(
@@ -175,7 +175,7 @@ def record(recorder: Recorder) -> dict[str, object]:
         'REPOSITORY_OK': recorder.graphql(queries.REPOSITORY, **hello),
         'COMMIT_HISTORY_OK': history,
         'COMPARE_AHEAD': compared,
-        'COMMIT_NODES_OK': recorder.graphql(queries.COMMIT_NODES, ids=node_ids),
+        'COMMIT_COUNTS_OK': recorder.graphql(queries.commit_counts(len(oids)), **counts_variables),
         'REPO': pick(repo, ('id', 'full_name', 'default_branch')),
         'REPO_ETAG': repo_headers['ETag'],
         'USER_OK': pick(recorder.rest(f'/users/{LISTING_OWNER}'), ('login', 'type')),
@@ -210,7 +210,7 @@ def module_text(recorded_at: str, responses: dict[str, object]) -> str:
         '',
         'Written by bin/record-fixtures.sh; do not edit by hand, re-run it. The subjects are',
         f'{LISTING_OWNER} (the listing), {HISTORY_OWNER}/{HISTORY_NAME} (repository, history,',
-        f'compare, commit nodes, REST repo), {FLOW_OWNER}/{FLOW_NAME} (pull requests, issues,',
+        f'compare, commit counts, REST repo), {FLOW_OWNER}/{FLOW_NAME} (pull requests, issues,',
         f'releases, workflow runs), {STAR_OWNER}/{STAR_NAME} (stargazers, forks), the users',
         f'{LISTING_OWNER} and {ORGANIZATION}, and one review page of',
         f'{BOT_REVIEW_OWNER}/{BOT_REVIEW_NAME}#{BOT_REVIEW_NUMBER} (BOT_REVIEWS_OK). REST bodies',
