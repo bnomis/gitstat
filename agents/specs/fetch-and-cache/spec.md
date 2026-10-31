@@ -1,8 +1,8 @@
 # Fetch and cache
 
-**Version:** 1.9
+**Version:** 1.10
 **Status:** implemented
-**Date:** 2026-10-30
+**Date:** 2026-10-31
 
 Fetches raw data about a GitHub user, repository or organisation and stores it in a local SQLite cache so that repeated and incremental runs stay inside the API rate limits. It uses the [GraphQL API](https://docs.github.com/en/graphql) for almost everything and the [REST API](https://docs.github.com/en/rest) only where GraphQL has no equivalent (workflow runs, the `stats/*` endpoints, comparing two commits, and the list of a repository's forks). It knows nothing about metrics; [Stats](../stats/spec.md) consumes its output.
 
@@ -35,6 +35,8 @@ Version 1.7 adds what step 9 (local web app) needs: `SyncProgress` and `Fetcher.
 Version 1.8 adds what step 10 (popularity data) needs: the `StarEvent` and `Fork` records and their tables, the `forks` resource beside `star_events`, `Fetcher.star_events` and `Fetcher.forks`, the repo listing's star, fork and watcher counts and language sizes (the `Repo` popularity fields), the star and fork probes kept in `sync_state.probe`, and `SCHEMA_VERSION` 4. Watchers and languages are snapshots taken with the listing: GitHub records when a star or a fork was made but not when someone started watching, and keeps no history of a repository's languages. The choices are in the [stats review 4](../stats/review-4.md).
 
 Version 1.9 settles what a star sync does when the token cannot see the stargazers: GitHub then lists none, or refuses with a `FORBIDDEN` error, while the listed star count says there are some. The repository gets a `sync_state` row for `star_events` whose `probe` is `STARS_HIDDEN` and no rows, `Fetcher.stars_hidden` reports it, and `Cache.write_state` writes a state alone. `SCHEMA_VERSION` does not change. The Testing paragraph now also describes the fake upstream's hidden-stargazers mode.
+
+Version 1.10 records a change to the Testing paragraph that was made after 1.8 without a version bump: fixture responses are now recorded from the live API by `bin/record-fixtures.sh` into `src/tests/fixtures/fetch/recorded.py`, which stores the sha256 of each query text so that a test fails when a query changes until the recorder is run again, and the paragraph lists the recorded subjects and what the recording of 2026-10-30 confirmed. Nothing else changes, and the cache schema stays 4.
 
 ## API
 
