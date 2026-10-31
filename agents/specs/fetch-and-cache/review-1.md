@@ -65,3 +65,4 @@ For each choice: approve it or flag it. For each decision: pick an option.
 - 2026-10-29, Decision 1: A, compare from the stored head (Simon, decision card).
 - 2026-10-29, Decision 2: A, opt-in live test only (Simon, decision card).
 - 2026-10-29, Choices 1 to 9: none flagged; PR #10, which carried them, was merged.
+- 2026-10-31, Choices 1 to 9: each **approved**, with no comments, by Simon on the review page for the unapproved choices of steps 3 to 8 (https://claude.ai/artifact/WUq1DQtuKGZoNnfgwAraXH, answers saved between 10:25:13 and 10:25:34 UTC); see [review-unapproved-choices.md](../review-unapproved-choices.md). Nothing changes.

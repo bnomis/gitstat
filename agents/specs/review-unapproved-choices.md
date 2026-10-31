@@ -174,4 +174,7 @@ Source: `agents/specs/stats/review-3.md`. No decisions; twenty-one choices with 
 
 ## Answers
 
-(empty: your verdict on each choice and your option for each decision, with the date)
+Answered by Simon on the review page on 2026-10-31 (read back from its database, answers saved between 10:25:13 and 10:25:34 UTC):
+
+- **Decisions:** option A for both, the listing probe for pull requests and issues (stats review 2) and wambatic's own Plotly JSON figures (reports review 2). No comments. The code already follows both, so nothing changes.
+- **Choices:** all 92 approved, with no comment and nothing flagged. No spec, code or test changes follow.
