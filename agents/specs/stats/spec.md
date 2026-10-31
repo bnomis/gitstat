@@ -1,14 +1,14 @@
 # Stats
 
-**Version:** 1.5
-**Status:** implemented
-**Date:** 2026-10-30
+**Version:** 1.6
+**Status:** proposed
+**Date:** 2026-10-31
 
 Turns the raw records from [Fetch and cache](../fetch-and-cache/spec.md) into statistics for a user, repository or organisation, optionally bucketed by year, month, week or day. It does no network or rendering of its own: `compute` reads the cache through the fetcher, and the aggregation functions it calls are pure. [Reports](../reports/spec.md) consumes its output.
 
 **Prerequisite:** the `wambatic.fetch` package exists and `Fetcher` reads the records of each group's resources from the cache (check: `python -c 'import wambatic.fetch'`). The `activity` group needs `repos()` and `commits()` (implementation step 3); `flow` needs `pull_requests()` and `issues()` (step 6); `delivery` needs `releases()`, `workflow_runs()` (step 8) and `pull_requests()`; `popularity` needs `star_events()`, `forks()` and the `Repo` popularity fields (step 10).
 
-Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.2 settles what step 6 needed for the `flow` group: what each flow metric counts and its series names, how the range and an empty result are found when several groups are read, and the user-subject rule for pull requests and issues; the choices are in [review-2.md](review-2.md). Version 1.3 settles what step 8 needed for the `delivery` group: what each delivery metric and DORA proxy counts, its series names and units, when a proxy counts as configured, and which resources the group reads; stars, forks, watchers and languages move to step 10. The choices are in [review-3.md](review-3.md). Version 1.4 settles what step 10 needed: stars, forks, watchers and languages leave `activity` for a `popularity` group of their own, asked for with `--groups`, with what each metric and table counts and which resources the group reads; the choices are in [review-4.md](review-4.md). Version 1.5 settles what `popularity` does for a repository whose stargazers the token could not see (fetch spec 1.9): its stars are left out of the star series and the report says so.
+Version 1.1 settles what step 4 of the [implementation order](../implementation-order.md) needed; the gaps and the choices made are in [review-1.md](review-1.md). Version 1.2 settles what step 6 needed for the `flow` group: what each flow metric counts and its series names, how the range and an empty result are found when several groups are read, and the user-subject rule for pull requests and issues; the choices are in [review-2.md](review-2.md). Version 1.3 settles what step 8 needed for the `delivery` group: what each delivery metric and DORA proxy counts, its series names and units, when a proxy counts as configured, and which resources the group reads; stars, forks, watchers and languages move to step 10. The choices are in [review-3.md](review-3.md). Version 1.4 settles what step 10 needed: stars, forks, watchers and languages leave `activity` for a `popularity` group of their own, asked for with `--groups`, with what each metric and table counts and which resources the group reads; the choices are in [review-4.md](review-4.md). Version 1.5 settles what `popularity` does for a repository whose stargazers the token could not see (fetch spec 1.9): its stars are left out of the star series and the report says so. Version 1.6 splits `compute` into a cache read (`read_records`) and a pure aggregation (`aggregate`), and adds `compute_all`, which reads the cache once for several requests that differ only in granularity, so an HTML report reads each record once rather than five times; the choice is Decision 3 (option B) of the [audit review 1](../../audit-reviews/review-1.md), answered 2026-10-31.
 
 ## Module location
 
@@ -87,7 +87,47 @@ async def compute(
 ) -> StatsResult:
     """All requested metric groups for the subject, from the cache, bucketed by
     request.granularity. Never syncs: the caller runs Fetcher.sync first, or not at all for
-    --no-fetch. `clock` (default: now in UTC) gives today's date when `until` is None."""
+    --no-fetch. `clock` (default: now in UTC) gives today's date when `until` is None.
+    The same as `aggregate(subject, await read_records(subject, fetcher, request), request, now)`
+    with `now` from `clock`."""
+
+async def compute_all(
+    subject: Subject,
+    fetcher: Fetcher,
+    requests: list[StatsRequest],
+    *,
+    clock: collections.abc.Callable[[], datetime.datetime] | None = None,
+) -> list[StatsResult]:
+    """One result per request, in order, from one `read_records` of `requests[0]` and one `now`
+    from `clock`: the cache is read once however many requests there are. The requests must
+    differ in granularity only; InvalidRequestError otherwise, and for an empty list."""
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CachedRecords:
+    """What compute reads from the cache for one subject and one request, before the range is
+    resolved. Nothing in it depends on the request's granularity."""
+    repos: tuple[Repo, ...]
+    commits: tuple[Commit, ...]              # activity: local date within since and until as requested
+    pulls: tuple[PullRequest, ...]           # flow: updated since a day before `since`; own items for a user
+    issues: tuple[Issue, ...]                # flow, as pulls
+    runs: tuple[WorkflowRun, ...]            # delivery
+    releases: tuple[Release, ...]            # delivery: every release
+    delivery_pulls: tuple[PullRequest, ...]  # delivery: every pull request (no author filter)
+    stars: tuple[StarEvent, ...]             # popularity: every star of a repo whose stargazers are visible
+    forks: tuple[Fork, ...]                  # popularity: every fork
+    hidden: tuple[Repo, ...]                 # popularity: repos whose stargazers the token could not see
+    provenance: types.MappingProxyType[str, str]  # Fetcher.provenance(subject, resources_for(groups))
+
+async def read_records(subject: Subject, fetcher: Fetcher, request: StatsRequest) -> CachedRecords:
+    """Validate the request (see Error handling) and read what its groups need from the cache,
+    including the fetch provenance. The only part of compute that touches the cache."""
+
+def aggregate(
+    subject: Subject, records: CachedRecords, request: StatsRequest, now: datetime.datetime
+) -> StatsResult:
+    """Pure: resolve the range against `now` and build every series, table and the stats
+    provenance. `records` must come from `read_records` of a request that differs from this
+    one in granularity at most."""
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StatsRequest:
@@ -123,7 +163,7 @@ All stats errors subclass `StatsError(Exception)`, so a front end can catch them
 - Fetch errors (`AuthError`, `RateLimitError`, `CacheVersionError`) propagate unchanged.
 - Records with `author_login is None` are counted under the `unattributed` key, never dropped.
 
-Validation happens before any cache read, in this order: unknown groups, `by_author` on a user subject, then the range when both bounds are given.
+Validation happens before any cache read, in this order: unknown groups, `by_author` on a user subject, then the range when both bounds are given. `read_records` makes these checks and raises the "no requested group" and "no repositories" forms of `EmptySubjectError`; `aggregate` raises `InvalidRangeError` for a range that resolves backwards and the "no records in range" form of `EmptySubjectError`. `compute_all` raises `InvalidRequestError` before any read when `requests` is empty or two requests differ in anything but `granularity` (groups, since, until, by_author, tz or settings), naming the first field that differs.
 
 ## Implementation
 
@@ -132,6 +172,8 @@ All timestamps are stored UTC and converted once to `request.tz` before bucketin
 **Range.** `since` and `until` are local dates in `tz`, both inclusive (`--until 2026-10-31` includes the 31st). A `None` `since` resolves to the start of the bucket holding the earliest record of any requested built group (a commit's `authored_at`, a pull request's or issue's `created_at`, a release's `published_at`, a workflow run's `created_at`, a star's `starred_at`, a fork's `created_at`; for `delivery` the pull requests it reads for the proxies do not count, since they are inputs to release events, not events of their own), so the first bucket is never partial for lack of a bound; for `TOTAL` it resolves to the earliest record's local date. When no requested group has a dated record (possible only with `popularity`, whose tables need none), `since` resolves to the start of the bucket holding `until`, or to `until` itself for `TOTAL`. A `None` `until` resolves to today in `tz` from `clock`, so the current bucket is partial. The resolved bounds are in `StatsResult.since` and `until`.
 
 **Reading the cache.** `compute` converts the range to UTC instants for `Fetcher.commits` widened by one day at each end, then keeps only records whose local date is in the range. For `flow` it passes the widened lower instant to `Fetcher.pull_requests` and `Fetcher.issues`, which filter on `updated_at` (every event of an item is at or before it), and each flow metric then keeps the events whose local date is in the range. For `delivery` it reads every release (`Fetcher.releases`), because a release interval and a lead time reach back before the range, the workflow runs from the widened lower instant (`Fetcher.workflow_runs`, which filters on `created_at`), or all of them when `stats.deploy_workflow` is set, because deployments are then runs and a lead time reaches back like a release interval, and, only when a proxy needs them, every pull request (`Fetcher.pull_requests(repo, None)`), because a release in range can ship a pull request merged long before it; each delivery metric then keeps the events whose local date is in the range. For `popularity` it reads every star event and fork (`Fetcher.star_events`, `Fetcher.forks`), because a cumulative count reaches back before any range, and takes the counts and languages from the `Repo` rows `Fetcher.repos` already returned. The widening makes the result independent of how `tz` handles midnight (a zone whose clocks skip midnight has no `00:00` on that date).
+
+**Reading once for several requests.** An HTML report needs the same subject and request at five granularities (reports spec, `period_requests`). Every read above depends on the groups, the requested bounds, `tz`, `by_author` and the settings, never on the granularity, so `compute_all` calls `read_records` once and `aggregate` once per request, all with the same `now`, which keeps `computed_at` and a `None` `until` identical across the five results. A `None` `since` still resolves per request in `aggregate` (to the start of the earliest record's bucket at that granularity), exactly as `compute` does. `compute` is kept for the single-result callers (the terminal and JSON formats, `/api/stats`).
 
 **Partial buckets.** `partial_buckets` names the first and last bucket when the range covers only part of them; their labels are recorded comma-separated in `provenance['partial_buckets']` (empty when none), and reports chart them with a hatch pattern.
 
